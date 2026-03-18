@@ -25,46 +25,38 @@ export async function POST(request: Request) {
   }
 
   try {
-    // ── Phase 1: Multi-search with Tavily (with images) ──
+    // ── Phase 1: Parallel Tavily searches ──
     const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY! });
 
-    const [generalSearch, reviewSearch, menuSearch, socialSearch] =
-      await Promise.all([
-        tvly.search(`"${businessName}" ${businessAddress}`, {
+    const [generalSearch, reviewSearch] = await Promise.all([
+      tvly.search(`"${businessName}" ${businessAddress}`, {
+        maxResults: 5,
+        searchDepth: "advanced",
+        includeAnswer: true,
+        includeImages: true,
+        includeImageDescriptions: true,
+      }),
+      tvly.search(
+        `"${businessName}" avis reviews menu prix site web instagram`,
+        {
           maxResults: 5,
           searchDepth: "advanced",
           includeAnswer: true,
           includeImages: true,
           includeImageDescriptions: true,
-        }),
-        tvly.search(`"${businessName}" avis reviews clients`, {
-          maxResults: 5,
-          searchDepth: "advanced",
-          includeAnswer: true,
-          includeImages: true,
-          includeImageDescriptions: true,
-        }),
-        tvly.search(`"${businessName}" menu carte prix prices`, {
-          maxResults: 5,
-          searchDepth: "basic",
-          includeAnswer: true,
-        }),
-        tvly.search(`"${businessName}" instagram facebook site web`, {
-          maxResults: 5,
-          searchDepth: "basic",
-          includeAnswer: true,
-        }),
-      ]);
+        }
+      ),
+    ]);
 
-    // ── Phase 2: Collect found images (deduplicated, max 15) ──
-    const allFoundImages = new Map<string, string>(); // url -> description
+    // ── Phase 2: Collect found images (deduplicated, max 10) ──
+    const allFoundImages = new Map<string, string>();
     for (const search of [generalSearch, reviewSearch]) {
       if (search.images) {
         for (const img of search.images) {
           if (
             img.url &&
             !allFoundImages.has(img.url) &&
-            allFoundImages.size < 15
+            allFoundImages.size < 10
           ) {
             allFoundImages.set(img.url, img.description || "");
           }
@@ -76,55 +68,17 @@ export async function POST(request: Request) {
       ([url, description]) => ({ url, description })
     );
 
-    // ── Phase 3: Analyze found images with Claude vision (in parallel) ──
-    const replicate = getReplicate();
-
-    // Analyze up to 5 images in PARALLEL for speed
-    const imagesToAnalyze = foundImagesList.slice(0, 5);
-
-    const imageAnalysisPromises = imagesToAnalyze.map(async (img) => {
-      try {
-        const output = await replicate.run("anthropic/claude-4.5-sonnet", {
-          input: {
-            prompt: `Analyze this image for "${businessName}" (${businessAddress}). Context: "${img.description}". Reply in VALID JSON only:
-{"shows":"what it shows (food/interior/exterior/logo/team)","quality":"low|medium|high|excellent","placement":"hero|gallery|about|menu|background","mood":"brief mood","confirmed_business":true or false if you're sure this is actually from this specific business}`,
-            image: img.url,
-            max_tokens: 200,
-            system_prompt: "Reply with valid JSON only. No markdown.",
-          },
-        });
-
-        const analysisText = Array.isArray(output)
-          ? output.join("")
-          : String(output);
-
-        return {
-          url: img.url,
-          description: img.description,
-          analysis: analysisText,
-        };
-      } catch {
-        return null;
-      }
-    });
-
-    const imageAnalysisResults = await Promise.all(imageAnalysisPromises);
-    const imageAnalyses = imageAnalysisResults.filter(
-      (r): r is NonNullable<typeof r> => r !== null
-    );
-
-    // ── Phase 4: Build the image report for Claude synthesis ──
     const imageReport =
-      imageAnalyses.length > 0
-        ? imageAnalyses
+      foundImagesList.length > 0
+        ? foundImagesList
             .map(
               (img, i) =>
-                `Image ${i + 1}: ${img.url}\nSearch description: ${img.description}\nAI Analysis: ${img.analysis}`
+                `Image ${i + 1}: ${img.url}\nDescription: ${img.description}`
             )
             .join("\n\n")
-        : "No images found online for this business.";
+        : "No images found online.";
 
-    // ── Phase 5: Compile raw research ──
+    // ── Phase 3: Compile raw research ──
     const rawResearch = `
 === GENERAL INFORMATION ===
 ${generalSearch.answer || "No answer"}
@@ -132,86 +86,59 @@ ${generalSearch.answer || "No answer"}
 Sources:
 ${generalSearch.results.map((r) => `- ${r.title}: ${r.content}`).join("\n")}
 
-=== CUSTOMER REVIEWS & SENTIMENT ===
+=== REVIEWS, MENU & SOCIAL ===
 ${reviewSearch.answer || "No answer"}
 
 Sources:
 ${reviewSearch.results.map((r) => `- ${r.title}: ${r.content}`).join("\n")}
 
-=== MENU & PRICES ===
-${menuSearch.answer || "No answer"}
-
-Sources:
-${menuSearch.results.map((r) => `- ${r.title}: ${r.content}`).join("\n")}
-
-=== SOCIAL MEDIA & WEB PRESENCE ===
-${socialSearch.answer || "No answer"}
-
-Sources:
-${socialSearch.results.map((r) => `- ${r.title}: ${r.content}`).join("\n")}
-
-=== IMAGES FOUND ONLINE (${imageAnalyses.length} analyzed) ===
+=== IMAGES FOUND ONLINE (${foundImagesList.length}) ===
 ${imageReport}
 `.trim();
 
-    // ── Phase 6: Claude synthesizes everything ──
-    const synthesisPrompt = `You have real web research data AND analyzed images for a business. Synthesize ALL of it into a comprehensive profile for building a custom website.
+    // ── Phase 4: Claude synthesizes everything in ONE call ──
+    const replicate = getReplicate();
+
+    const synthesisPrompt = `Synthesize this web research into a business profile for building a custom website.
 
 Business: "${businessName}"
 Address: "${businessAddress}"
 
-RAW RESEARCH DATA:
+RAW RESEARCH:
 ${rawResearch}
 
-Analyze deeply:
-- What's the VIBE of this place? (from reviews, descriptions, AND the images)
-- What do customers LOVE most?
-- What's unique about this business?
-- What mood should the website convey?
-- Which found images are best for the website and WHERE should they go?
-
-Return ONLY valid JSON, no markdown fences:
+Return ONLY valid JSON:
 {
   "name": "exact business name",
   "address": "full address",
-  "hours": "real opening hours if found",
+  "hours": "opening hours if found",
   "cuisine": "type/category",
-  "menu": "real menu items with real prices if found",
-  "description": "rich 3-4 sentence description capturing the essence — specific, not generic",
-  "vibe": "1-2 sentences on the atmosphere and feeling",
-  "uniqueSellingPoints": ["point 1", "point 2", "point 3"],
-  "customerSentiment": "synthesis of what real customers say",
-  "reviewHighlights": ["highlight 1", "highlight 2", "highlight 3"],
-  "socialMedia": {
-    "instagram": "@handle or empty",
-    "facebook": "page or empty",
-    "twitter": "@handle or empty",
-    "website": "url or empty"
-  },
+  "menu": "real menu items with prices if found",
+  "description": "rich 3-4 sentence description",
+  "vibe": "1-2 sentences on atmosphere",
+  "uniqueSellingPoints": ["point1", "point2", "point3"],
+  "customerSentiment": "what customers say",
+  "reviewHighlights": ["highlight1", "highlight2", "highlight3"],
+  "socialMedia": {"instagram":"","facebook":"","twitter":"","website":""},
   "colors": ["#hex1", "#hex2", "#hex3"],
   "photos": [],
-  "phone": "real phone if found",
+  "phone": "phone if found",
   "priceRange": "€/€€/€€€/€€€€",
   "rating": "X/5 if found",
   "foundImages": [
-    {
-      "url": "image url",
-      "analysis": "what it shows and where to use it on the website",
-      "suggestedPlacement": "hero|gallery|about|menu|background|testimonials",
-      "quality": "low|medium|high|excellent"
-    }
+    {"url":"image url","analysis":"what it likely shows and where to use it","suggestedPlacement":"hero|gallery|about|menu|background","quality":"low|medium|high|excellent"}
   ]
 }
 
-For colors: suggest 3 colors that PERFECTLY match this business's identity based on the vibe, images, and research.
-For foundImages: include the best images you analyzed (max 10), with specific placement recommendations.`;
+For foundImages: include ALL ${foundImagesList.length} images from the research. Judge quality from the description and URL context. Be specific about placement.
+For colors: suggest 3 colors matching this business's identity.`;
 
     const output = await replicate.run("anthropic/claude-4.5-sonnet", {
       input: {
         prompt: synthesisPrompt,
-        max_tokens: 5000,
+        max_tokens: 4000,
         system_prompt:
-          "You are an expert business analyst and brand strategist. You extract deep, actionable insights from web data and image analysis. Return valid JSON only.",
+          "Expert business analyst. Extract actionable insights from web data. Return valid JSON only, no markdown.",
       },
     });
 
@@ -236,12 +163,17 @@ For foundImages: include the best images you analyzed (max 10), with specific pl
 
     // Save found images to project_images table
     if (businessInfo.foundImages && businessInfo.foundImages.length > 0) {
-      for (const img of businessInfo.foundImages) {
-        await supabase.from("project_images").insert({
+      const inserts = businessInfo.foundImages.map(
+        (img: {
+          url: string;
+          analysis: string;
+          quality: string;
+          suggestedPlacement: string;
+        }) => ({
           project_id: projectId,
-          storage_path: img.url, // external URL stored as path
+          storage_path: img.url,
           url: img.url,
-          type: "photo",
+          type: "photo" as const,
           analysis: {
             description: img.analysis,
             quality: (img.quality || "medium").toLowerCase().trim(),
@@ -250,10 +182,11 @@ For foundImages: include the best images you analyzed (max 10), with specific pl
             mood: "",
             websiteRelevance: img.analysis,
           },
-        });
-      }
+        })
+      );
 
-      // Also store the URLs in businessInfo.photos for easy access
+      await supabase.from("project_images").insert(inserts);
+
       businessInfo.photos = businessInfo.foundImages.map(
         (img: { url: string }) => img.url
       );
@@ -271,15 +204,9 @@ For foundImages: include the best images you analyzed (max 10), with specific pl
 
     return NextResponse.json({ businessInfo });
   } catch (error) {
-    console.error("Research error:", error);
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to research business",
-      },
-      { status: 500 }
-    );
+    const msg =
+      error instanceof Error ? error.message : "Failed to research business";
+    console.error("Research error:", msg, error);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

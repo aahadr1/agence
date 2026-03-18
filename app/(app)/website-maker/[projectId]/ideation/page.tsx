@@ -6,6 +6,15 @@ import { Loader2, Sparkles, Wand2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+async function safeJson(res: Response) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(text.slice(0, 200) || `HTTP ${res.status}`);
+  }
+}
+
 export default function IdeationPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
@@ -24,7 +33,7 @@ export default function IdeationPage() {
         await new Promise((r) => setTimeout(r, 3000));
         try {
           const res = await fetch(`/api/predictions/${predictionId}`);
-          const data = await res.json();
+          const data = await safeJson(res);
 
           if (data.status === "succeeded") {
             setImageStatuses((prev) => ({ ...prev, [variantId]: "done" }));
@@ -61,22 +70,25 @@ export default function IdeationPage() {
         });
 
         if (!ideationRes.ok) {
-          const data = await ideationRes.json();
+          const data = await safeJson(ideationRes);
           throw new Error(data.error || "Ideation failed");
         }
 
-        const { variants: newVariants } = await ideationRes.json();
+        const { variants: newVariants } = await safeJson(ideationRes);
         setVariants(newVariants);
         setGenerating(false);
 
-        // Step 2: Generate images for each variant
-        const initialStatuses: Record<string, "pending" | "generating" | "done" | "failed"> = {};
+        // Step 2: Generate images for each variant (in parallel)
+        const initialStatuses: Record<
+          string,
+          "pending" | "generating" | "done" | "failed"
+        > = {};
         newVariants.forEach(
           (v: Variant) => (initialStatuses[v.id] = "generating")
         );
         setImageStatuses(initialStatuses);
 
-        for (const variant of newVariants) {
+        const imagePromises = newVariants.map(async (variant: Variant) => {
           try {
             const imgRes = await fetch("/api/generate-image", {
               method: "POST",
@@ -89,24 +101,33 @@ export default function IdeationPage() {
             });
 
             if (!imgRes.ok) {
-              const errData = await imgRes.json().catch(() => ({}));
-              console.error(`[generate-image] variant ${variant.id} failed:`, errData);
+              const errData = await safeJson(imgRes).catch(() => ({}));
+              console.error(
+                `[generate-image] variant ${variant.id} failed:`,
+                errData
+              );
               setImageStatuses((prev) => ({
                 ...prev,
                 [variant.id]: "failed",
               }));
-              continue;
+              return;
             }
 
-            const { predictionId } = await imgRes.json();
+            const { predictionId } = await safeJson(imgRes);
             pollPrediction(predictionId, variant.id);
-          } catch {
+          } catch (err) {
+            console.error(
+              `[generate-image] variant ${variant.id} error:`,
+              err
+            );
             setImageStatuses((prev) => ({
               ...prev,
               [variant.id]: "failed",
             }));
           }
-        }
+        });
+
+        await Promise.all(imagePromises);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong");
         setGenerating(false);
@@ -182,7 +203,8 @@ export default function IdeationPage() {
                 style={{ animationDelay: `${index * 150}ms` }}
               >
                 <div className="aspect-[4/3] relative bg-secondary">
-                  {imageStatuses[variant.id] === "done" && variant.image_url ? (
+                  {imageStatuses[variant.id] === "done" &&
+                  variant.image_url ? (
                     <img
                       src={variant.image_url}
                       alt={variant.theme_name}
