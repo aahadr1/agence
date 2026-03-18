@@ -25,20 +25,24 @@ export async function POST(request: Request) {
   }
 
   try {
-    // ── Phase 1: Multi-search with Tavily ──
+    // ── Phase 1: Multi-search with Tavily (with images) ──
     const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY! });
 
     const [generalSearch, reviewSearch, menuSearch, socialSearch] =
       await Promise.all([
-        tvly.search(`"${businessName}" ${businessAddress} restaurant`, {
+        tvly.search(`"${businessName}" ${businessAddress}`, {
           maxResults: 5,
           searchDepth: "advanced",
           includeAnswer: true,
+          includeImages: true,
+          includeImageDescriptions: true,
         }),
         tvly.search(`"${businessName}" avis reviews clients`, {
           maxResults: 5,
           searchDepth: "advanced",
           includeAnswer: true,
+          includeImages: true,
+          includeImageDescriptions: true,
         }),
         tvly.search(`"${businessName}" menu carte prix prices`, {
           maxResults: 5,
@@ -52,7 +56,87 @@ export async function POST(request: Request) {
         }),
       ]);
 
-    // Compile all raw research
+    // ── Phase 2: Collect found images (deduplicated, max 15) ──
+    const allFoundImages = new Map<string, string>(); // url -> description
+    for (const search of [generalSearch, reviewSearch]) {
+      if (search.images) {
+        for (const img of search.images) {
+          if (
+            img.url &&
+            !allFoundImages.has(img.url) &&
+            allFoundImages.size < 15
+          ) {
+            allFoundImages.set(img.url, img.description || "");
+          }
+        }
+      }
+    }
+
+    const foundImagesList = Array.from(allFoundImages.entries()).map(
+      ([url, description]) => ({ url, description })
+    );
+
+    // ── Phase 3: Analyze found images with Claude vision ──
+    const replicate = getReplicate();
+    const imageAnalyses: Array<{
+      url: string;
+      description: string;
+      analysis: string;
+    }> = [];
+
+    // Analyze up to 10 images (balance between thoroughness and speed/cost)
+    const imagesToAnalyze = foundImagesList.slice(0, 10);
+
+    for (const img of imagesToAnalyze) {
+      try {
+        const output = await replicate.run("anthropic/claude-4.5-sonnet", {
+          input: {
+            prompt: `Analyze this image found online for the business "${businessName}" located at "${businessAddress}".
+
+Context from search: "${img.description}"
+
+Provide a brief but insightful analysis:
+1. What does this image show? (food, interior, exterior, logo, team, event, etc.)
+2. Quality: is it high enough for a professional website?
+3. What section of a website would this image work best in? (hero, gallery, about, menu, testimonials, background)
+4. What mood/vibe does it convey?
+5. What colors dominate?
+
+Reply in 2-3 concise sentences. Be specific to this business.`,
+            image: img.url,
+            max_tokens: 300,
+            system_prompt:
+              "You are a web designer evaluating images for a business website. Be concise and practical.",
+          },
+        });
+
+        const analysisText = Array.isArray(output)
+          ? output.join("")
+          : String(output);
+
+        imageAnalyses.push({
+          url: img.url,
+          description: img.description,
+          analysis: analysisText,
+        });
+      } catch (err) {
+        // Skip images that fail analysis (broken URLs, etc.)
+        console.warn(`Failed to analyze image: ${img.url}`);
+      }
+    }
+
+    // ── Phase 4: Build the image report for Claude synthesis ──
+    const imageReport =
+      imageAnalyses.length > 0
+        ? imageAnalyses
+            .map(
+              (img, i) =>
+                `Image ${i + 1}: ${img.url}\nSearch description: ${img.description}\nAI Analysis: ${img.analysis}`
+            )
+            .join("\n\n")
+        : "No images found online for this business.";
+
+    // ── Phase 5: Compile raw research ──
     const rawResearch = `
 === GENERAL INFORMATION ===
 ${generalSearch.answer || "No answer"}
@@ -77,12 +161,13 @@ ${socialSearch.answer || "No answer"}
 
 Sources:
 ${socialSearch.results.map((r) => `- ${r.title}: ${r.content}`).join("\n")}
+
+=== IMAGES FOUND ONLINE (${imageAnalyses.length} analyzed) ===
+${imageReport}
 `.trim();
 
-    // ── Phase 2: Claude synthesizes the raw research ──
-    const replicate = getReplicate();
-
-    const synthesisPrompt = `You have been given real web research data about a business. Your job is to extract and synthesize this into a detailed, actionable profile that a web designer could use to build a perfect custom website.
+    // ── Phase 6: Claude synthesizes everything ──
+    const synthesisPrompt = `You have real web research data AND analyzed images for a business. Synthesize ALL of it into a comprehensive profile for building a custom website.
 
 Business: "${businessName}"
 Address: "${businessAddress}"
@@ -90,47 +175,55 @@ Address: "${businessAddress}"
 RAW RESEARCH DATA:
 ${rawResearch}
 
-Analyze this research deeply. Don't just list facts — interpret the data:
-- What's the VIBE of this place? (from reviews, descriptions, photos descriptions)
-- What do customers LOVE most? (recurring themes in reviews)
-- What's unique about this business vs competitors?
+Analyze deeply:
+- What's the VIBE of this place? (from reviews, descriptions, AND the images)
+- What do customers LOVE most?
+- What's unique about this business?
 - What mood should the website convey?
-- What are the REAL opening hours, phone number, prices?
-- What social media accounts exist?
+- Which found images are best for the website and WHERE should they go?
 
 Return ONLY valid JSON, no markdown fences:
 {
   "name": "exact business name",
   "address": "full address",
-  "hours": "real opening hours if found, or best estimate",
+  "hours": "real opening hours if found",
   "cuisine": "type/category",
-  "menu": "real menu items with real prices if found, formatted as readable text",
-  "description": "a rich, compelling 3-4 sentence description capturing the essence of this place — not generic, deeply specific to what makes it special",
-  "vibe": "1-2 sentences describing the atmosphere and feeling (e.g. 'intimate candlelit dining with a modern French twist, where plates are as artistic as they are delicious')",
+  "menu": "real menu items with real prices if found",
+  "description": "rich 3-4 sentence description capturing the essence — specific, not generic",
+  "vibe": "1-2 sentences on the atmosphere and feeling",
   "uniqueSellingPoints": ["point 1", "point 2", "point 3"],
-  "customerSentiment": "synthesis of what real customers say — common praise, any criticisms, overall feeling",
-  "reviewHighlights": ["actual quote or paraphrased highlight 1", "highlight 2", "highlight 3"],
+  "customerSentiment": "synthesis of what real customers say",
+  "reviewHighlights": ["highlight 1", "highlight 2", "highlight 3"],
   "socialMedia": {
-    "instagram": "@handle or empty string",
-    "facebook": "page URL or name or empty string",
-    "twitter": "@handle or empty string",
-    "website": "URL or empty string"
+    "instagram": "@handle or empty",
+    "facebook": "page or empty",
+    "twitter": "@handle or empty",
+    "website": "url or empty"
   },
   "colors": ["#hex1", "#hex2", "#hex3"],
   "photos": [],
   "phone": "real phone if found",
   "priceRange": "€/€€/€€€/€€€€",
-  "rating": "X/5 from Google or TripAdvisor if found"
+  "rating": "X/5 if found",
+  "foundImages": [
+    {
+      "url": "image url",
+      "analysis": "what it shows and where to use it on the website",
+      "suggestedPlacement": "hero|gallery|about|menu|background|testimonials",
+      "quality": "low|medium|high|excellent"
+    }
+  ]
 }
 
-For colors: suggest 3 colors that would PERFECTLY match this specific business's identity — based on the vibe, cuisine type, and any visual identity clues from the research. Not generic — deeply considered.`;
+For colors: suggest 3 colors that PERFECTLY match this business's identity based on the vibe, images, and research.
+For foundImages: include the best images you analyzed (max 10), with specific placement recommendations.`;
 
     const output = await replicate.run("anthropic/claude-4.5-sonnet", {
       input: {
         prompt: synthesisPrompt,
-        max_tokens: 4096,
+        max_tokens: 5000,
         system_prompt:
-          "You are an expert business analyst and brand strategist. You extract deep, actionable insights from raw web data. You always return valid JSON only.",
+          "You are an expert business analyst and brand strategist. You extract deep, actionable insights from web data and image analysis. Return valid JSON only.",
       },
     });
 
@@ -142,16 +235,40 @@ For colors: suggest 3 colors that would PERFECTLY match this specific business's
 
     const businessInfo = JSON.parse(jsonMatch[0]);
 
-    // Get user-chosen colors and instructions from project
+    // Get user-chosen colors
     const { data: project } = await supabase
       .from("projects")
       .select("user_colors, user_instructions")
       .eq("id", projectId)
       .single();
 
-    // If user chose manual colors, override AI colors
     if (project?.user_colors && project.user_colors.length > 0) {
       businessInfo.colors = project.user_colors;
+    }
+
+    // Save found images to project_images table
+    if (businessInfo.foundImages && businessInfo.foundImages.length > 0) {
+      for (const img of businessInfo.foundImages) {
+        await supabase.from("project_images").insert({
+          project_id: projectId,
+          storage_path: img.url, // external URL stored as path
+          url: img.url,
+          type: "photo",
+          analysis: {
+            description: img.analysis,
+            quality: img.quality || "medium",
+            suggestedPlacement: img.suggestedPlacement || "gallery",
+            dominantColors: [],
+            mood: "",
+            websiteRelevance: img.analysis,
+          },
+        });
+      }
+
+      // Also store the URLs in businessInfo.photos for easy access
+      businessInfo.photos = businessInfo.foundImages.map(
+        (img: { url: string }) => img.url
+      );
     }
 
     // Save research results to project
