@@ -71,6 +71,8 @@ export async function POST(request: Request) {
       }
     }
 
+    console.log(`[generate-image] projectId=${projectId}, imageInputs=${imageInputs.length}:`, imageInputs);
+
     // Build image reference instructions for the prompt
     const imageRefInstructions =
       imageInputs.length > 0

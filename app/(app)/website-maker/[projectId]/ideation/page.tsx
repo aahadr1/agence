@@ -84,6 +84,7 @@ export default function IdeationPage() {
               body: JSON.stringify({
                 variantId: variant.id,
                 prompt: variant.prompt,
+                projectId,
               }),
             });
 
