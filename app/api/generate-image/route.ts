@@ -26,25 +26,63 @@ export async function POST(request: Request) {
   try {
     const replicate = getReplicate();
 
-    // Fetch uploaded images to use as references
+    // Fetch project images, prioritized: logo first, then user photos, then best web photos
     let imageInputs: string[] = [];
     if (projectId) {
       const { data: images } = await supabase
         .from("project_images")
-        .select("url, type")
-        .eq("project_id", projectId)
-        .order("type", { ascending: true }); // logo first, then photos
+        .select("url, type, storage_path, analysis")
+        .eq("project_id", projectId);
 
       if (images && images.length > 0) {
-        // Pass up to 14 images (Nano Banana 2 limit)
-        imageInputs = images.slice(0, 14).map((img) => img.url);
+        // 1. Logo first (always)
+        const logo = images.find((img) => img.type === "logo");
+        if (logo) {
+          imageInputs.push(logo.url);
+        }
+
+        // 2. User-uploaded photos (always include)
+        const userPhotos = images.filter(
+          (img) =>
+            img.type === "photo" &&
+            img.storage_path &&
+            !img.storage_path.startsWith("http")
+        );
+        for (const photo of userPhotos) {
+          imageInputs.push(photo.url);
+        }
+
+        // 3. Web-found photos — only high/excellent quality
+        const webPhotos = images.filter(
+          (img) =>
+            img.type === "photo" &&
+            img.storage_path &&
+            img.storage_path.startsWith("http") &&
+            img.analysis &&
+            (img.analysis.quality === "high" ||
+              img.analysis.quality === "excellent")
+        );
+        for (const photo of webPhotos) {
+          imageInputs.push(photo.url);
+        }
+
+        // Cap at 14 (Nano Banana 2 limit)
+        imageInputs = imageInputs.slice(0, 14);
       }
     }
 
-    // Build the enhanced prompt
-    const enhancedPrompt = `Professional high-fidelity website landing page screenshot, UI/UX design mockup. ${prompt}. Use the provided reference images: the first image is the business logo — place it in the website header/navigation. Any additional images are business photos — incorporate them naturally into the website sections (hero, gallery, about). The design should look like a real production website screenshot with crisp typography, proper spacing, and professional layout. 4K quality, sharp details, modern web design.`;
+    // Build image reference instructions for the prompt
+    const imageRefInstructions =
+      imageInputs.length > 0
+        ? `This website mockup must INCORPORATE the ${imageInputs.length} provided reference images as actual visual content within the website layout. Reference image 1 is the business logo — display it in the website header/navigation. ${
+            imageInputs.length > 1
+              ? `Reference images 2-${imageInputs.length} are real business photos (food, interior, exterior) — display them naturally as the hero background image, in a photo gallery section, or as section backgrounds. These are REAL photos of this business — they must appear visibly embedded in the website design, not replaced or recreated.`
+              : ""
+          }`
+        : "";
 
-    // Build input with or without image references
+    const enhancedPrompt = `Professional high-fidelity website landing page screenshot, UI/UX design mockup displayed in a browser. ${prompt}. ${imageRefInstructions} The design must look like a real production website with crisp typography, proper spacing, professional layout, and real photographic content embedded in the sections. 4K quality, sharp details, modern web design.`;
+
     const input: Record<string, unknown> = {
       prompt: enhancedPrompt,
       aspect_ratio: "4:3",
@@ -60,7 +98,7 @@ export async function POST(request: Request) {
       input,
     });
 
-    // Update variant with the enhanced prompt
+    // Save the enhanced prompt to the variant
     await supabase
       .from("variants")
       .update({ prompt: enhancedPrompt })

@@ -42,23 +42,54 @@ export async function POST(request: Request) {
     .eq("project_id", projectId);
 
   const logo = images?.find((img) => img.type === "logo");
-  const photos = images?.filter((img) => img.type === "photo") || [];
+  const allPhotos = images?.filter((img) => img.type === "photo") || [];
 
-  // Build image context for Claude
+  // Separate user-uploaded photos from web-found photos
+  // Web-found images have external URLs, uploaded ones have our storage URLs
+  const uploadedPhotos = allPhotos.filter(
+    (img) => img.storage_path && !img.storage_path.startsWith("http")
+  );
+  const foundPhotos = allPhotos.filter(
+    (img) => img.storage_path && img.storage_path.startsWith("http")
+  );
+
+  // Filter found photos: only keep high/excellent quality ones confirmed as business-related
+  const qualityFoundPhotos = foundPhotos.filter((img) => {
+    const analysis = img.analysis;
+    if (!analysis) return false;
+    const quality = analysis.quality || "";
+    return quality === "high" || quality === "excellent";
+  });
+
+  // Build image context for Claude with clear categorization
   const imageDescriptions: string[] = [];
+  let imgIndex = 1;
+
   if (logo) {
     imageDescriptions.push(
-      `IMAGE 1 (LOGO): URL: ${logo.url}\nAnalysis: ${
-        logo.analysis ? JSON.stringify(logo.analysis) : "Business logo"
+      `IMAGE ${imgIndex} (USER LOGO — MUST USE): URL: ${logo.url}\nAnalysis: ${
+        logo.analysis ? JSON.stringify(logo.analysis) : "Business logo uploaded by user"
       }`
     );
+    imgIndex++;
   }
-  photos.forEach((photo, i) => {
+
+  uploadedPhotos.forEach((photo) => {
     imageDescriptions.push(
-      `IMAGE ${i + 2} (PHOTO): URL: ${photo.url}\nAnalysis: ${
-        photo.analysis ? JSON.stringify(photo.analysis) : "Business photo"
+      `IMAGE ${imgIndex} (USER PHOTO — MUST USE): URL: ${photo.url}\nAnalysis: ${
+        photo.analysis ? JSON.stringify(photo.analysis) : "Business photo uploaded by user"
       }`
     );
+    imgIndex++;
+  });
+
+  qualityFoundPhotos.forEach((photo) => {
+    imageDescriptions.push(
+      `IMAGE ${imgIndex} (WEB PHOTO — HIGH QUALITY, USE IF RELEVANT): URL: ${photo.url}\nAnalysis: ${
+        photo.analysis ? JSON.stringify(photo.analysis) : "Photo found online"
+      }\nSuggested placement: ${photo.analysis?.suggestedPlacement || "gallery"}`
+    );
+    imgIndex++;
   });
 
   const businessInfo = project.business_info;
@@ -90,8 +121,8 @@ Menu: ${businessInfo.menu || "N/A"}
 ═══ BRAND COLORS ═══
 ${userColors.length > 0 ? `User-chosen colors (MUST use these): ${userColors.join(", ")}` : `AI-suggested colors: ${businessInfo.colors?.join(", ") || "Not determined"}`}
 
-═══ UPLOADED IMAGES (${imageDescriptions.length} total) ═══
-${imageDescriptions.length > 0 ? imageDescriptions.join("\n\n") : "No images uploaded"}
+═══ AVAILABLE IMAGES (${imageDescriptions.length} total) ═══
+${imageDescriptions.length > 0 ? imageDescriptions.join("\n\n") : "No images available"}
 
 ═══ USER INSTRUCTIONS ═══
 ${userInstructions || "None"}
@@ -101,20 +132,24 @@ Create 3 COMPLETELY DIFFERENT website design concepts. Each must:
 1. Be deeply informed by the research (not generic)
 2. Reflect the real vibe and customer sentiment
 3. Use the brand colors (or user-chosen colors)
-4. INCORPORATE the uploaded images — specify exactly where each image goes
+4. INCORPORATE the real images into the website design — the generated mockup should visually contain these actual images
 5. Be specific to THIS business, not a template
 
-CRITICAL — For each concept, you must specify:
-- "image_usage": describe exactly how each uploaded image should be used in the website (e.g., "Logo placed top-left in the navigation bar at small size on a dark background", "Photo 1 used as full-width hero background with dark overlay and text on top", "Photo 2 in the about-us section as a circular crop")
+CRITICAL IMAGE RULES:
+- Images marked "MUST USE" (user-uploaded logo and photos) MUST appear in every concept
+- Images marked "HIGH QUALITY, USE IF RELEVANT" (found online) should be used if they show real food, interior, or ambiance of this specific business
+- For each concept, specify exactly WHERE each image goes and HOW it's displayed
+- The image_prompt MUST instruct the image generator to place these reference images naturally inside the website layout (e.g., "use reference image 1 as the logo in the top navigation bar", "use reference image 3 as the hero background photo", "display reference images 4-6 in a 3-column gallery grid in the menu section")
 
-For image_prompt: Write a DETAILED prompt to generate a website landing page that INCORPORATES the provided reference images. The prompt MUST:
+For image_prompt: Write a DETAILED prompt to generate a website landing page mockup that VISUALLY CONTAINS the provided reference images as part of the website design. The prompt MUST:
 - Describe a professional website landing page screenshot
-- Explicitly instruct to use the provided logo in the header/navigation area
-- Explicitly instruct to feature the provided photos in the hero section, gallery, or relevant sections
+- EXPLICITLY say "incorporate the provided reference images into the website design"
+- Say "use reference image 1 (the logo) in the header navigation"
+- Say which reference images to display as hero photo, food gallery, interior shots, etc.
 - Specify the business name "${businessInfo.name}" visible in the hero text
 - Describe the exact color scheme, typography, and layout
-- Describe what each section shows (hero, about, menu/services, contact, footer)
-- Make it look like a REAL high-quality website, not an illustration
+- Describe each section: hero with real photo, about section, menu/gallery with real food photos, contact, footer
+- Make it look like a REAL production website with actual photos embedded in it
 
 Return ONLY a valid JSON array with exactly 3 objects:
 [
