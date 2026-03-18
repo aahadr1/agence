@@ -76,37 +76,21 @@ export async function POST(request: Request) {
       ([url, description]) => ({ url, description })
     );
 
-    // ── Phase 3: Analyze found images with Claude vision ──
+    // ── Phase 3: Analyze found images with Claude vision (in parallel) ──
     const replicate = getReplicate();
-    const imageAnalyses: Array<{
-      url: string;
-      description: string;
-      analysis: string;
-    }> = [];
 
-    // Analyze up to 10 images (balance between thoroughness and speed/cost)
-    const imagesToAnalyze = foundImagesList.slice(0, 10);
+    // Analyze up to 5 images in PARALLEL for speed
+    const imagesToAnalyze = foundImagesList.slice(0, 5);
 
-    for (const img of imagesToAnalyze) {
+    const imageAnalysisPromises = imagesToAnalyze.map(async (img) => {
       try {
         const output = await replicate.run("anthropic/claude-4.5-sonnet", {
           input: {
-            prompt: `Analyze this image found online for the business "${businessName}" located at "${businessAddress}".
-
-Context from search: "${img.description}"
-
-Provide a brief but insightful analysis:
-1. What does this image show? (food, interior, exterior, logo, team, event, etc.)
-2. Quality: is it high enough for a professional website?
-3. What section of a website would this image work best in? (hero, gallery, about, menu, testimonials, background)
-4. What mood/vibe does it convey?
-5. What colors dominate?
-
-Reply in 2-3 concise sentences. Be specific to this business.`,
+            prompt: `Analyze this image for "${businessName}" (${businessAddress}). Context: "${img.description}". Reply in VALID JSON only:
+{"shows":"what it shows (food/interior/exterior/logo/team)","quality":"low|medium|high|excellent","placement":"hero|gallery|about|menu|background","mood":"brief mood","confirmed_business":true or false if you're sure this is actually from this specific business}`,
             image: img.url,
-            max_tokens: 300,
-            system_prompt:
-              "You are a web designer evaluating images for a business website. Be concise and practical.",
+            max_tokens: 200,
+            system_prompt: "Reply with valid JSON only. No markdown.",
           },
         });
 
@@ -114,16 +98,20 @@ Reply in 2-3 concise sentences. Be specific to this business.`,
           ? output.join("")
           : String(output);
 
-        imageAnalyses.push({
+        return {
           url: img.url,
           description: img.description,
           analysis: analysisText,
-        });
-      } catch (err) {
-        // Skip images that fail analysis (broken URLs, etc.)
-        console.warn(`Failed to analyze image: ${img.url}`);
+        };
+      } catch {
+        return null;
       }
-    }
+    });
+
+    const imageAnalysisResults = await Promise.all(imageAnalysisPromises);
+    const imageAnalyses = imageAnalysisResults.filter(
+      (r): r is NonNullable<typeof r> => r !== null
+    );
 
     // ── Phase 4: Build the image report for Claude synthesis ──
     const imageReport =
