@@ -52,15 +52,15 @@ export async function POST(request: Request) {
           imageInputs.push(photo.url);
         }
 
-        // 3. Web-found photos — only high/excellent quality
+        // 3. Web-found photos — exclude only explicitly low quality
         const webPhotos = images.filter(
           (img) =>
             img.type === "photo" &&
             img.storage_path &&
             img.storage_path.startsWith("http") &&
-            img.analysis &&
-            (img.analysis.quality === "high" ||
-              img.analysis.quality === "excellent")
+            (!img.analysis ||
+              !img.analysis.quality ||
+              img.analysis.quality !== "low")
         );
         for (const photo of webPhotos) {
           imageInputs.push(photo.url);

@@ -244,7 +244,7 @@ For foundImages: include the best images you analyzed (max 10), with specific pl
           type: "photo",
           analysis: {
             description: img.analysis,
-            quality: img.quality || "medium",
+            quality: (img.quality || "medium").toLowerCase().trim(),
             suggestedPlacement: img.suggestedPlacement || "gallery",
             dominantColors: [],
             mood: "",

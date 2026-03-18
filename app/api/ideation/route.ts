@@ -53,12 +53,12 @@ export async function POST(request: Request) {
     (img) => img.storage_path && img.storage_path.startsWith("http")
   );
 
-  // Filter found photos: only keep high/excellent quality ones confirmed as business-related
+  // Filter found photos: exclude only explicitly low quality
   const qualityFoundPhotos = foundPhotos.filter((img) => {
     const analysis = img.analysis;
-    if (!analysis) return false;
-    const quality = analysis.quality || "";
-    return quality === "high" || quality === "excellent";
+    if (!analysis) return true; // include if no analysis
+    const quality = (analysis.quality || "").toLowerCase();
+    return quality !== "low";
   });
 
   // Build image context for Claude with clear categorization
