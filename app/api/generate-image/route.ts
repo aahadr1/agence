@@ -108,9 +108,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ predictionId: prediction.id });
   } catch (error) {
-    console.error("Image generation error:", error);
+    const errorMessage =
+      error instanceof Error ? error.message : String(error);
+    console.error("Image generation error:", errorMessage, error);
     return NextResponse.json(
-      { error: "Failed to start image generation" },
+      { error: `Image generation failed: ${errorMessage}` },
       { status: 500 }
     );
   }

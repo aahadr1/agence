@@ -89,6 +89,8 @@ export default function IdeationPage() {
             });
 
             if (!imgRes.ok) {
+              const errData = await imgRes.json().catch(() => ({}));
+              console.error(`[generate-image] variant ${variant.id} failed:`, errData);
               setImageStatuses((prev) => ({
                 ...prev,
                 [variant.id]: "failed",
