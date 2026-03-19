@@ -67,6 +67,42 @@ export interface Variant {
   created_at: string;
 }
 
+// Lead Generator types
+export type LeadSearchStatus = "searching" | "analyzing" | "completed" | "failed";
+
+export interface LeadSearch {
+  id: string;
+  user_id: string;
+  niche: string;
+  location: string;
+  status: LeadSearchStatus;
+  raw_research: string | null;
+  leads_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Lead {
+  id: string;
+  search_id: string;
+  user_id: string;
+  business_name: string;
+  description: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  rating: string | null;
+  review_count: string | null;
+  review_highlights: string[] | null;
+  niche: string | null;
+  location: string | null;
+  source: string | null;
+  has_website: boolean;
+  website_url: string | null;
+  google_maps_url: string | null;
+  created_at: string;
+}
+
 export type WebsiteBuildStatus = "pending" | "generating_foundation" | "generating_pages" | "deploying" | "deployed" | "failed";
 
 export interface WebsiteFile {

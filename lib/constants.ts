@@ -9,6 +9,11 @@ export const NAV_ITEMS = [
     href: "/website-maker",
     icon: "Globe" as const,
   },
+  {
+    label: "Lead Generator",
+    href: "/lead-generator",
+    icon: "Search" as const,
+  },
 ] as const;
 
 export const STEPS = [

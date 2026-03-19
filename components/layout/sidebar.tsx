@@ -7,6 +7,7 @@ import {
   Globe,
   LayoutDashboard,
   LogOut,
+  Search,
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
@@ -15,6 +16,7 @@ import { usePathname } from "next/navigation";
 const iconMap = {
   LayoutDashboard,
   Globe,
+  Search,
 } as const;
 
 export function Sidebar() {
