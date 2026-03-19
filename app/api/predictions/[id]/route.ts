@@ -68,26 +68,36 @@ export async function GET(
     const prediction = await replicate.predictions.get(id);
 
     if (prediction.status === "succeeded") {
-      // Determine output type: image URL or text (Claude)
+      // Determine output type: image URL or text (Claude/Kimi)
       let imageUrl: string | null = null;
       let rawOutput: string | null = null;
 
+      // Normalize output to a single string
+      let outputStr = "";
       if (Array.isArray(prediction.output)) {
-        const joined = prediction.output.join("");
-        if (joined.startsWith("http") && !joined.includes("{")) {
-          imageUrl = prediction.output[0];
-        } else {
-          rawOutput = joined;
-        }
+        outputStr = prediction.output.join("");
       } else if (typeof prediction.output === "string") {
-        if (
-          prediction.output.startsWith("http") &&
-          !prediction.output.includes("{")
-        ) {
-          imageUrl = prediction.output;
-        } else {
-          rawOutput = prediction.output;
-        }
+        outputStr = prediction.output;
+      } else if (prediction.output && typeof prediction.output === "object") {
+        // Some models return an object — stringify it
+        outputStr = JSON.stringify(prediction.output);
+      }
+
+      console.log(`[predictions/${id}] output type: ${typeof prediction.output}, isArray: ${Array.isArray(prediction.output)}, length: ${outputStr.length}, first 150 chars: ${outputStr.slice(0, 150)}`);
+
+      // Strip thinking tags for classification (Kimi K2 Thinking wraps output in <think>)
+      const withoutThinking = outputStr.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+
+      // Check if it's a plain image URL (no JSON, no HTML, no text content)
+      if (
+        withoutThinking.startsWith("http") &&
+        !withoutThinking.includes("{") &&
+        !withoutThinking.includes("[") &&
+        !withoutThinking.includes("<")
+      ) {
+        imageUrl = withoutThinking;
+      } else {
+        rawOutput = outputStr;
       }
 
       // If it's an image, persist it to Supabase Storage so the URL never expires

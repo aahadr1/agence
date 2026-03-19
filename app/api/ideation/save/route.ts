@@ -3,6 +3,42 @@ import { NextResponse } from "next/server";
 
 export const maxDuration = 15;
 
+function robustJsonParse(input: string): unknown {
+  try {
+    return JSON.parse(input);
+  } catch (e1) {
+    console.log("[robustJsonParse] Raw parse failed:", (e1 as Error).message);
+  }
+
+  let sanitized = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) { sanitized += ch; escaped = false; continue; }
+    if (ch === "\\" && inString) { sanitized += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; sanitized += ch; continue; }
+    if (inString && ch.charCodeAt(0) < 0x20) {
+      if (ch === "\n") { sanitized += "\\n"; continue; }
+      if (ch === "\r") { sanitized += "\\r"; continue; }
+      if (ch === "\t") { sanitized += "\\t"; continue; }
+      continue;
+    }
+    sanitized += ch;
+  }
+
+  try {
+    return JSON.parse(sanitized);
+  } catch (e2) {
+    console.log("[robustJsonParse] Sanitized parse failed:", (e2 as Error).message);
+  }
+
+  const aggressive = sanitized
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/\\'/g, "'");
+  return JSON.parse(aggressive);
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const {
@@ -23,29 +59,22 @@ export async function POST(request: Request) {
   }
 
   try {
-    const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
+    // Strip markdown fences and thinking tags
+    const stripped = rawOutput
+      .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+      .replace(/```(?:json)?\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+
+    const jsonMatch = stripped.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
+      console.error("[ideation/save] No JSON array found. First 500 chars:", stripped.slice(0, 500));
       throw new Error("Failed to parse AI concepts — no JSON array found");
     }
 
-    // Sanitize control characters inside JSON string values
-    const sanitized = jsonMatch[0]
-      .replace(/[\x00-\x1F\x7F]/g, (ch: string) => {
-        if (ch === "\n") return "\\n";
-        if (ch === "\r") return "\\r";
-        if (ch === "\t") return "\\t";
-        return "";
-      });
+    console.log("[ideation/save] Extracted JSON, length:", jsonMatch[0].length, "first 100 chars:", jsonMatch[0].slice(0, 100));
 
-    let concepts;
-    try {
-      concepts = JSON.parse(sanitized);
-    } catch {
-      const aggressive = sanitized
-        .replace(/,\s*([}\]])/g, "$1")
-        .replace(/\\'/g, "'");
-      concepts = JSON.parse(aggressive);
-    }
+    const concepts = robustJsonParse(jsonMatch[0]);
 
     if (!Array.isArray(concepts) || concepts.length !== 3) {
       throw new Error(`Expected exactly 3 concepts, got ${Array.isArray(concepts) ? concepts.length : "non-array"}`);

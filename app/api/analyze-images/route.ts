@@ -105,10 +105,41 @@ Return ONLY valid JSON:
         const rawOutput = Array.isArray(output)
           ? output.join("")
           : String(output);
-        const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+
+        // Strip markdown fences and thinking tags
+        const stripped = rawOutput
+          .replace(/<think>[\s\S]*?<\/think>/g, "")
+          .replace(/```(?:json)?\s*/g, "")
+          .replace(/```\s*/g, "")
+          .trim();
+
+        const jsonMatch = stripped.match(/\{[\s\S]*\}/);
 
         if (jsonMatch) {
-          const analysis = JSON.parse(jsonMatch[0]);
+          let analysis;
+          try {
+            analysis = JSON.parse(jsonMatch[0]);
+          } catch {
+            // Sanitize control chars inside string values only
+            const raw = jsonMatch[0];
+            let sanitized = "";
+            let inString = false;
+            let escaped = false;
+            for (let i = 0; i < raw.length; i++) {
+              const ch = raw[i];
+              if (escaped) { sanitized += ch; escaped = false; continue; }
+              if (ch === "\\" && inString) { sanitized += ch; escaped = true; continue; }
+              if (ch === '"') { inString = !inString; sanitized += ch; continue; }
+              if (inString && ch.charCodeAt(0) < 0x20) {
+                if (ch === "\n") { sanitized += "\\n"; continue; }
+                if (ch === "\r") { sanitized += "\\r"; continue; }
+                if (ch === "\t") { sanitized += "\\t"; continue; }
+                continue;
+              }
+              sanitized += ch;
+            }
+            analysis = JSON.parse(sanitized);
+          }
 
           await supabase
             .from("project_images")

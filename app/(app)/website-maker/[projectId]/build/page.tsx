@@ -75,10 +75,32 @@ async function safeJson(res: Response) {
   }
 }
 
+function sanitizeJsonControlChars(input: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) { result += ch; escaped = false; continue; }
+    if (ch === "\\" && inString) { result += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; result += ch; continue; }
+    if (inString && ch.charCodeAt(0) < 0x20) {
+      if (ch === "\n") { result += "\\n"; continue; }
+      if (ch === "\r") { result += "\\r"; continue; }
+      if (ch === "\t") { result += "\\t"; continue; }
+      continue;
+    }
+    result += ch;
+  }
+  return result;
+}
+
 function parseFilesFromOutput(raw: string): { path: string; content: string }[] {
+  // Strip thinking tags and markdown fences
   const cleaned = raw
-    .replace(/^```(?:json)?\s*/m, "")
-    .replace(/\s*```\s*$/m, "")
+    .replace(/<think>[\s\S]*?<\/think>/g, "")
+    .replace(/```(?:json)?\s*/g, "")
+    .replace(/```\s*/g, "")
     .trim();
 
   const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
@@ -86,28 +108,26 @@ function parseFilesFromOutput(raw: string): { path: string; content: string }[] 
     throw new Error("No JSON array found in AI output");
   }
 
-  try {
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new Error("Empty array");
-    }
-    return parsed;
-  } catch {
-    const text = jsonMatch[0];
-    for (let i = text.lastIndexOf("}"); i >= 0; i--) {
-      if (text[i] !== "}") continue;
-      try {
-        const attempt = text.slice(0, i + 1) + "]";
-        const parsed = JSON.parse(attempt);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      } catch {
-        continue;
-      }
-    }
-    throw new Error("Could not parse generated files — AI output may be truncated");
+  // Try parsing as-is, then with sanitization, then truncation recovery
+  const attempts = [jsonMatch[0], sanitizeJsonControlChars(jsonMatch[0])];
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch { /* try next */ }
   }
+
+  // Last resort: try truncation recovery on sanitized version
+  const sanitized = sanitizeJsonControlChars(jsonMatch[0]);
+  for (let i = sanitized.lastIndexOf("}"); i >= 0; i--) {
+    if (sanitized[i] !== "}") continue;
+    try {
+      const attempt = sanitized.slice(0, i + 1) + "]";
+      const parsed = JSON.parse(attempt);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch { continue; }
+  }
+  throw new Error("Could not parse generated files — AI output may be truncated");
 }
 
 export default function BuildPage() {

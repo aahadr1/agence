@@ -3,6 +3,51 @@ import { NextResponse } from "next/server";
 
 export const maxDuration = 30;
 
+/**
+ * Parse JSON from AI output with multi-tier fallback:
+ * 1. Try raw parse
+ * 2. Sanitize control chars inside string values only (state machine)
+ * 3. Aggressive cleanup (trailing commas, escaped quotes)
+ */
+function robustJsonParse(input: string): unknown {
+  // Tier 1: Try raw parse
+  try {
+    return JSON.parse(input);
+  } catch (e1) {
+    console.log("[robustJsonParse] Raw parse failed:", (e1 as Error).message);
+  }
+
+  // Tier 2: State-machine sanitize control chars inside string values only
+  let sanitized = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) { sanitized += ch; escaped = false; continue; }
+    if (ch === "\\" && inString) { sanitized += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; sanitized += ch; continue; }
+    if (inString && ch.charCodeAt(0) < 0x20) {
+      if (ch === "\n") { sanitized += "\\n"; continue; }
+      if (ch === "\r") { sanitized += "\\r"; continue; }
+      if (ch === "\t") { sanitized += "\\t"; continue; }
+      continue;
+    }
+    sanitized += ch;
+  }
+
+  try {
+    return JSON.parse(sanitized);
+  } catch (e2) {
+    console.log("[robustJsonParse] Sanitized parse failed:", (e2 as Error).message);
+  }
+
+  // Tier 3: Aggressive cleanup
+  const aggressive = sanitized
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/\\'/g, "'");
+  return JSON.parse(aggressive);
+}
+
 async function downloadAndPersistImage(
   imageUrl: string,
   projectId: string,
@@ -86,31 +131,23 @@ export async function POST(request: Request) {
   }
 
   try {
-    const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+    // Strip markdown fences and thinking tags (both <think> and <thinking> variants)
+    const stripped = rawOutput
+      .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+      .replace(/```(?:json)?\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      throw new Error("Failed to parse AI response");
+      console.error("[research/save] No JSON found in output. First 500 chars:", stripped.slice(0, 500));
+      throw new Error("Failed to parse AI response — no JSON object found");
     }
 
-    // Sanitize control characters inside JSON string values
-    // Replace unescaped newlines/tabs/etc inside strings with their escaped versions
-    const sanitized = jsonMatch[0]
-      .replace(/[\x00-\x1F\x7F]/g, (ch: string) => {
-        if (ch === "\n") return "\\n";
-        if (ch === "\r") return "\\r";
-        if (ch === "\t") return "\\t";
-        return "";
-      });
+    console.log("[research/save] Extracted JSON, length:", jsonMatch[0].length, "first 100 chars:", jsonMatch[0].slice(0, 100));
 
-    let businessInfo;
-    try {
-      businessInfo = JSON.parse(sanitized);
-    } catch (e) {
-      // If still fails, try a more aggressive cleanup
-      const aggressive = sanitized
-        .replace(/,\s*([}\]])/g, "$1") // trailing commas
-        .replace(/\\'/g, "'"); // escaped single quotes
-      businessInfo = JSON.parse(aggressive);
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const businessInfo = robustJsonParse(jsonMatch[0]) as any;
 
     // Get user-chosen colors
     const { data: project } = await supabase
