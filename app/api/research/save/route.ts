@@ -91,7 +91,26 @@ export async function POST(request: Request) {
       throw new Error("Failed to parse AI response");
     }
 
-    const businessInfo = JSON.parse(jsonMatch[0]);
+    // Sanitize control characters inside JSON string values
+    // Replace unescaped newlines/tabs/etc inside strings with their escaped versions
+    const sanitized = jsonMatch[0]
+      .replace(/[\x00-\x1F\x7F]/g, (ch: string) => {
+        if (ch === "\n") return "\\n";
+        if (ch === "\r") return "\\r";
+        if (ch === "\t") return "\\t";
+        return "";
+      });
+
+    let businessInfo;
+    try {
+      businessInfo = JSON.parse(sanitized);
+    } catch (e) {
+      // If still fails, try a more aggressive cleanup
+      const aggressive = sanitized
+        .replace(/,\s*([}\]])/g, "$1") // trailing commas
+        .replace(/\\'/g, "'"); // escaped single quotes
+      businessInfo = JSON.parse(aggressive);
+    }
 
     // Get user-chosen colors
     const { data: project } = await supabase

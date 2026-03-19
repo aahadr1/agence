@@ -28,7 +28,24 @@ export async function POST(request: Request) {
       throw new Error("Failed to parse AI concepts — no JSON array found");
     }
 
-    const concepts = JSON.parse(jsonMatch[0]);
+    // Sanitize control characters inside JSON string values
+    const sanitized = jsonMatch[0]
+      .replace(/[\x00-\x1F\x7F]/g, (ch: string) => {
+        if (ch === "\n") return "\\n";
+        if (ch === "\r") return "\\r";
+        if (ch === "\t") return "\\t";
+        return "";
+      });
+
+    let concepts;
+    try {
+      concepts = JSON.parse(sanitized);
+    } catch {
+      const aggressive = sanitized
+        .replace(/,\s*([}\]])/g, "$1")
+        .replace(/\\'/g, "'");
+      concepts = JSON.parse(aggressive);
+    }
 
     if (!Array.isArray(concepts) || concepts.length !== 3) {
       throw new Error(`Expected exactly 3 concepts, got ${Array.isArray(concepts) ? concepts.length : "non-array"}`);
