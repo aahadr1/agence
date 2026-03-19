@@ -44,23 +44,18 @@ export async function POST(request: Request) {
         // 2. User-uploaded photos (always include)
         const userPhotos = images.filter(
           (img) =>
-            img.type === "photo" &&
-            img.storage_path &&
-            !img.storage_path.startsWith("http")
+            img.type === "photo" && img.analysis?.source !== "web"
         );
         for (const photo of userPhotos) {
           imageInputs.push(photo.url);
         }
 
-        // 3. Web-found photos — exclude only explicitly low quality
+        // 3. Web-found photos (now persisted to Supabase) — exclude low quality
         const webPhotos = images.filter(
           (img) =>
             img.type === "photo" &&
-            img.storage_path &&
-            img.storage_path.startsWith("http") &&
-            (!img.analysis ||
-              !img.analysis.quality ||
-              img.analysis.quality !== "low")
+            img.analysis?.source === "web" &&
+            img.analysis?.quality !== "low"
         );
         for (const photo of webPhotos) {
           imageInputs.push(photo.url);

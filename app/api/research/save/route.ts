@@ -1,7 +1,70 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
-export const maxDuration = 15;
+export const maxDuration = 30;
+
+async function downloadAndPersistImage(
+  imageUrl: string,
+  projectId: string,
+  index: number
+): Promise<string | null> {
+  try {
+    const serviceClient = await createServiceClient();
+
+    // Download the image
+    const res = await fetch(imageUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; WebsiteBuilder/1.0; +https://aalh.business)",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) return null;
+
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("image")) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+
+    // Skip tiny images (likely icons/trackers)
+    if (buffer.length < 5000) return null;
+
+    const ext = contentType.includes("png")
+      ? "png"
+      : contentType.includes("webp")
+      ? "webp"
+      : "jpg";
+
+    const storagePath = `web-photos/${projectId}/${index}.${ext}`;
+
+    const { error: uploadError } = await serviceClient.storage
+      .from("project-images")
+      .upload(storagePath, buffer, {
+        contentType: contentType.split(";")[0],
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.warn(`Failed to upload web image ${index}:`, uploadError.message);
+      return null;
+    }
+
+    const {
+      data: { publicUrl },
+    } = serviceClient.storage
+      .from("project-images")
+      .getPublicUrl(storagePath);
+
+    return publicUrl;
+  } catch (err) {
+    console.warn(
+      `Failed to download web image ${index}:`,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -41,35 +104,62 @@ export async function POST(request: Request) {
       businessInfo.colors = project.user_colors;
     }
 
-    // Save found images to project_images table
+    // Download and persist found web images to Supabase Storage
     if (businessInfo.foundImages && businessInfo.foundImages.length > 0) {
-      const inserts = businessInfo.foundImages.map(
-        (img: {
-          url: string;
-          analysis: string;
-          quality: string;
-          suggestedPlacement: string;
-        }) => ({
+      const foundImgs = businessInfo.foundImages as {
+        url: string;
+        analysis: string;
+        quality: string;
+        suggestedPlacement: string;
+      }[];
+
+      console.log(
+        `[research/save] Downloading ${foundImgs.length} web images for project ${projectId}`
+      );
+
+      // Download images in parallel (max 10 at a time)
+      const downloadResults = await Promise.all(
+        foundImgs.slice(0, 15).map(async (img, i) => {
+          const persistedUrl = await downloadAndPersistImage(
+            img.url,
+            projectId,
+            i
+          );
+          return { ...img, persistedUrl };
+        })
+      );
+
+      // Only save images that were successfully downloaded
+      const successfulImages = downloadResults.filter(
+        (r) => r.persistedUrl !== null
+      );
+
+      console.log(
+        `[research/save] Successfully persisted ${successfulImages.length}/${foundImgs.length} web images`
+      );
+
+      if (successfulImages.length > 0) {
+        const inserts = successfulImages.map((img) => ({
           project_id: projectId,
-          storage_path: img.url,
-          url: img.url,
+          storage_path: `web-photos/${projectId}/${downloadResults.indexOf(img)}`,
+          url: img.persistedUrl!,
           type: "photo" as const,
           analysis: {
-            description: img.analysis,
+            description: img.analysis || "Web-found image",
             quality: (img.quality || "medium").toLowerCase().trim(),
             suggestedPlacement: img.suggestedPlacement || "gallery",
             dominantColors: [],
             mood: "",
-            websiteRelevance: img.analysis,
+            websiteRelevance: img.analysis || "",
+            source: "web",
+            originalUrl: img.url,
           },
-        })
-      );
+        }));
 
-      await supabase.from("project_images").insert(inserts);
+        await supabase.from("project_images").insert(inserts);
 
-      businessInfo.photos = businessInfo.foundImages.map(
-        (img: { url: string }) => img.url
-      );
+        businessInfo.photos = successfulImages.map((img) => img.persistedUrl);
+      }
     }
 
     // Save research results to project

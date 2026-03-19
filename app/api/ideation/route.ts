@@ -46,10 +46,10 @@ export async function POST(request: Request) {
 
   // Separate user-uploaded photos from web-found photos
   const uploadedPhotos = allPhotos.filter(
-    (img) => img.storage_path && !img.storage_path.startsWith("http")
+    (img) => img.analysis?.source !== "web"
   );
   const foundPhotos = allPhotos.filter(
-    (img) => img.storage_path && img.storage_path.startsWith("http")
+    (img) => img.analysis?.source === "web"
   );
 
   // Filter found photos: exclude only explicitly low quality

@@ -51,83 +51,105 @@ export async function POST(request: Request) {
 === IMAGES FOUND ONLINE (${imageAnalyses?.length || 0} analyzed) ===
 ${imageReport}`;
 
-    const synthesisPrompt = `Tu es un expert en stratégie de marque et création de sites web. Tu dois créer le profil le plus COMPLET et DÉTAILLÉ possible de ce commerce à partir de données de recherche web réelles, dans le but de créer un site web parfaitement adapté.
+    const synthesisPrompt = `You are a senior brand strategist preparing a comprehensive creative brief for a web design team. You have raw research data from the internet about a real business. Your job is to DEEPLY UNDERSTAND this business — not fill out a template, but truly grasp what makes it tick.
 
-═══ COMMERCE ═══
-Nom : "${businessName}"
-Adresse : "${businessAddress}"
+=== THE BUSINESS ===
+Name: "${businessName}"
+Address: "${businessAddress}"
 
-═══ DONNÉES DE RECHERCHE WEB ═══
+=== RAW RESEARCH DATA ===
 ${fullResearch}
 
-═══ TA MISSION ═══
-Analyse en profondeur TOUTES les données ci-dessus. Pense comme si tu devais présenter ce commerce à un designer web qui ne le connaît pas du tout. Sois SPÉCIFIQUE, CONCRET, DÉTAILLÉ — jamais générique.
+=== YOUR MISSION ===
 
-AVANT de produire le JSON, réfléchis à ces questions :
-- Quelle est l'IDENTITÉ profonde de ce lieu ? Qu'est-ce qui le rend unique par rapport à ses concurrents ?
-- Quel est le RESSENTI des vrais clients ? Quels mots reviennent dans les avis ?
-- Quelle AMBIANCE se dégage (cosy, branché, familial, haut de gamme, décontracté) ?
-- Quels sont les plats/produits/services PHARES ? À quels prix ?
-- Quelles COULEURS et quel STYLE visuel correspondraient parfaitement à cette identité ?
-- Parmi les images trouvées, lesquelles sont les plus PERTINENTES pour le site web et OÙ les placer ?
+Read every word of the research above. Then write the most insightful, specific, and useful business profile you've ever created.
 
-Puis retourne UN SEUL bloc JSON (pas de markdown, pas de commentaires avant/après) avec ces champs TRÈS DÉTAILLÉS :
+PHASE 1 — DEEP UNDERSTANDING
+Before writing anything, think about:
+- What EXACTLY does this business do? Not the category — the specific, unique thing they do.
+- What is their STORY? Every business has one — a founding moment, a passion, a tradition, a rebellion against something.
+- Who are their PEOPLE? Not demographics — real human beings. The regulars, the first-timers, the occasions they serve.
+- What's the EXPERIENCE like? Not just "nice" — the specific sensory details. The smell when you walk in, the sound, the light, the temperature, the vibe between staff and customers.
+- What are they KNOWN FOR? The one thing people tell their friends about. The dish, the service, the feeling, the detail that sticks.
+- What makes them DIFFERENT? Not "quality" or "service" — the actual, concrete, only-here thing.
+- What do CUSTOMERS actually say? Not a summary — the specific words, complaints, praises, surprises.
+- What's their VISUAL IDENTITY? Colors, logo style, interior design, plating style, uniform, signage — anything visual.
+
+PHASE 2 — STRUCTURED OUTPUT
+Now organize your understanding into JSON. Every field should feel like it was written by someone who actually visited this place and fell in love with it.
+
+Return a SINGLE JSON object (no markdown fences, no commentary):
 
 {
-  "name": "nom exact du commerce",
-  "address": "adresse complète",
-  "hours": "horaires réels si trouvés (ex: 'Lun-Ven 11h30-14h30 et 18h30-22h30, Sam 18h30-23h')",
-  "cuisine": "type précis (ex: 'Bistrot français contemporain', 'Pizzeria napolitaine artisanale')",
-  "phone": "numéro si trouvé",
-  "priceRange": "€/€€/€€€/€€€€",
-  "rating": "note /5 si trouvée",
-  "menu": "DÉTAILLE les vrais plats/produits avec les vrais prix. Ex: 'Entrées: Tartare de saumon (14€), Soupe à l'oignon gratinée (9€). Plats: Magret de canard au miel (24€), Risotto aux cèpes (19€)...' — Sois le plus exhaustif possible avec les données disponibles.",
-  "description": "4-5 phrases riches et spécifiques qui capturent l'ESSENCE de ce lieu. Pas de phrases génériques. Mentionne des détails concrets: le chef, l'histoire, la spécialité, ce qui le distingue. Écris comme un critique gastronomique passionné.",
-  "vibe": "3-4 phrases décrivant l'atmosphère avec des détails sensoriels: lumière, musique, décoration, matériaux, l'énergie du lieu.",
-  "uniqueSellingPoints": ["5 points forts CONCRETS et SPÉCIFIQUES à ce commerce"],
-  "customerSentiment": "Synthèse DÉTAILLÉE de ce que les VRAIS clients disent. Cite des mots/expressions des avis réels si possible.",
-  "reviewHighlights": ["5 citations ou paraphrases marquantes d'avis clients réels"],
+  "name": "The exact business name as they use it",
+  "address": "Full address",
+  "phone": "Phone number if found, or empty string",
+  "hours": "Real opening hours in a readable format, or 'Not found'",
+  "cuisine": "Their specific type — not generic. E.g., not 'restaurant' but 'neo-bistrot parisien avec cuisine de marche' or 'salon de coiffure afro specialise tresses et locks'",
+  "priceRange": "Price range with context, e.g., '15-25 EUR for lunch, 35-50 EUR for dinner' or 'EUR/EUREUR'",
+  "rating": "Rating out of 5 if found",
+
+  "description": "5-8 sentences that paint a vivid, specific picture of this place. Write as if you're describing it to a friend who's never been. Mention real details: the chef's name if known, specific dishes, the decor, the neighborhood, the history. Never use words like 'quality', 'professional', 'welcoming' without a concrete detail attached. This should read like the opening paragraph of a great magazine feature.",
+
+  "vibe": "4-6 sentences of pure sensory detail. What does it FEEL like to be here? The lighting (warm Edison bulbs? harsh fluorescent? natural light through big windows?), the music (jazz? silence? hip-hop? French chanson?), the decor (exposed brick? minimalist white? colorful tiles? vintage posters?), the energy (bustling? intimate? focused? chaotic?), the staff (formal? tattooed? family?). Be so specific someone could close their eyes and feel it.",
+
+  "uniqueSellingPoints": [
+    "5-7 points that are ACTUALLY unique to THIS business. Not 'great food' but 'the owner hand-picks produce from Rungis market every morning at 4am'. Not 'good service' but 'they remember every regular's name and order'. Real, specific, verified things from the research."
+  ],
+
+  "customerSentiment": "A rich, honest summary of what real customers feel about this place. Include the good AND the bad. What do people consistently praise? What do some complain about? What surprises people? What do they wish was different? Write this like a balanced journalist, not a PR person.",
+
+  "reviewHighlights": [
+    "5-8 actual quotes or close paraphrases from real reviews. Mark each with the platform if known: '[Google] Best croissants in the 11th!', '[TripAdvisor] We waited 45 min but it was worth every second'"
+  ],
+
+  "menu": "If this is a restaurant/cafe/food business: write out the ACTUAL menu items with REAL prices, organized by category. Be exhaustive with whatever the research provides. If it's not a food business: describe their services/products in the same detailed way. If no menu data found, write 'Menu not available online'.",
+
   "socialMedia": {
-    "instagram": "@handle exact ou vide",
-    "facebook": "URL ou nom de page ou vide",
-    "twitter": "@handle ou vide",
-    "website": "URL du site web existant ou vide"
+    "instagram": "@handle or URL if found",
+    "facebook": "page URL or name if found",
+    "twitter": "@handle if found",
+    "website": "official website URL if found"
   },
+
   "colors": ["#hex1", "#hex2", "#hex3", "#hex4", "#hex5"],
-  "colorExplanation": "Explique pourquoi ces 5 couleurs correspondent à l'identité du commerce.",
-  "photos": [],
-  "targetAudience": "Qui sont les clients typiques ?",
-  "websiteTone": "Quel ton adopter pour les textes du site ?",
-  "heroTagline": "Propose 3 accroches percutantes pour la section hero du site, séparées par ' | '",
+  "colorExplanation": "Why these 5 colors? Connect each one to something REAL about the business — their logo, their interior, their food, their neighborhood, their vibe. Don't just pick pretty colors — pick THEIR colors.",
+
+  "targetAudience": "Who actually comes here? Be specific and human — not 'millennials' but 'young couples from the neighborhood on date night, freelancers working through the afternoon, older locals who've been coming for 20 years'",
+  "websiteTone": "What should the website's copywriting feel like? Reference specific adjectives, sentence structures, and the level of formality. E.g., 'Warm and slightly irreverent, like a friend who's passionate about wine. Short punchy sentences. French with occasional English words for menu items.'",
+  "heroTagline": "Propose 3 taglines separated by ' | ' — each should capture something ESSENTIAL about this business in under 10 words. Not generic marketing speak but something that could ONLY apply to this place.",
+
+  "competitors": "Who are their main competitors in the area? What makes this business different from them?",
+  "neighborhood": "What's the neighborhood/area like? How does it influence the business?",
+
   "foundImages": [
     {
-      "url": "URL de l'image",
-      "analysis": "Description DÉTAILLÉE: ce que montre l'image, pourquoi elle est pertinente, comment l'utiliser sur le site",
+      "url": "image URL",
+      "analysis": "What this image shows AND why it matters for the website",
       "suggestedPlacement": "hero|gallery|about|menu|background|testimonials",
       "quality": "low|medium|high|excellent"
     }
   ]
 }
 
-RÈGLES CRITIQUES :
-- Chaque champ doit être RICHE et SPÉCIFIQUE. Si tu n'as pas l'info, écris "Non trouvé" plutôt qu'inventer.
-- Pour "colors": choisis 5 couleurs qui forment une palette cohérente et qui correspondent VRAIMENT à l'identité du lieu.
-- Pour "foundImages": inclus TOUTES les images analysées (max 10), avec des recommandations précises de placement.
-- Pour "menu": détaille TOUT ce que tu as trouvé, avec les prix réels.
-- N'invente JAMAIS de fausses informations. Utilise UNIQUEMENT les données de la recherche.`;
+CRITICAL RULES:
+- NEVER invent information. If you don't know something, say so honestly. "Hours not found online" is infinitely better than fake hours.
+- BE SPECIFIC. Every sentence should contain a concrete detail that could only be true about THIS business.
+- WRITE WITH SOUL. This isn't a database entry — it's a creative brief that should make the web designer excited to work on this project.
+- For "foundImages": include ALL images that were analyzed, with honest quality assessments.
+- For "colors": derive them from real visual evidence (logo, interior photos, branding) when possible.`;
 
-    // Create prediction (non-blocking) instead of waiting for completion
+    // Create prediction (non-blocking)
     const prediction = await replicate.predictions.create({
       model: "anthropic/claude-4.5-sonnet",
       input: {
         prompt: synthesisPrompt,
-        max_tokens: 8000,
+        max_tokens: 16000,
         system_prompt:
-          "Tu es un expert en stratégie de marque et création de sites web premium. Tu analyses les données de recherche web avec une précision chirurgicale pour extraire TOUTES les informations utiles. Tu es extrêmement détaillé et spécifique — jamais générique. Tu retournes du JSON valide uniquement, sans blocs markdown.",
+          "You are a senior brand strategist with 20 years of experience understanding businesses. You write creative briefs that make designers cry with excitement. You never use generic language — every word is specific, vivid, and true. You return valid JSON only, no markdown fences.",
       },
     });
 
-    // Store prediction ID and context in the project for later processing
     await supabase
       .from("projects")
       .update({

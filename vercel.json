@@ -4,7 +4,7 @@
     "app/api/research/search/route.ts": { "maxDuration": 60 },
     "app/api/research/analyze/route.ts": { "maxDuration": 60 },
     "app/api/research/synthesize/route.ts": { "maxDuration": 30 },
-    "app/api/research/save/route.ts": { "maxDuration": 15 },
+    "app/api/research/save/route.ts": { "maxDuration": 30 },
     "app/api/ideation/route.ts": { "maxDuration": 60 },
     "app/api/analyze-images/route.ts": { "maxDuration": 60 },
     "app/api/generate-image/route.ts": { "maxDuration": 30 },
