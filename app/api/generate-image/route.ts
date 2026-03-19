@@ -85,26 +85,62 @@ export async function POST(request: Request) {
 
     const enhancedPrompt = `Professional high-fidelity website landing page screenshot, UI/UX design mockup displayed in a browser. ${prompt}. ${imageRefInstructions} The design must look like a real production website with crisp typography, proper spacing, professional layout, and real photographic content embedded in the sections. 4K quality, sharp details, modern web design.`;
 
-    const input: Record<string, unknown> = {
-      prompt: enhancedPrompt,
-      aspect_ratio: "4:3",
-      output_format: "jpg",
-    };
-
-    if (imageInputs.length > 0) {
-      input.image_input = imageInputs;
-    }
-
-    const prediction = await replicate.predictions.create({
-      model: "google/nano-banana-2",
-      input,
-    });
-
     // Save the enhanced prompt to the variant
     await supabase
       .from("variants")
       .update({ prompt: enhancedPrompt })
       .eq("id", variantId);
+
+    // Try Nano Banana 2 first, fallback to GPT Image 1.5
+    let prediction;
+    try {
+      const nanoBananaInput: Record<string, unknown> = {
+        prompt: enhancedPrompt,
+        aspect_ratio: "4:3",
+        output_format: "jpg",
+      };
+      if (imageInputs.length > 0) {
+        nanoBananaInput.image_input = imageInputs;
+      }
+
+      prediction = await replicate.predictions.create({
+        model: "google/nano-banana-2",
+        input: nanoBananaInput,
+      });
+
+      // Wait briefly to check if it fails immediately (high demand error)
+      await new Promise((r) => setTimeout(r, 3000));
+      const check = await replicate.predictions.get(prediction.id);
+
+      if (check.status === "failed") {
+        throw new Error(check.error as string || "Nano Banana 2 failed");
+      }
+    } catch (nanoBananaError) {
+      console.warn(
+        "[generate-image] Nano Banana 2 failed, falling back to GPT Image 1.5:",
+        nanoBananaError instanceof Error ? nanoBananaError.message : nanoBananaError
+      );
+
+      const gptInput: Record<string, unknown> = {
+        prompt: enhancedPrompt,
+        quality: "high",
+        aspect_ratio: "4:3",
+        output_format: "webp",
+        output_compression: 90,
+        number_of_images: 1,
+        moderation: "auto",
+        background: "auto",
+      };
+      if (imageInputs.length > 0) {
+        gptInput.input_images = imageInputs;
+        gptInput.input_fidelity = "low";
+      }
+
+      prediction = await replicate.predictions.create({
+        model: "openai/gpt-image-1.5",
+        input: gptInput,
+      });
+    }
 
     return NextResponse.json({ predictionId: prediction.id });
   } catch (error) {
