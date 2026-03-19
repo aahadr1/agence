@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   try {
     const replicate = getReplicate();
 
-    // Fetch project images, prioritized: logo first, then user photos, then best web photos
+    // Fetch project images in priority order
     let imageInputs: string[] = [];
     if (projectId) {
       const { data: images } = await supabase
@@ -66,36 +66,32 @@ export async function POST(request: Request) {
           imageInputs.push(photo.url);
         }
 
-        // Cap at 14 (Nano Banana 2 limit)
+        // Cap at 14
         imageInputs = imageInputs.slice(0, 14);
       }
     }
 
-    console.log(`[generate-image] projectId=${projectId}, imageInputs=${imageInputs.length}:`, imageInputs);
+    console.log(
+      `[generate-image] variantId=${variantId}, images=${imageInputs.length}`
+    );
 
-    // Build image reference instructions for the prompt
-    const imageRefInstructions =
-      imageInputs.length > 0
-        ? `This website mockup must INCORPORATE the ${imageInputs.length} provided reference images as actual visual content within the website layout. Reference image 1 is the business logo — display it in the website header/navigation. ${
-            imageInputs.length > 1
-              ? `Reference images 2-${imageInputs.length} are real business photos (food, interior, exterior) — display them naturally as the hero background image, in a photo gallery section, or as section backgrounds. These are REAL photos of this business — they must appear visibly embedded in the website design, not replaced or recreated.`
-              : ""
-          }`
-        : "";
+    // The prompt from ideation is already hyper-detailed and references images.
+    // We just frame it for the image model.
+    const finalPrompt = `${prompt}
 
-    const enhancedPrompt = `Professional high-fidelity website landing page screenshot, UI/UX design mockup displayed in a browser. ${prompt}. ${imageRefInstructions} The design must look like a real production website with crisp typography, proper spacing, professional layout, and real photographic content embedded in the sections. 4K quality, sharp details, modern web design.`;
+The website must look like a real, live, professional website screenshot at 4K resolution. Crisp text rendering, proper antialiasing, realistic browser chrome, natural shadows and depth. This is not a wireframe or mockup — it should be indistinguishable from a screenshot of a real premium website. The reference images provided must be visibly embedded as actual content within the website layout (as hero photos, gallery images, logo, etc.) — not recreated or replaced with AI-generated alternatives.`;
 
-    // Save the enhanced prompt to the variant
+    // Save the final prompt to the variant
     await supabase
       .from("variants")
-      .update({ prompt: enhancedPrompt })
+      .update({ prompt: finalPrompt })
       .eq("id", variantId);
 
     // Try Nano Banana 2 first, fallback to GPT Image 1.5
     let prediction;
     try {
       const nanoBananaInput: Record<string, unknown> = {
-        prompt: enhancedPrompt,
+        prompt: finalPrompt,
         aspect_ratio: "4:3",
         output_format: "jpg",
       };
@@ -108,21 +104,23 @@ export async function POST(request: Request) {
         input: nanoBananaInput,
       });
 
-      // Wait briefly to check if it fails immediately (high demand error)
+      // Wait briefly to check if it fails immediately
       await new Promise((r) => setTimeout(r, 3000));
       const check = await replicate.predictions.get(prediction.id);
 
       if (check.status === "failed") {
-        throw new Error(check.error as string || "Nano Banana 2 failed");
+        throw new Error((check.error as string) || "Nano Banana 2 failed");
       }
     } catch (nanoBananaError) {
       console.warn(
         "[generate-image] Nano Banana 2 failed, falling back to GPT Image 1.5:",
-        nanoBananaError instanceof Error ? nanoBananaError.message : nanoBananaError
+        nanoBananaError instanceof Error
+          ? nanoBananaError.message
+          : nanoBananaError
       );
 
       const gptInput: Record<string, unknown> = {
-        prompt: enhancedPrompt,
+        prompt: finalPrompt,
         quality: "high",
         aspect_ratio: "4:3",
         output_format: "webp",
@@ -133,7 +131,7 @@ export async function POST(request: Request) {
       };
       if (imageInputs.length > 0) {
         gptInput.input_images = imageInputs;
-        gptInput.input_fidelity = "low";
+        gptInput.input_fidelity = "high";
       }
 
       prediction = await replicate.predictions.create({

@@ -45,7 +45,6 @@ export async function POST(request: Request) {
   const allPhotos = images?.filter((img) => img.type === "photo") || [];
 
   // Separate user-uploaded photos from web-found photos
-  // Web-found images have external URLs, uploaded ones have our storage URLs
   const uploadedPhotos = allPhotos.filter(
     (img) => img.storage_path && !img.storage_path.startsWith("http")
   );
@@ -56,38 +55,44 @@ export async function POST(request: Request) {
   // Filter found photos: exclude only explicitly low quality
   const qualityFoundPhotos = foundPhotos.filter((img) => {
     const analysis = img.analysis;
-    if (!analysis) return true; // include if no analysis
+    if (!analysis) return true;
     const quality = (analysis.quality || "").toLowerCase();
     return quality !== "low";
   });
 
-  // Build image context for Claude with clear categorization
-  const imageDescriptions: string[] = [];
+  // Build structured image inventory
+  const imageInventory: string[] = [];
   let imgIndex = 1;
 
   if (logo) {
-    imageDescriptions.push(
-      `IMAGE ${imgIndex} (USER LOGO — MUST USE): URL: ${logo.url}\nAnalysis: ${
-        logo.analysis ? JSON.stringify(logo.analysis) : "Business logo uploaded by user"
+    imageInventory.push(
+      `[IMG-${imgIndex}] LOGO (mandatory) | URL: ${logo.url} | ${
+        logo.analysis
+          ? `Colors: ${logo.analysis.dominantColors?.join(", ") || "N/A"}, Style: ${logo.analysis.mood || "N/A"}`
+          : "User-uploaded logo"
       }`
     );
     imgIndex++;
   }
 
   uploadedPhotos.forEach((photo) => {
-    imageDescriptions.push(
-      `IMAGE ${imgIndex} (USER PHOTO — MUST USE): URL: ${photo.url}\nAnalysis: ${
-        photo.analysis ? JSON.stringify(photo.analysis) : "Business photo uploaded by user"
+    imageInventory.push(
+      `[IMG-${imgIndex}] USER PHOTO (mandatory) | URL: ${photo.url} | ${
+        photo.analysis
+          ? `Shows: ${photo.analysis.description || "Business photo"}, Mood: ${photo.analysis.mood || "N/A"}, Best for: ${photo.analysis.suggestedPlacement || "gallery"}`
+          : "User-uploaded business photo"
       }`
     );
     imgIndex++;
   });
 
   qualityFoundPhotos.forEach((photo) => {
-    imageDescriptions.push(
-      `IMAGE ${imgIndex} (WEB PHOTO — HIGH QUALITY, USE IF RELEVANT): URL: ${photo.url}\nAnalysis: ${
-        photo.analysis ? JSON.stringify(photo.analysis) : "Photo found online"
-      }\nSuggested placement: ${photo.analysis?.suggestedPlacement || "gallery"}`
+    imageInventory.push(
+      `[IMG-${imgIndex}] WEB PHOTO (recommended) | URL: ${photo.url} | ${
+        photo.analysis
+          ? `Shows: ${photo.analysis.description || "Photo found online"}, Quality: ${photo.analysis.quality || "medium"}, Best for: ${photo.analysis.suggestedPlacement || "gallery"}`
+          : "Photo found online"
+      }`
     );
     imgIndex++;
   });
@@ -99,83 +104,113 @@ export async function POST(request: Request) {
   try {
     const replicate = getReplicate();
 
-    const prompt = `You are an elite web designer creating 3 distinct website concepts for a real business. You have deep research data, image analysis, and brand context. Use ALL of it.
+    const prompt = `You are a senior creative director at an award-winning digital agency. A client has hired you to design their website. You have comprehensive research data about their business. Your job is to THINK DEEPLY about this specific business, then propose 3 radically different website concepts.
 
-═══ BUSINESS PROFILE ═══
-Name: ${businessInfo.name}
-Address: ${businessInfo.address}
+=== THE CLIENT ===
+Business name: "${businessInfo.name}"
+Location: "${businessInfo.address}"
 Type: ${businessInfo.cuisine || "Business"}
 Price range: ${businessInfo.priceRange || "N/A"}
-Rating: ${businessInfo.rating || "N/A"}
+Rating: ${businessInfo.rating || "N/A"}/5
 
-Description: ${businessInfo.description}
-Vibe: ${businessInfo.vibe || "Not specified"}
-Unique selling points: ${businessInfo.uniqueSellingPoints?.join(", ") || "N/A"}
-Customer sentiment: ${businessInfo.customerSentiment || "N/A"}
-Review highlights: ${businessInfo.reviewHighlights?.join(" | ") || "N/A"}
+What they do:
+${businessInfo.description || "No description available."}
 
-Hours: ${businessInfo.hours}
+The atmosphere:
+${businessInfo.vibe || "Not described."}
+
+What makes them special:
+${businessInfo.uniqueSellingPoints?.join("\n") || "N/A"}
+
+What real customers say:
+${businessInfo.customerSentiment || "N/A"}
+
+Memorable quotes from reviews:
+${businessInfo.reviewHighlights?.join("\n") || "N/A"}
+
+Hours: ${businessInfo.hours || "N/A"}
 Phone: ${businessInfo.phone || "N/A"}
-Menu: ${businessInfo.menu || "N/A"}
+Menu/Services: ${businessInfo.menu || "Not available"}
 
-═══ BRAND COLORS ═══
-${userColors.length > 0 ? `User-chosen colors (MUST use these): ${userColors.join(", ")}` : `AI-suggested colors: ${businessInfo.colors?.join(", ") || "Not determined"}`}
+Social media:
+- Instagram: ${businessInfo.socialMedia?.instagram || "none"}
+- Facebook: ${businessInfo.socialMedia?.facebook || "none"}
+- Website: ${businessInfo.socialMedia?.website || "none"}
 
-═══ AVAILABLE IMAGES (${imageDescriptions.length} total) ═══
-${imageDescriptions.length > 0 ? imageDescriptions.join("\n\n") : "No images available"}
+=== BRAND ASSETS ===
+${userColors.length > 0 ? `Client-chosen brand colors (MUST respect): ${userColors.join(", ")}` : `Suggested brand colors: ${businessInfo.colors?.join(", ") || "Not determined yet — you decide"}`}
 
-═══ USER INSTRUCTIONS ═══
-${userInstructions || "None"}
+=== IMAGE INVENTORY (${imageInventory.length} assets) ===
+${imageInventory.length > 0 ? imageInventory.join("\n") : "No images available — concepts will rely on typography, color, and layout."}
 
-═══ YOUR TASK ═══
-Create 3 COMPLETELY DIFFERENT website design concepts. Each must:
-1. Be deeply informed by the research (not generic)
-2. Reflect the real vibe and customer sentiment
-3. Use the brand colors (or user-chosen colors)
-4. INCORPORATE the real images into the website design — the generated mockup should visually contain these actual images
-5. Be specific to THIS business, not a template
+=== CLIENT BRIEF ===
+${userInstructions || "No specific instructions — surprise us with your best work."}
 
-CRITICAL IMAGE RULES:
-- Images marked "MUST USE" (user-uploaded logo and photos) MUST appear in every concept
-- Images marked "HIGH QUALITY, USE IF RELEVANT" (found online) should be used if they show real food, interior, or ambiance of this specific business
-- For each concept, specify exactly WHERE each image goes and HOW it's displayed
-- The image_prompt MUST instruct the image generator to place these reference images naturally inside the website layout (e.g., "use reference image 1 as the logo in the top navigation bar", "use reference image 3 as the hero background photo", "display reference images 4-6 in a 3-column gallery grid in the menu section")
+=== YOUR CREATIVE PROCESS ===
 
-For image_prompt: Write a DETAILED prompt to generate a website landing page mockup that VISUALLY CONTAINS the provided reference images as part of the website design. The prompt MUST:
-- Describe a professional website landing page screenshot
-- EXPLICITLY say "incorporate the provided reference images into the website design"
-- Say "use reference image 1 (the logo) in the header navigation"
-- Say which reference images to display as hero photo, food gallery, interior shots, etc.
-- Specify the business name "${businessInfo.name}" visible in the hero text
-- Describe the exact color scheme, typography, and layout
-- Describe each section: hero with real photo, about section, menu/gallery with real food photos, contact, footer
-- Make it look like a REAL production website with actual photos embedded in it
+STEP 1 — STRATEGIC ANALYSIS (think before designing)
+Before you touch a single pixel, answer these questions in your mind:
+- What is the SOUL of this business? Not just what they sell, but what they represent.
+- Who walks through their door? What are these people looking for when they visit the website?
+- What emotion should hit a visitor in the first 0.5 seconds of seeing the homepage?
+- What are the top 3 websites in this industry category that are considered best-in-class? What design patterns do they use?
+- What visual language communicates this business's positioning? (luxury = lots of white space and serifs; trendy = bold sans-serif and motion; traditional = warm tones and texture)
+- How should the photography be treated? (full-bleed, contained, overlapping, with overlays, with crops?)
+- What's the right content hierarchy? What should visitors see first, second, third?
 
-Return ONLY a valid JSON array with exactly 3 objects:
+STEP 2 — DESIGN 3 FUNDAMENTALLY DIFFERENT CONCEPTS
+Not just 3 color variations. Each concept should differ in:
+- Layout architecture (grid system, section flow, whitespace strategy)
+- Typography personality (serif vs sans-serif, weight contrast, size hierarchy)
+- Hero strategy (full-screen image vs split layout vs text-first vs scroll-triggered reveal)
+- Navigation style (fixed top bar vs sidebar vs minimal/hidden vs overlay)
+- Photography treatment (full-bleed vs contained frames vs grid vs parallax)
+- Content rhythm (dense information vs breathing space vs interactive scroll)
+- Overall design philosophy (what award-winning website is this inspired by?)
+
+Each concept must feel like it could win a design award. No generic templates. No safe choices.
+
+STEP 3 — WRITE IMAGE GENERATION PROMPTS
+For each concept, write a hyper-specific prompt to generate a website mockup screenshot. The prompt MUST:
+- Describe the EXACT layout of the homepage in a browser window
+- Specify where each image from the inventory appears (by IMG number and URL)
+- Describe the precise color palette, typography choice, and spacing
+- Describe what text appears in the hero section (the business name, a tagline)
+- Describe each visible section from top to bottom
+- Mention the navigation style and footer
+- The result should look like a 4K screenshot of a real, premium, production website — not a wireframe or mockup
+
+=== OUTPUT FORMAT ===
+Return ONLY a valid JSON array. No markdown, no explanation, no thinking out loud. Just the array:
+
 [
   {
-    "theme_name": "Creative concept name",
+    "theme_name": "A evocative 2-3 word name capturing this concept's essence",
+    "design_rationale": "2-3 sentences explaining WHY this design approach is perfect for THIS specific business. Reference the business's personality, clientele, and positioning.",
     "color_scheme": {
-      "primary": "#hex",
-      "secondary": "#hex",
-      "accent": "#hex"
+      "primary": "#hex — the dominant brand color",
+      "secondary": "#hex — the supporting background/surface color",
+      "accent": "#hex — the action/highlight color"
     },
+    "typography": "The font pairing concept (e.g., 'Playfair Display for headings with Inter for body — classic elegance meets modern readability')",
+    "layout_concept": "Brief description of the layout architecture (e.g., 'Asymmetric grid with full-bleed photography and text overlays, horizontal scroll gallery')",
     "image_usage": {
-      "logo": "Exact description of how the logo is placed and sized on the website",
-      "photos": ["How photo 1 is used", "How photo 2 is used"]
+      "logo": "Exactly how the logo is displayed (size, position, treatment — e.g., 'Small monochrome logo in top-left of fixed transparent header, 32px height')",
+      "hero_image": "Which IMG-X is used for the hero and how (e.g., 'IMG-3 as full-bleed hero background with dark gradient overlay from bottom, 100vh height')",
+      "section_images": ["How each remaining image is used in the layout — be specific about treatment, size, and section"]
     },
-    "image_prompt": "Ultra-detailed prompt that instructs the image generator to create a website mockup using the provided reference images (logo and photos). Describe the complete layout, colors, sections, and where each reference image appears..."
+    "image_prompt": "EXTREMELY detailed prompt describing the website mockup to generate. Start with 'A 4K screenshot of a premium website displayed in a minimal browser chrome.' Then describe every visible element from top to bottom: header (navigation items, logo placement), hero section (exact text, image treatment, overlay), each content section (layout, imagery, text blocks), and footer. Reference specific images by saying 'displaying the image from [IMG-X URL]' so the generator knows which reference image to place where. Describe colors as exact hex values. The design must look like a real shipped website, not a template."
   }
 ]
 
-Make concept 1 elegant/refined, concept 2 bold/modern, concept 3 warm/inviting. Each should feel like it could be a real website for this specific business.`;
+CRITICAL: Your 3 concepts must each feel like they come from a different design philosophy. If concept 1 is minimal and typographic, concept 2 should be immersive and photographic, and concept 3 should be bold and editorial. Surprise us.`;
 
     const output = await replicate.run("anthropic/claude-4.5-sonnet", {
       input: {
         prompt,
-        max_tokens: 6000,
+        max_tokens: 8000,
         system_prompt:
-          "You are a world-class web designer. You create stunning, unique website concepts deeply tailored to each business. You always specify exactly how uploaded brand assets (logo, photos) should be incorporated. Return valid JSON only, no markdown fences.",
+          "You are an elite creative director who has designed websites for Michelin-star restaurants, luxury brands, and award-winning businesses. You think strategically about every design decision. You never produce generic work — every concept is deeply tailored to the client's identity. You return valid JSON only, never markdown fences or commentary.",
       },
     });
 
@@ -192,7 +227,7 @@ Make concept 1 elegant/refined, concept 2 bold/modern, concept 3 warm/inviting. 
       throw new Error("Expected exactly 3 concepts");
     }
 
-    // Insert variants with image_usage metadata
+    // Insert variants with full design metadata
     const variants = [];
     for (const concept of concepts) {
       const { data: variant, error: insertError } = await supabase
@@ -204,6 +239,9 @@ Make concept 1 elegant/refined, concept 2 bold/modern, concept 3 warm/inviting. 
           color_scheme: {
             ...concept.color_scheme,
             image_usage: concept.image_usage,
+            typography: concept.typography,
+            layout_concept: concept.layout_concept,
+            design_rationale: concept.design_rationale,
           },
           selected: false,
         })

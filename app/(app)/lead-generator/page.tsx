@@ -63,37 +63,22 @@ export default function LeadGeneratorPage() {
     [supabase]
   );
 
-  // Poll prediction status
-  const pollPrediction = async (predictionId: string): Promise<string> => {
-    for (let i = 0; i < 120; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const res = await fetch(`/api/predictions/${predictionId}`);
-      const data = await res.json();
-
-      if (data.status === "succeeded") {
-        return data.rawOutput || "";
-      }
-      if (data.status === "failed" || data.status === "canceled") {
-        throw new Error("AI analysis failed");
-      }
-    }
-    throw new Error("Analysis timed out");
-  };
-
   const handleSearch = async () => {
     if (!niche.trim() || !location.trim()) return;
 
     setPhase("searching");
-    setPhaseMessage("Searching the web for businesses...");
+    setPhaseMessage("Launching browser agent — navigating Google Maps...");
     setError(null);
     setLeads([]);
     setSelectedSearchId(null);
 
     try {
-      // 1. Deep web research (also creates the search record server-side)
+      // Single call: agent browses Google Maps, extracts businesses, saves to DB
+      setPhase("analyzing");
       setPhaseMessage(
-        "Running 5 parallel searches across Google Maps, directories, reviews, social media..."
+        "AI agent is browsing Google Maps, clicking through each business to check for websites... this takes 2-4 minutes"
       );
+
       const searchRes = await fetch("/api/lead-generator/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -108,61 +93,12 @@ export default function LeadGeneratorPage() {
         throw new Error(err.error || "Search failed");
       }
 
-      const { rawResearch, searchId } = await searchRes.json();
+      const { searchId, leadsCount, withoutWebsite } = await searchRes.json();
 
-      // 3. AI analysis
-      setPhase("analyzing");
-      setPhaseMessage(
-        "AI is analyzing results to identify businesses and check for websites..."
-      );
-
-      const analyzeRes = await fetch("/api/lead-generator/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          searchId,
-          niche: niche.trim(),
-          location: location.trim(),
-          rawResearch,
-        }),
-      });
-
-      if (!analyzeRes.ok) {
-        const err = await analyzeRes.json();
-        throw new Error(err.error || "Analysis failed");
-      }
-
-      const { predictionId } = await analyzeRes.json();
-
-      setPhaseMessage("AI is processing... this may take up to a minute");
-      const aiOutput = await pollPrediction(predictionId);
-
-      // 4. Save leads
-      setPhase("saving");
-      setPhaseMessage("Saving leads to database...");
-
-      const saveRes = await fetch("/api/lead-generator/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          searchId,
-          niche: niche.trim(),
-          location: location.trim(),
-          aiOutput,
-        }),
-      });
-
-      if (!saveRes.ok) {
-        const err = await saveRes.json();
-        throw new Error(err.error || "Save failed");
-      }
-
-      const saveData = await saveRes.json();
-
-      // 5. Load results
+      // Load results
       setPhase("completed");
       setPhaseMessage(
-        `Found ${saveData.leadsCount} businesses — ${saveData.withoutWebsite} without a website!`
+        `Found ${leadsCount} businesses — ${withoutWebsite} without a website!`
       );
       await loadLeads(searchId);
 
@@ -268,9 +204,9 @@ export default function LeadGeneratorPage() {
             )}
             <div>
               <p className="text-sm text-foreground">{phaseMessage}</p>
-              {phase === "searching" && (
+              {(phase === "searching" || phase === "analyzing") && (
                 <div className="flex gap-2 mt-2">
-                  {["Maps", "Directories", "Reviews", "Social", "No-website"].map(
+                  {["Browser", "Google Maps", "Gemini Vision", "Extract Data"].map(
                     (s) => (
                       <span
                         key={s}
