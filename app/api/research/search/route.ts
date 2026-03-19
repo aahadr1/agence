@@ -28,26 +28,28 @@ export async function POST(request: Request) {
 
     const [generalSearch, reviewSearch, menuSearch, socialSearch] =
       await Promise.all([
-        tvly.search(`"${businessName}" ${businessAddress}`, {
+        tvly.search(`"${businessName}" ${businessAddress} restaurant commerce`, {
+          maxResults: 8,
+          searchDepth: "advanced",
+          includeAnswer: true,
+          includeImages: true,
+          includeImageDescriptions: true,
+        }),
+        tvly.search(`"${businessName}" avis reviews clients témoignages google tripadvisor`, {
+          maxResults: 8,
+          searchDepth: "advanced",
+          includeAnswer: true,
+          includeImages: true,
+          includeImageDescriptions: true,
+        }),
+        tvly.search(`"${businessName}" menu carte plats prix horaires`, {
           maxResults: 5,
           searchDepth: "advanced",
           includeAnswer: true,
           includeImages: true,
           includeImageDescriptions: true,
         }),
-        tvly.search(`"${businessName}" avis reviews clients`, {
-          maxResults: 5,
-          searchDepth: "advanced",
-          includeAnswer: true,
-          includeImages: true,
-          includeImageDescriptions: true,
-        }),
-        tvly.search(`"${businessName}" menu carte prix prices`, {
-          maxResults: 5,
-          searchDepth: "basic",
-          includeAnswer: true,
-        }),
-        tvly.search(`"${businessName}" instagram facebook site web`, {
+        tvly.search(`"${businessName}" instagram facebook site officiel téléphone`, {
           maxResults: 5,
           searchDepth: "basic",
           includeAnswer: true,
@@ -56,7 +58,7 @@ export async function POST(request: Request) {
 
     // Collect found images (deduplicated, max 15)
     const allFoundImages = new Map<string, string>();
-    for (const search of [generalSearch, reviewSearch]) {
+    for (const search of [generalSearch, reviewSearch, menuSearch]) {
       if (search.images) {
         for (const img of search.images) {
           if (

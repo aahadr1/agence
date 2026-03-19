@@ -35,11 +35,21 @@ export async function POST(request: Request) {
       try {
         const output = await replicate.run("anthropic/claude-4.5-sonnet", {
           input: {
-            prompt: `Analyze this image for "${businessName}" (${businessAddress}). Context: "${img.description}". Reply in VALID JSON only:
-{"shows":"what it shows (food/interior/exterior/logo/team)","quality":"low|medium|high|excellent","placement":"hero|gallery|about|menu|background","mood":"brief mood","confirmed_business":true or false if you're sure this is actually from this specific business}`,
+            prompt: `Analyse cette image trouvée en ligne pour "${businessName}" (${businessAddress}).
+Contexte de la recherche : "${img.description}"
+
+Décris en détail :
+1. Que montre exactement cette image ? (plat spécifique, intérieur du restaurant, façade, équipe, logo, etc.)
+2. Est-ce que tu es SÛR que c'est bien de ce commerce spécifique ? Ou c'est une image générique ?
+3. Quelle est la qualité visuelle pour un site web ?
+4. Où placer cette image sur le site web et pourquoi ?
+5. Quelle ambiance/mood se dégage ?
+
+Réponds en JSON valide uniquement :
+{"shows":"description détaillée de ce que montre l'image","quality":"low|medium|high|excellent","placement":"hero|gallery|about|menu|background","placementReason":"pourquoi ce placement","mood":"ambiance détaillée","confirmed_business":true/false,"confidence":"low|medium|high"}`,
             image: img.url,
-            max_tokens: 200,
-            system_prompt: "Reply with valid JSON only. No markdown.",
+            max_tokens: 400,
+            system_prompt: "Tu es un directeur artistique expert en web design. Analyse les images avec précision pour déterminer leur utilité sur un site web. Retourne du JSON valide uniquement.",
           },
         });
 
