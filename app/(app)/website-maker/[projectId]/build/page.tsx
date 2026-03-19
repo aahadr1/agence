@@ -117,7 +117,7 @@ export default function BuildPage() {
           return { rawOutput: data.rawOutput, imageUrl: data.imageUrl };
         }
         if (data.status === "failed" || data.status === "canceled") {
-          throw new Error("AI prediction failed");
+          throw new Error(`AI prediction failed: ${data.error || "unknown reason"}`);
         }
       }
       throw new Error("Prediction timed out");

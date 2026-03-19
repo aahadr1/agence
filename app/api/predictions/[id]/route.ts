@@ -61,6 +61,7 @@ export async function GET(
     return NextResponse.json({
       status: prediction.status,
       imageUrl: null,
+      error: prediction.error ? String(prediction.error) : null,
     });
   } catch (error) {
     console.error("Prediction poll error:", error);
