@@ -25,8 +25,11 @@ export default async function ProjectPage({
     case "ideation":
       redirect(`/website-maker/${projectId}/ideation`);
     case "selection":
-    case "completed":
       redirect(`/website-maker/${projectId}/selection`);
+    case "completed":
+    case "building":
+    case "deployed":
+      redirect(`/website-maker/${projectId}/build`);
     default:
       redirect("/website-maker");
   }

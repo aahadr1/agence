@@ -9,6 +9,10 @@
     "app/api/analyze-images/route.ts": { "maxDuration": 60 },
     "app/api/generate-image/route.ts": { "maxDuration": 30 },
     "app/api/predictions/*/route.ts": { "maxDuration": 10 },
-    "app/api/upload/route.ts": { "maxDuration": 30 }
+    "app/api/upload/route.ts": { "maxDuration": 30 },
+    "app/api/generate-website/foundation/route.ts": { "maxDuration": 30 },
+    "app/api/generate-website/pages/route.ts": { "maxDuration": 30 },
+    "app/api/generate-website/deploy/route.ts": { "maxDuration": 30 },
+    "app/api/generate-website/deploy-status/route.ts": { "maxDuration": 10 }
   }
 }

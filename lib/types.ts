@@ -1,4 +1,4 @@
-export type ProjectStatus = "info_gathering" | "ideation" | "selection" | "completed";
+export type ProjectStatus = "info_gathering" | "ideation" | "selection" | "completed" | "building" | "deployed";
 
 export interface BusinessInfo {
   name: string;
@@ -65,4 +65,24 @@ export interface Variant {
   color_scheme: { primary: string; secondary: string; accent: string } | null;
   selected: boolean;
   created_at: string;
+}
+
+export type WebsiteBuildStatus = "pending" | "generating_foundation" | "generating_pages" | "deploying" | "deployed" | "failed";
+
+export interface WebsiteFile {
+  path: string;
+  content: string;
+}
+
+export interface WebsiteBuild {
+  id: string;
+  project_id: string;
+  variant_id: string;
+  status: WebsiteBuildStatus;
+  files: WebsiteFile[];
+  vercel_url: string | null;
+  vercel_deployment_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 }

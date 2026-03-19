@@ -4,12 +4,13 @@ import { Stepper } from "@/components/website-maker/stepper";
 import { createClient } from "@/lib/supabase/client";
 import { Variant } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { Check, Loader2, PartyPopper, Rocket } from "lucide-react";
-import { useParams } from "next/navigation";
+import { Check, Loader2 } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 export default function SelectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const router = useRouter();
   const [variants, setVariants] = useState<Variant[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -29,8 +30,9 @@ export default function SelectionPage() {
         setVariants(data);
         const selected = data.find((v) => v.selected);
         if (selected) {
-          setSelectedId(selected.id);
-          setConfirmed(true);
+          // Already confirmed — go to build page
+          router.push(`/website-maker/${projectId}/build`);
+          return;
         }
       }
       setLoading(false);
@@ -70,6 +72,8 @@ export default function SelectionPage() {
         .eq("id", projectId);
 
       setConfirmed(true);
+      // Redirect to build page
+      router.push(`/website-maker/${projectId}/build`);
     } catch {
       // Handle error silently
     }
@@ -86,60 +90,8 @@ export default function SelectionPage() {
 
   if (confirmed) {
     return (
-      <div className="animate-fade-in max-w-3xl mx-auto">
-        <Stepper currentStep={3} />
-
-        <div className="text-center py-12">
-          <div className="inline-flex items-center justify-center p-4 rounded-full bg-green-500/10 mb-6 animate-pulse-ring">
-            <PartyPopper className="w-10 h-10 text-green-400" />
-          </div>
-          <h2 className="text-2xl font-bold text-foreground mb-3">
-            Excellent choice!
-          </h2>
-          <p className="text-muted-foreground max-w-md mx-auto mb-8">
-            Your website design has been selected. Our AI will now start
-            building your complete website based on this design.
-          </p>
-
-          {/* Show selected variant */}
-          {variants
-            .filter((v) => v.id === selectedId)
-            .map((variant) => (
-              <div
-                key={variant.id}
-                className="inline-block rounded-2xl border-2 border-green-500/50 overflow-hidden shadow-xl shadow-green-500/10 max-w-md"
-              >
-                {variant.image_url && (
-                  <img
-                    src={variant.image_url}
-                    alt={variant.theme_name}
-                    className="w-full"
-                  />
-                )}
-                <div className="p-4 bg-card">
-                  <p className="text-sm font-semibold text-foreground">
-                    {variant.theme_name}
-                  </p>
-                </div>
-              </div>
-            ))}
-
-          <div className="mt-8 rounded-2xl border border-border bg-card p-6 max-w-md mx-auto">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-xl bg-primary/10">
-                <Rocket className="w-5 h-5 text-primary" />
-              </div>
-              <h3 className="font-semibold text-foreground">
-                What happens next?
-              </h3>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              The AI website builder will generate your full website with all
-              pages, responsive design, and optimized content. This feature is
-              coming soon — stay tuned!
-            </p>
-          </div>
-        </div>
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
       </div>
     );
   }
