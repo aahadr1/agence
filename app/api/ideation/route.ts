@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getReplicate } from "@/lib/replicate";
 import { NextResponse } from "next/server";
 
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -205,7 +205,9 @@ Return ONLY a valid JSON array. No markdown, no explanation, no thinking out lou
 
 CRITICAL: Your 3 concepts must each feel like they come from a different design philosophy. If concept 1 is minimal and typographic, concept 2 should be immersive and photographic, and concept 3 should be bold and editorial. Surprise us.`;
 
-    const output = await replicate.run("anthropic/claude-4.5-sonnet", {
+    // Create prediction (non-blocking) — frontend will poll for result
+    const prediction = await replicate.predictions.create({
+      model: "anthropic/claude-4.5-sonnet",
       input: {
         prompt,
         max_tokens: 8000,
@@ -214,51 +216,7 @@ CRITICAL: Your 3 concepts must each feel like they come from a different design 
       },
     });
 
-    const rawOutput = Array.isArray(output) ? output.join("") : String(output);
-
-    const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      throw new Error("Failed to parse AI concepts");
-    }
-
-    const concepts = JSON.parse(jsonMatch[0]);
-
-    if (!Array.isArray(concepts) || concepts.length !== 3) {
-      throw new Error("Expected exactly 3 concepts");
-    }
-
-    // Insert variants with full design metadata
-    const variants = [];
-    for (const concept of concepts) {
-      const { data: variant, error: insertError } = await supabase
-        .from("variants")
-        .insert({
-          project_id: projectId,
-          prompt: concept.image_prompt,
-          theme_name: concept.theme_name,
-          color_scheme: {
-            ...concept.color_scheme,
-            image_usage: concept.image_usage,
-            typography: concept.typography,
-            layout_concept: concept.layout_concept,
-            design_rationale: concept.design_rationale,
-          },
-          selected: false,
-        })
-        .select()
-        .single();
-
-      if (insertError) throw insertError;
-      variants.push(variant);
-    }
-
-    // Update project status
-    await supabase
-      .from("projects")
-      .update({ status: "selection", updated_at: new Date().toISOString() })
-      .eq("id", projectId);
-
-    return NextResponse.json({ variants });
+    return NextResponse.json({ predictionId: prediction.id, projectId });
   } catch (error) {
     console.error("Ideation error:", error);
     return NextResponse.json(

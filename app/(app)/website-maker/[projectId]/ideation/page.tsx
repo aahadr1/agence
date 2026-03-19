@@ -62,7 +62,7 @@ export default function IdeationPage() {
 
     const startIdeation = async () => {
       try {
-        // Step 1: Generate concepts with AI
+        // Step 1: Start ideation prediction
         const ideationRes = await fetch("/api/ideation", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -74,7 +74,41 @@ export default function IdeationPage() {
           throw new Error(data.error || "Ideation failed");
         }
 
-        const { variants: newVariants } = await safeJson(ideationRes);
+        const { predictionId: ideationPredId } = await safeJson(ideationRes);
+
+        // Poll ideation prediction
+        let ideationOutput: string | null = null;
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          try {
+            const pollRes = await fetch(`/api/predictions/${ideationPredId}`);
+            if (!pollRes.ok) continue;
+            const pollData = await safeJson(pollRes);
+            if (pollData.status === "succeeded") {
+              ideationOutput = pollData.rawOutput;
+              break;
+            }
+            if (pollData.status === "failed" || pollData.status === "canceled") {
+              throw new Error(`Ideation failed: ${pollData.error || "unknown"}`);
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message.includes("Ideation failed")) throw e;
+          }
+        }
+        if (!ideationOutput) throw new Error("Ideation timed out");
+
+        // Save concepts
+        const saveRes = await fetch("/api/ideation/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, rawOutput: ideationOutput }),
+        });
+        if (!saveRes.ok) {
+          const data = await safeJson(saveRes);
+          throw new Error(data.error || "Failed to save concepts");
+        }
+
+        const { variants: newVariants } = await safeJson(saveRes);
         setVariants(newVariants);
         setGenerating(false);
 

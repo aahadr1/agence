@@ -315,12 +315,46 @@ export default function NewProjectPage() {
         throw new Error(msg);
       }
 
+      const { predictionId: ideationPredId } = await ideationRes.json();
+
+      // Poll ideation prediction
+      setCurrentStep("AI is thinking about your brand...");
+      let ideationOutput: string | null = null;
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const pollRes = await fetch(`/api/predictions/${ideationPredId}`);
+        if (!pollRes.ok) continue;
+        const pollData = await pollRes.json();
+        if (pollData.status === "succeeded") {
+          ideationOutput = pollData.rawOutput;
+          break;
+        }
+        if (pollData.status === "failed" || pollData.status === "canceled") {
+          throw new Error(`Ideation failed: ${pollData.error || "unknown"}`);
+        }
+      }
+      if (!ideationOutput) throw new Error("Ideation timed out");
+
+      // Save concepts and create variants
+      setCurrentStep("Saving design concepts...");
+      const ideationSaveRes = await fetch("/api/ideation/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id, rawOutput: ideationOutput }),
+      });
+      if (!ideationSaveRes.ok) {
+        const text = await ideationSaveRes.text();
+        let msg = "Failed to save concepts";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
+      }
+
       setProgress(90);
 
       // Step 6: Generate images
       setCurrentStep("Generating website mockups...");
 
-      const { variants } = await ideationRes.json();
+      const { variants } = await ideationSaveRes.json();
 
       // Fire off all 3 image generations
       const predictionIds: { variantId: string; predictionId: string }[] = [];
