@@ -74,7 +74,11 @@ export default function IdeationPage() {
           throw new Error(data.error || "Ideation failed");
         }
 
-        const { predictionId: ideationPredId } = await safeJson(ideationRes);
+        const ideationData = await safeJson(ideationRes);
+        const ideationPredId = ideationData.predictionId;
+        if (!ideationPredId) {
+          throw new Error("Ideation API did not return a prediction ID");
+        }
 
         // Poll ideation prediction
         let ideationOutput: string | null = null;

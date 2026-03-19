@@ -315,7 +315,11 @@ export default function NewProjectPage() {
         throw new Error(msg);
       }
 
-      const { predictionId: ideationPredId } = await ideationRes.json();
+      const ideationData = await ideationRes.json();
+      const ideationPredId = ideationData.predictionId;
+      if (!ideationPredId) {
+        throw new Error("Ideation API did not return a prediction ID");
+      }
 
       // Poll ideation prediction
       setCurrentStep("AI is thinking about your brand...");
