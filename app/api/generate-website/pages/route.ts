@@ -188,15 +188,20 @@ FORMAT — retourne UNIQUEMENT un tableau JSON valide :
   { "path": "app/contact/page.tsx", "content": "..." }
 ]`;
 
+    const pageInput: Record<string, unknown> = {
+      prompt,
+      max_tokens: 16000,
+      system_prompt:
+        "Tu es un développeur web expert en Next.js 14 et Tailwind CSS 3. Tu génères du code propre et cohérent avec le design existant. Tu retournes UNIQUEMENT du JSON valide — un tableau d'objets avec 'path' et 'content'. Jamais de blocs markdown.",
+    };
+
+    if (variant.image_url && !variant.image_url.includes("replicate.delivery")) {
+      pageInput.image = variant.image_url;
+    }
+
     const prediction = await replicate.predictions.create({
       model: "anthropic/claude-4.5-sonnet",
-      input: {
-        prompt,
-        image: variant.image_url,
-        max_tokens: 16000,
-        system_prompt:
-          "Tu es un développeur web expert en Next.js 14 et Tailwind CSS 3. Tu génères du code propre et cohérent avec le design existant. Tu retournes UNIQUEMENT du JSON valide — un tableau d'objets avec 'path' et 'content'. Jamais de blocs markdown.",
-      },
+      input: pageInput,
     });
 
     return NextResponse.json({ predictionId: prediction.id });

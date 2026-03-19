@@ -170,15 +170,22 @@ FORMAT DE SORTIE — retourne UNIQUEMENT un tableau JSON valide, sans markdown :
 ]`;
 
     step = "replicate_create";
+    // Build input — only include image if URL is a permanent one (not replicate.delivery)
+    const input: Record<string, unknown> = {
+      prompt,
+      max_tokens: 16000,
+      system_prompt:
+        "Tu es un développeur web expert en Next.js 14 et Tailwind CSS 3. Tu génères du code propre, fonctionnel et magnifique. Tu retournes UNIQUEMENT du JSON valide — un tableau d'objets avec 'path' et 'content'. Jamais de blocs markdown. Jamais de commentaires avant/après le JSON.",
+    };
+
+    // Only pass image if it's a permanent URL (Supabase storage, not Replicate delivery)
+    if (variant.image_url && !variant.image_url.includes("replicate.delivery")) {
+      input.image = variant.image_url;
+    }
+
     const prediction = await replicate.predictions.create({
       model: "anthropic/claude-4.5-sonnet",
-      input: {
-        prompt,
-        image: variant.image_url,
-        max_tokens: 16000,
-        system_prompt:
-          "Tu es un développeur web expert en Next.js 14 et Tailwind CSS 3. Tu génères du code propre, fonctionnel et magnifique. Tu retournes UNIQUEMENT du JSON valide — un tableau d'objets avec 'path' et 'content'. Jamais de blocs markdown. Jamais de commentaires avant/après le JSON.",
-      },
+      input,
     });
 
     return NextResponse.json({
