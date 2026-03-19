@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 10;
@@ -48,9 +48,10 @@ export async function GET(request: Request) {
 
     // Update build status when deployment is ready or errored
     if (buildId && (data.readyState === "READY" || data.readyState === "ERROR")) {
+      const sc = await createServiceClient();
       const newStatus = data.readyState === "READY" ? "deployed" : "failed";
 
-      await supabase
+      await sc
         .from("website_builds")
         .update({
           status: newStatus,
@@ -60,15 +61,14 @@ export async function GET(request: Request) {
         .eq("id", buildId);
 
       if (data.readyState === "READY") {
-        // Also update project status
-        const { data: build } = await supabase
+        const { data: build } = await sc
           .from("website_builds")
           .select("project_id")
           .eq("id", buildId)
           .single();
 
         if (build) {
-          await supabase
+          await sc
             .from("projects")
             .update({ status: "deployed", updated_at: new Date().toISOString() })
             .eq("id", build.project_id);

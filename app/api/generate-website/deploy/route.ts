@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 30;
@@ -27,8 +27,10 @@ export async function POST(request: Request) {
     );
   }
 
+  const serviceClient = await createServiceClient();
+
   // Fetch build
-  const { data: build } = await supabase
+  const { data: build } = await serviceClient
     .from("website_builds")
     .select("*, projects(business_info)")
     .eq("id", buildId)
@@ -47,7 +49,7 @@ export async function POST(request: Request) {
     const allFiles = [...foundationFiles, ...parsedPageFiles];
 
     // Save all files to build
-    await supabase
+    await serviceClient
       .from("website_builds")
       .update({
         files: allFiles,
@@ -99,7 +101,7 @@ export async function POST(request: Request) {
     const deployData = await deployResponse.json();
 
     // Save deployment info
-    await supabase
+    await serviceClient
       .from("website_builds")
       .update({
         vercel_deployment_id: deployData.id,
@@ -116,7 +118,7 @@ export async function POST(request: Request) {
     const msg = error instanceof Error ? error.message : "Deploy failed";
     console.error("Deploy error:", msg, error);
 
-    await supabase
+    await serviceClient
       .from("website_builds")
       .update({ status: "failed", error: msg, updated_at: new Date().toISOString() })
       .eq("id", buildId);

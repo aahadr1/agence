@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getReplicate } from "@/lib/replicate";
 import { NextResponse } from "next/server";
 
@@ -23,8 +23,10 @@ export async function POST(request: Request) {
     );
   }
 
+  const serviceClient = await createServiceClient();
+
   // Fetch build + project + variant
-  const { data: build } = await supabase
+  const { data: build } = await serviceClient
     .from("website_builds")
     .select("*, projects(*), variants(*)")
     .eq("id", buildId)
@@ -88,7 +90,7 @@ export async function POST(request: Request) {
     const replicate = getReplicate();
 
     // Save foundation files to build
-    await supabase
+    await serviceClient
       .from("website_builds")
       .update({
         files: parsedFoundation,
@@ -202,7 +204,7 @@ FORMAT — retourne UNIQUEMENT un tableau JSON valide :
     const msg = error instanceof Error ? error.message : "Pages generation failed";
     console.error("Generate website pages error:", msg, error);
 
-    await supabase
+    await serviceClient
       .from("website_builds")
       .update({ status: "failed", error: msg, updated_at: new Date().toISOString() })
       .eq("id", buildId);

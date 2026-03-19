@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getReplicate } from "@/lib/replicate";
 import { NextResponse } from "next/server";
 
@@ -22,6 +22,9 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+
+  // Use service client for website_builds (bypasses RLS)
+  const serviceClient = await createServiceClient();
 
   // Fetch project + variant + images
   const [projectRes, variantRes, imagesRes] = await Promise.all([
@@ -65,7 +68,7 @@ export async function POST(request: Request) {
 
     // Create website_build record
     step = "insert_build";
-    const { data: build, error: buildError } = await supabase
+    const { data: build, error: buildError } = await serviceClient
       .from("website_builds")
       .insert({
         project_id: projectId,
@@ -83,7 +86,7 @@ export async function POST(request: Request) {
     }
 
     // Update project status (non-blocking)
-    supabase
+    serviceClient
       .from("projects")
       .update({ status: "building", updated_at: new Date().toISOString() })
       .eq("id", projectId)
