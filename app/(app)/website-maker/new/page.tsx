@@ -354,7 +354,11 @@ export default function NewProjectPage() {
       // Step 6: Generate images
       setCurrentStep("Generating website mockups...");
 
-      const { variants } = await ideationSaveRes.json();
+      const ideationSaveData = await ideationSaveRes.json();
+      const variants = ideationSaveData.variants;
+      if (!variants || !Array.isArray(variants) || variants.length === 0) {
+        throw new Error("No design concepts were generated — please try again");
+      }
 
       // Fire off all 3 image generations
       const predictionIds: { variantId: string; predictionId: string }[] = [];

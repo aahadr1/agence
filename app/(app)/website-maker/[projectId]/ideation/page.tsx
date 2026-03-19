@@ -108,7 +108,11 @@ export default function IdeationPage() {
           throw new Error(data.error || "Failed to save concepts");
         }
 
-        const { variants: newVariants } = await safeJson(saveRes);
+        const saveData = await safeJson(saveRes);
+        const newVariants = saveData.variants;
+        if (!newVariants || !Array.isArray(newVariants) || newVariants.length === 0) {
+          throw new Error("No design concepts were generated — please try again");
+        }
         setVariants(newVariants);
         setGenerating(false);
 
