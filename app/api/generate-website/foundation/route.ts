@@ -58,10 +58,13 @@ export async function POST(request: Request) {
       placement: img.analysis?.suggestedPlacement || "gallery",
     }));
 
+  let step = "init";
   try {
+    step = "replicate_init";
     const replicate = getReplicate();
 
     // Create website_build record
+    step = "insert_build";
     const { data: build, error: buildError } = await supabase
       .from("website_builds")
       .insert({
@@ -72,9 +75,14 @@ export async function POST(request: Request) {
       .select()
       .single();
 
-    if (buildError) throw buildError;
+    if (buildError) {
+      return NextResponse.json(
+        { error: `[insert_build] ${buildError.message} (${buildError.code}: ${buildError.details})` },
+        { status: 500 }
+      );
+    }
 
-    // Update project status (non-blocking — constraint might not include 'building' yet)
+    // Update project status (non-blocking)
     supabase
       .from("projects")
       .update({ status: "building", updated_at: new Date().toISOString() })
@@ -158,6 +166,7 @@ FORMAT DE SORTIE — retourne UNIQUEMENT un tableau JSON valide, sans markdown :
   ...
 ]`;
 
+    step = "replicate_create";
     const prediction = await replicate.predictions.create({
       model: "anthropic/claude-4.5-sonnet",
       input: {
@@ -174,11 +183,8 @@ FORMAT DE SORTIE — retourne UNIQUEMENT un tableau JSON valide, sans markdown :
       predictionId: prediction.id,
     });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    const detail = typeof error === "object" && error !== null && "details" in error
-      ? String((error as Record<string, unknown>).details)
-      : "";
-    console.error("Generate website foundation error:", msg, detail, error);
-    return NextResponse.json({ error: `${msg}${detail ? ` — ${detail}` : ""}` }, { status: 500 });
+    const msg = error instanceof Error ? error.message : JSON.stringify(error);
+    console.error(`[foundation][${step}]`, msg, error);
+    return NextResponse.json({ error: `[${step}] ${msg}` }, { status: 500 });
   }
 }
