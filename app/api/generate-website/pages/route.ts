@@ -190,7 +190,7 @@ FORMAT — retourne UNIQUEMENT un tableau JSON valide :
 
     const pageInput: Record<string, unknown> = {
       prompt,
-      max_tokens: 16000,
+      max_tokens: 64000,
       system_prompt:
         "Tu es un développeur web expert en Next.js 14 et Tailwind CSS 3. Tu génères du code propre et cohérent avec le design existant. Tu retournes UNIQUEMENT du JSON valide — un tableau d'objets avec 'path' et 'content'. Jamais de blocs markdown.",
     };

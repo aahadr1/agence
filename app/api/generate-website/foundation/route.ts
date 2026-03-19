@@ -173,7 +173,7 @@ FORMAT DE SORTIE — retourne UNIQUEMENT un tableau JSON valide, sans markdown :
     // Build input — only include image if URL is a permanent one (not replicate.delivery)
     const input: Record<string, unknown> = {
       prompt,
-      max_tokens: 16000,
+      max_tokens: 64000,
       system_prompt:
         "Tu es un développeur web expert en Next.js 14 et Tailwind CSS 3. Tu génères du code propre, fonctionnel et magnifique. Tu retournes UNIQUEMENT du JSON valide — un tableau d'objets avec 'path' et 'content'. Jamais de blocs markdown. Jamais de commentaires avant/après le JSON.",
     };

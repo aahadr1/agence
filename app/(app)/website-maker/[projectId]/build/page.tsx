@@ -127,8 +127,33 @@ export default function BuildPage() {
 
   const parseFilesJson = (raw: string): { path: string; content: string }[] => {
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("Failed to parse generated files");
-    return JSON.parse(jsonMatch[0]);
+    if (!jsonMatch) throw new Error("Failed to parse generated files — no JSON array found");
+
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch {
+      // Try to repair truncated JSON — find last complete object
+      const text = jsonMatch[0];
+      // Find the last complete "}" followed by possible whitespace/comma before truncation
+      const lastCompleteObj = text.lastIndexOf('}');
+      if (lastCompleteObj === -1) throw new Error("Failed to parse generated files — no complete objects");
+
+      // Try progressively shorter substrings to find valid JSON
+      for (let i = lastCompleteObj; i >= 0; i--) {
+        if (text[i] !== '}') continue;
+        const attempt = text.slice(0, i + 1) + ']';
+        try {
+          const parsed = JSON.parse(attempt);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            console.warn(`Repaired truncated JSON: recovered ${parsed.length} files`);
+            return parsed;
+          }
+        } catch {
+          continue;
+        }
+      }
+      throw new Error("Failed to parse generated files — JSON is too corrupted to repair");
+    }
   };
 
   const startBuild = useCallback(async () => {
