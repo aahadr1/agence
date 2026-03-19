@@ -1,51 +1,70 @@
 "use client";
 
 import { Stepper } from "@/components/website-maker/stepper";
-import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import {
+  AlertTriangle,
   Check,
   Code2,
   ExternalLink,
-  FileCode,
+  Eye,
   Globe,
   Loader2,
-  Rocket,
+  Monitor,
   RefreshCw,
-  AlertTriangle,
+  Rocket,
+  Smartphone,
+  Tablet,
 } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type BuildPhase =
-  | "starting"
-  | "generating_foundation"
-  | "polling_foundation"
-  | "generating_pages"
-  | "polling_pages"
+  | "idle"
+  | "generating"
+  | "parsing"
+  | "saving"
+  | "preview"
   | "deploying"
-  | "polling_deploy"
   | "deployed"
   | "failed";
 
-const PHASE_LABELS: Record<BuildPhase, string> = {
-  starting: "Initializing build...",
-  generating_foundation: "Generating project foundation & home page...",
-  polling_foundation: "AI is coding the foundation...",
-  generating_pages: "Generating additional pages...",
-  polling_pages: "AI is coding all pages...",
-  deploying: "Deploying to Vercel...",
-  polling_deploy: "Building & deploying your website...",
-  deployed: "Your website is live!",
-  failed: "Build failed",
+const PHASE_INFO: Record<
+  string,
+  { label: string; description: string }
+> = {
+  idle: { label: "Initializing...", description: "Checking for existing builds" },
+  generating: { label: "Generating your website", description: "AI is writing all 5 pages of your site" },
+  parsing: { label: "Processing output", description: "Extracting files from AI response" },
+  saving: { label: "Saving files", description: "Storing your website for preview" },
+  preview: { label: "Website ready!", description: "Your site is ready for preview" },
+  deploying: { label: "Publishing...", description: "Deploying to production" },
+  deployed: { label: "Published!", description: "Your website is live on the internet" },
+  failed: { label: "Build failed", description: "Something went wrong" },
 };
 
-const PHASE_STEPS = [
-  { phases: ["starting", "generating_foundation", "polling_foundation"], label: "Foundation", icon: FileCode },
-  { phases: ["generating_pages", "polling_pages"], label: "Pages", icon: Code2 },
-  { phases: ["deploying", "polling_deploy"], label: "Deploy", icon: Rocket },
-  { phases: ["deployed"], label: "Live", icon: Globe },
+const PROGRESS_STEPS = [
+  {
+    key: "generate",
+    label: "Generate",
+    icon: Code2,
+    activePhases: ["generating", "parsing"],
+  },
+  {
+    key: "preview",
+    label: "Preview",
+    icon: Eye,
+    activePhases: ["saving", "preview"],
+  },
+  {
+    key: "deploy",
+    label: "Publish",
+    icon: Rocket,
+    activePhases: ["deploying", "deployed"],
+  },
 ];
+
+type ViewportMode = "desktop" | "tablet" | "mobile";
 
 async function safeJson(res: Response) {
   const text = await res.text();
@@ -56,277 +75,396 @@ async function safeJson(res: Response) {
   }
 }
 
+function parseFilesFromOutput(raw: string): { path: string; content: string }[] {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/m, "")
+    .replace(/\s*```\s*$/m, "")
+    .trim();
+
+  const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    throw new Error("No JSON array found in AI output");
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error("Empty array");
+    }
+    return parsed;
+  } catch {
+    const text = jsonMatch[0];
+    for (let i = text.lastIndexOf("}"); i >= 0; i--) {
+      if (text[i] !== "}") continue;
+      try {
+        const attempt = text.slice(0, i + 1) + "]";
+        const parsed = JSON.parse(attempt);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch {
+        continue;
+      }
+    }
+    throw new Error("Could not parse generated files — AI output may be truncated");
+  }
+}
+
 export default function BuildPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const supabase = createClient();
 
-  const [phase, setPhase] = useState<BuildPhase>("starting");
+  const [phase, setPhase] = useState<BuildPhase>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [deployUrl, setDeployUrl] = useState<string | null>(null);
   const [buildId, setBuildId] = useState<string | null>(null);
-  const [filesGenerated, setFilesGenerated] = useState(0);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [vercelUrl, setVercelUrl] = useState<string | null>(null);
+  const [filesCount, setFilesCount] = useState(0);
+  const [viewportMode, setViewportMode] = useState<ViewportMode>("desktop");
+  const [activePage, setActivePage] = useState("index.html");
+  const [pages, setPages] = useState<{ path: string; label: string }[]>([]);
+
   const startedRef = useRef(false);
 
-  // Check for existing build
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     const checkExistingBuild = async () => {
-      const { data: builds } = await supabase
-        .from("website_builds")
-        .select("*")
-        .eq("project_id", projectId)
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      if (builds && builds.length > 0) {
-        const build = builds[0];
-        setBuildId(build.id);
-
-        if (build.status === "deployed" && build.vercel_url) {
-          setPhase("deployed");
-          setDeployUrl(build.vercel_url);
-          setFilesGenerated((build.files as unknown[])?.length || 0);
+      try {
+        const res = await fetch(
+          `/api/generate-website/build-status?projectId=${projectId}`
+        );
+        if (!res.ok) {
+          startBuild();
           return;
         }
+        const { build } = await res.json();
 
-        if (build.status === "failed") {
-          setPhase("failed");
-          setError(build.error || "Previous build failed");
-          return;
+        if (build) {
+          setBuildId(build.id);
+
+          const hasFiles =
+            build.files && (build.files as unknown[]).length > 0;
+
+          if (
+            (build.status === "deployed" || build.status === "deploying") &&
+            hasFiles
+          ) {
+            const files = build.files as { path: string; content: string }[];
+            setFilesCount(files.length);
+            setPages(filesToPages(files));
+            setPreviewUrl(`/api/sites/${build.id}/`);
+
+            if (build.vercel_url) {
+              setVercelUrl(build.vercel_url);
+              setPhase("deployed");
+            } else {
+              setPhase("preview");
+            }
+            return;
+          }
+
+          if (build.status === "failed") {
+            setPhase("failed");
+            setError(build.error || "Previous build failed");
+            return;
+          }
         }
+      } catch {
+        // ignore
       }
-
-      // No completed build — start building
-      if (!startedRef.current) {
-        startedRef.current = true;
-        startBuild();
-      }
+      startBuild();
     };
+
     checkExistingBuild();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  const pollPrediction = useCallback(
-    async (predictionId: string): Promise<{ rawOutput: string | null; imageUrl: string | null }> => {
-      for (let i = 0; i < 180; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const res = await fetch(`/api/predictions/${predictionId}`);
-        if (!res.ok) continue;
-        const data = await safeJson(res);
+  const filesToPages = (
+    files: { path: string; content: string }[]
+  ): { path: string; label: string }[] => {
+    const labelMap: Record<string, string> = {
+      "index.html": "Accueil",
+      "about.html": "À propos",
+      "menu.html": "Menu",
+      "services.html": "Services",
+      "gallery.html": "Galerie",
+      "contact.html": "Contact",
+    };
+    return files
+      .filter((f) => f.path.endsWith(".html"))
+      .map((f) => ({
+        path: f.path,
+        label: labelMap[f.path] || f.path.replace(".html", ""),
+      }));
+  };
 
-        if (data.status === "succeeded") {
-          return { rawOutput: data.rawOutput, imageUrl: data.imageUrl };
-        }
-        if (data.status === "failed" || data.status === "canceled") {
-          throw new Error(`AI prediction failed: ${data.error || "unknown reason"}`);
+  const pollPrediction = useCallback(
+    async (
+      predictionId: string
+    ): Promise<string> => {
+      for (let i = 0; i < 200; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const res = await fetch(`/api/predictions/${predictionId}`);
+          if (!res.ok) continue;
+          const data = await safeJson(res);
+
+          if (data.status === "succeeded") {
+            if (!data.rawOutput) {
+              throw new Error("AI returned empty output");
+            }
+            return data.rawOutput;
+          }
+          if (data.status === "failed" || data.status === "canceled") {
+            throw new Error(
+              `AI generation failed: ${data.error || "unknown reason"}`
+            );
+          }
+        } catch (e) {
+          if (
+            e instanceof Error &&
+            (e.message.includes("AI generation failed") ||
+              e.message.includes("AI returned empty"))
+          ) {
+            throw e;
+          }
         }
       }
-      throw new Error("Prediction timed out");
+      throw new Error("Generation timed out after 10 minutes");
     },
     []
   );
 
-  const parseFilesJson = (raw: string): { path: string; content: string }[] => {
-    const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("Failed to parse generated files — no JSON array found");
-
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Try to repair truncated JSON — find last complete object
-      const text = jsonMatch[0];
-      // Find the last complete "}" followed by possible whitespace/comma before truncation
-      const lastCompleteObj = text.lastIndexOf('}');
-      if (lastCompleteObj === -1) throw new Error("Failed to parse generated files — no complete objects");
-
-      // Try progressively shorter substrings to find valid JSON
-      for (let i = lastCompleteObj; i >= 0; i--) {
-        if (text[i] !== '}') continue;
-        const attempt = text.slice(0, i + 1) + ']';
-        try {
-          const parsed = JSON.parse(attempt);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            console.warn(`Repaired truncated JSON: recovered ${parsed.length} files`);
-            return parsed;
-          }
-        } catch {
-          continue;
-        }
-      }
-      throw new Error("Failed to parse generated files — JSON is too corrupted to repair");
-    }
-  };
-
   const startBuild = useCallback(async () => {
-    setPhase("starting");
+    setPhase("generating");
     setError(null);
 
     try {
-      // Get selected variant
-      const { data: project } = await supabase
-        .from("projects")
-        .select("selected_variant_id")
-        .eq("id", projectId)
-        .single();
-
-      if (!project?.selected_variant_id) {
-        throw new Error("No variant selected");
-      }
-
-      // === STEP 1: Foundation ===
-      setPhase("generating_foundation");
-
-      const foundationRes = await fetch("/api/generate-website/foundation", {
+      const genRes = await fetch("/api/generate-website/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId,
-          variantId: project.selected_variant_id,
-        }),
+        body: JSON.stringify({ projectId }),
       });
 
-      if (!foundationRes.ok) {
-        const err = await safeJson(foundationRes);
-        throw new Error(err.error || "Foundation generation failed");
+      if (!genRes.ok) {
+        const err = await safeJson(genRes);
+        throw new Error(err.error || "Failed to start generation");
       }
 
-      const { buildId: newBuildId, predictionId: foundationPredId } =
-        await safeJson(foundationRes);
+      const { buildId: newBuildId, predictionId } = await safeJson(genRes);
       setBuildId(newBuildId);
 
-      // Poll foundation prediction
-      setPhase("polling_foundation");
-      const foundationResult = await pollPrediction(foundationPredId);
+      const rawOutput = await pollPrediction(predictionId);
 
-      if (!foundationResult.rawOutput) {
-        throw new Error("No foundation output received");
-      }
+      setPhase("parsing");
+      const files = parseFilesFromOutput(rawOutput);
+      setFilesCount(files.length);
+      setPages(filesToPages(files));
 
-      const foundationFiles = parseFilesJson(foundationResult.rawOutput);
-      setFilesGenerated(foundationFiles.length);
-
-      // === STEP 2: Pages ===
-      setPhase("generating_pages");
-
-      const pagesRes = await fetch("/api/generate-website/pages", {
+      setPhase("saving");
+      const saveRes = await fetch("/api/generate-website/build-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          buildId: newBuildId,
-          foundationFiles,
-        }),
+        body: JSON.stringify({ buildId: newBuildId, files }),
       });
 
-      if (!pagesRes.ok) {
-        const err = await safeJson(pagesRes);
-        throw new Error(err.error || "Pages generation failed");
+      if (!saveRes.ok) {
+        const err = await safeJson(saveRes);
+        throw new Error(err.error || "Failed to save files");
       }
 
-      const { predictionId: pagesPredId } = await safeJson(pagesRes);
-
-      // Poll pages prediction
-      setPhase("polling_pages");
-      const pagesResult = await pollPrediction(pagesPredId);
-
-      if (!pagesResult.rawOutput) {
-        throw new Error("No pages output received");
-      }
-
-      const pageFiles = parseFilesJson(pagesResult.rawOutput);
-      setFilesGenerated(foundationFiles.length + pageFiles.length);
-
-      // === STEP 3: Deploy ===
-      setPhase("deploying");
-
-      const deployRes = await fetch("/api/generate-website/deploy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          buildId: newBuildId,
-          pageFiles,
-        }),
-      });
-
-      if (!deployRes.ok) {
-        const err = await safeJson(deployRes);
-        throw new Error(err.error || "Deploy failed");
-      }
-
-      const { deploymentId, url } = await safeJson(deployRes);
-
-      // Poll Vercel deployment status
-      setPhase("polling_deploy");
-
-      for (let i = 0; i < 120; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
-
-        const statusRes = await fetch(
-          `/api/generate-website/deploy-status?deploymentId=${deploymentId}&buildId=${newBuildId}`
-        );
-        if (!statusRes.ok) continue;
-        const statusData = await safeJson(statusRes);
-
-        if (statusData.status === "READY") {
-          setDeployUrl(statusData.url || url);
-          setPhase("deployed");
-          return;
-        }
-        if (statusData.status === "ERROR" || statusData.status === "CANCELED") {
-          throw new Error("Vercel build failed — check the generated code for errors");
-        }
-      }
-
-      throw new Error("Deployment timed out");
+      const { previewUrl: url } = await safeJson(saveRes);
+      setPreviewUrl(url);
+      setPhase("preview");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Build failed";
       console.error("Build error:", msg);
       setError(msg);
       setPhase("failed");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, pollPrediction]);
 
   const handleRetry = async () => {
-    // Delete failed build if exists
     if (buildId) {
-      await supabase.from("website_builds").delete().eq("id", buildId);
+      await fetch(
+        `/api/generate-website/build-status?buildId=${buildId}`,
+        { method: "DELETE" }
+      );
     }
     startedRef.current = false;
+    setBuildId(null);
+    setPreviewUrl(null);
+    setVercelUrl(null);
+    setFilesCount(0);
+    setPages([]);
     startBuild();
   };
 
-  const currentPhaseIndex = PHASE_STEPS.findIndex((step) =>
-    step.phases.includes(phase)
+  const handleDeploy = async () => {
+    if (!buildId) return;
+    setPhase("deploying");
+
+    try {
+      const res = await fetch("/api/generate-website/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ buildId }),
+      });
+
+      if (!res.ok) {
+        const err = await safeJson(res);
+        throw new Error(err.error || "Deployment failed");
+      }
+
+      const { url } = await safeJson(res);
+      setVercelUrl(url);
+      setPhase("deployed");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Deploy failed";
+      setError(msg);
+      setPhase("preview");
+    }
+  };
+
+  const currentStepIndex = PROGRESS_STEPS.findIndex((s) =>
+    s.activePhases.includes(phase)
   );
 
-  // Deployed state
-  if (phase === "deployed" && deployUrl) {
+  const iframeWidth =
+    viewportMode === "mobile"
+      ? "375px"
+      : viewportMode === "tablet"
+      ? "768px"
+      : "100%";
+
+  const showPreview = phase === "preview" || phase === "deploying" || phase === "deployed";
+
+  if (showPreview && previewUrl) {
     return (
-      <div className="animate-fade-in max-w-6xl mx-auto">
+      <div className="animate-fade-in max-w-[1400px] mx-auto">
         <Stepper currentStep={4} />
 
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center p-4 rounded-full bg-green-500/10 mb-4 animate-pulse-ring">
-            <Globe className="w-10 h-10 text-green-400" />
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              {phase === "deployed" && vercelUrl ? (
+                <div className="flex items-center gap-2 text-green-400">
+                  <Globe className="w-5 h-5" />
+                  <h2 className="text-xl font-bold text-foreground">
+                    Your website is live!
+                  </h2>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-primary">
+                  <Eye className="w-5 h-5" />
+                  <h2 className="text-xl font-bold text-foreground">
+                    Website Preview
+                  </h2>
+                </div>
+              )}
+            </div>
+            <p className="text-muted-foreground text-sm">
+              {filesCount} pages generated
+              {vercelUrl && (
+                <>
+                  {" "}—{" "}
+                  <a
+                    href={vercelUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    {vercelUrl}
+                  </a>
+                </>
+              )}
+            </p>
           </div>
-          <h2 className="text-2xl font-bold text-foreground mb-2">
-            Your website is live!
-          </h2>
-          <p className="text-muted-foreground mb-4">
-            {filesGenerated} files generated and deployed successfully
-          </p>
-          <a
-            href={deployUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25"
-          >
-            <ExternalLink className="w-4 h-4" />
-            Open Website
-          </a>
+
+          <div className="flex items-center gap-2">
+            {phase === "deploying" ? (
+              <div className="inline-flex items-center gap-2 rounded-xl bg-secondary px-4 py-2.5 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Publishing...
+              </div>
+            ) : vercelUrl ? (
+              <a
+                href={vercelUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-500 transition-all shadow-lg shadow-green-600/25"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Open Live Site
+              </a>
+            ) : (
+              <button
+                onClick={handleDeploy}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25"
+              >
+                <Rocket className="w-4 h-4" />
+                Publish to Web
+              </button>
+            )}
+            <button
+              onClick={handleRetry}
+              className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Regenerate
+            </button>
+          </div>
         </div>
 
-        {/* iframe preview */}
+        {/* Page tabs + Viewport controls */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+          {/* Page tabs */}
+          <div className="flex items-center gap-1 overflow-x-auto pb-1">
+            {pages.map((page) => (
+              <button
+                key={page.path}
+                onClick={() => setActivePage(page.path)}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all",
+                  activePage === page.path
+                    ? "bg-primary text-primary-foreground shadow-md"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                )}
+              >
+                {page.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Viewport switcher */}
+          <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
+            {[
+              { mode: "desktop" as ViewportMode, icon: Monitor, label: "Desktop" },
+              { mode: "tablet" as ViewportMode, icon: Tablet, label: "Tablet" },
+              { mode: "mobile" as ViewportMode, icon: Smartphone, label: "Mobile" },
+            ].map(({ mode, icon: Icon, label }) => (
+              <button
+                key={mode}
+                onClick={() => setViewportMode(mode)}
+                title={label}
+                className={cn(
+                  "p-2 rounded-md transition-all",
+                  viewportMode === mode
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Icon className="w-4 h-4" />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Browser chrome + iframe */}
         <div className="rounded-2xl border border-border overflow-hidden shadow-xl bg-card">
+          {/* Browser bar */}
           <div className="flex items-center gap-2 px-4 py-3 bg-secondary/50 border-b border-border">
             <div className="flex gap-1.5">
               <div className="w-3 h-3 rounded-full bg-red-400" />
@@ -336,11 +474,13 @@ export default function BuildPage() {
             <div className="flex-1 flex items-center justify-center">
               <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-1.5 text-xs text-muted-foreground max-w-md w-full">
                 <Globe className="w-3 h-3 shrink-0" />
-                <span className="truncate">{deployUrl}</span>
+                <span className="truncate">
+                  {vercelUrl || `preview — ${activePage}`}
+                </span>
               </div>
             </div>
             <a
-              href={deployUrl}
+              href={previewUrl + activePage}
               target="_blank"
               rel="noopener noreferrer"
               className="text-muted-foreground hover:text-foreground transition-colors"
@@ -348,18 +488,36 @@ export default function BuildPage() {
               <ExternalLink className="w-4 h-4" />
             </a>
           </div>
-          <iframe
-            src={deployUrl}
-            className="w-full border-0"
-            style={{ height: "80vh" }}
-            title="Website Preview"
-          />
+
+          {/* Iframe container */}
+          <div
+            className="bg-white flex justify-center"
+            style={{ minHeight: "80vh" }}
+          >
+            <iframe
+              key={activePage}
+              src={previewUrl + activePage}
+              className="border-0 transition-all duration-300"
+              style={{
+                width: iframeWidth,
+                height: "80vh",
+                maxWidth: "100%",
+              }}
+              title="Website Preview"
+            />
+          </div>
         </div>
+
+        {error && (
+          <div className="mt-4 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4 text-center">
+            <p className="text-sm text-yellow-400">{error}</p>
+          </div>
+        )}
       </div>
     );
   }
 
-  // Building / Error state
+  // Building / Error states
   return (
     <div className="animate-fade-in max-w-3xl mx-auto">
       <Stepper currentStep={4} />
@@ -369,21 +527,23 @@ export default function BuildPage() {
           Building Your Website
         </h2>
         <p className="text-muted-foreground text-sm">
-          AI is generating a complete Next.js website and deploying it to Vercel
+          AI is generating a complete multi-page website from your selected
+          design
         </p>
       </div>
 
-      {/* Build progress steps */}
+      {/* Progress steps */}
       <div className="space-y-4 mb-10">
-        {PHASE_STEPS.map((step, index) => {
-          const isCurrent = index === currentPhaseIndex;
-          const isDone = index < currentPhaseIndex;
-          const isFailed = phase === "failed" && index === currentPhaseIndex;
+        {PROGRESS_STEPS.map((step, index) => {
+          const isCurrent = index === currentStepIndex;
+          const isDone = index < currentStepIndex;
+          const isFailed =
+            phase === "failed" && index === currentStepIndex;
           const Icon = step.icon;
 
           return (
             <div
-              key={step.label}
+              key={step.key}
               className={cn(
                 "flex items-center gap-4 rounded-xl border p-4 transition-all duration-500",
                 isCurrent && !isFailed
@@ -430,22 +590,48 @@ export default function BuildPage() {
                 </p>
                 {isCurrent && (
                   <p className="text-xs text-muted-foreground mt-0.5 animate-fade-in">
-                    {PHASE_LABELS[phase]}
+                    {PHASE_INFO[phase]?.description}
                   </p>
                 )}
                 {isDone && (
-                  <p className="text-xs text-green-400 mt-0.5">Complete</p>
+                  <p className="text-xs text-green-400 mt-0.5">
+                    Complete
+                  </p>
                 )}
               </div>
-              {isCurrent && !isFailed && filesGenerated > 0 && (
+              {isCurrent && filesCount > 0 && (
                 <div className="text-xs text-muted-foreground">
-                  {filesGenerated} files
+                  {filesCount} pages
                 </div>
               )}
             </div>
           );
         })}
       </div>
+
+      {/* Generating animation */}
+      {phase === "generating" && (
+        <div className="text-center animate-fade-in">
+          <div className="inline-flex flex-col items-center gap-3 rounded-2xl border border-border bg-card p-8">
+            <div className="relative">
+              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                <Code2 className="w-8 h-8 text-primary" />
+              </div>
+              <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary flex items-center justify-center animate-pulse">
+                <Loader2 className="w-3 h-3 text-primary-foreground animate-spin" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                AI is writing your website...
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                This usually takes 2-4 minutes
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Error state */}
       {phase === "failed" && error && (
@@ -455,7 +641,9 @@ export default function BuildPage() {
             <p className="text-sm text-red-400 font-medium mb-1">
               Build Failed
             </p>
-            <p className="text-xs text-muted-foreground">{error}</p>
+            <p className="text-xs text-muted-foreground max-w-md mx-auto">
+              {error}
+            </p>
           </div>
           <button
             onClick={handleRetry}
