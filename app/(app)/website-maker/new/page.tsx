@@ -164,32 +164,78 @@ export default function NewProjectPage() {
         photoUrls.push(url);
       }
 
+      setProgress(20);
+
+      // Step 3: Web search (Tavily)
+      setCurrentStep("Searching the web for business info...");
       setProgress(25);
 
-      // Step 3: AI Research (Tavily web search)
-      setCurrentStep("Researching business online...");
-      setProgress(30);
+      const searchRes = await fetch("/api/research/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessName, businessAddress }),
+      });
 
-      const researchRes = await fetch("/api/research", {
+      if (!searchRes.ok) {
+        const text = await searchRes.text();
+        let msg = "Web search failed";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
+      }
+
+      const { rawResearch, foundImages } = await searchRes.json();
+      setProgress(35);
+
+      // Step 4: Analyze found web images with AI vision
+      setCurrentStep("AI is analyzing found images...");
+      setProgress(40);
+
+      let imageAnalyses: { url: string; description: string; analysis: string }[] = [];
+      if (foundImages && foundImages.length > 0) {
+        const analyzeWebRes = await fetch("/api/research/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ foundImages, businessName, businessAddress }),
+        });
+
+        if (analyzeWebRes.ok) {
+          const data = await analyzeWebRes.json();
+          imageAnalyses = data.imageAnalyses || [];
+        } else {
+          console.warn("Web image analysis failed, continuing...");
+        }
+      }
+
+      setProgress(50);
+
+      // Step 5: AI synthesizes everything
+      setCurrentStep("AI is building your business profile...");
+      setProgress(55);
+
+      const synthesizeRes = await fetch("/api/research/synthesize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId: project.id,
           businessName,
           businessAddress,
+          rawResearch,
+          imageAnalyses,
         }),
       });
 
-      if (!researchRes.ok) {
-        const data = await researchRes.json();
-        throw new Error(data.error || "Research failed");
+      if (!synthesizeRes.ok) {
+        const text = await synthesizeRes.text();
+        let msg = "Synthesis failed";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
       }
 
-      setProgress(55);
+      setProgress(65);
 
-      // Step 4: Analyze images with context
-      setCurrentStep("Analyzing your images...");
-      setProgress(60);
+      // Step 6: Analyze uploaded images with context
+      setCurrentStep("Analyzing your uploaded images...");
+      setProgress(68);
 
       const allImageUrls = [logoUrl, ...photoUrls];
       const analyzeRes = await fetch("/api/analyze-images", {
@@ -202,7 +248,7 @@ export default function NewProjectPage() {
       });
 
       if (!analyzeRes.ok) {
-        console.warn("Image analysis failed, continuing...");
+        console.warn("Uploaded image analysis failed, continuing...");
       }
 
       setProgress(75);
@@ -218,8 +264,10 @@ export default function NewProjectPage() {
       });
 
       if (!ideationRes.ok) {
-        const data = await ideationRes.json();
-        throw new Error(data.error || "Ideation failed");
+        const text = await ideationRes.text();
+        let msg = "Ideation failed";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
       }
 
       setProgress(90);
@@ -313,12 +361,14 @@ export default function NewProjectPage() {
           </div>
 
           {/* Pipeline steps visualization */}
-          <div className="mt-10 grid grid-cols-2 md:grid-cols-4 gap-3 max-w-xl mx-auto">
+          <div className="mt-10 grid grid-cols-3 md:grid-cols-6 gap-3 max-w-2xl mx-auto">
             {[
               { label: "Upload", threshold: 15 },
-              { label: "Research", threshold: 30 },
-              { label: "Analysis", threshold: 60 },
-              { label: "Design", threshold: 90 },
+              { label: "Search", threshold: 30 },
+              { label: "Vision", threshold: 45 },
+              { label: "Synthesis", threshold: 60 },
+              { label: "Concepts", threshold: 80 },
+              { label: "Mockups", threshold: 95 },
             ].map((step) => (
               <div
                 key={step.label}

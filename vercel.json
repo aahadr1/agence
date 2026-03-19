@@ -1,7 +1,9 @@
 {
   "framework": "nextjs",
   "functions": {
-    "app/api/research/route.ts": { "maxDuration": 60 },
+    "app/api/research/search/route.ts": { "maxDuration": 60 },
+    "app/api/research/analyze/route.ts": { "maxDuration": 60 },
+    "app/api/research/synthesize/route.ts": { "maxDuration": 60 },
     "app/api/ideation/route.ts": { "maxDuration": 60 },
     "app/api/analyze-images/route.ts": { "maxDuration": 60 },
     "app/api/generate-image/route.ts": { "maxDuration": 30 },
