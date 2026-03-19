@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getReplicate } from "@/lib/replicate";
 import { NextResponse } from "next/server";
 
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -83,9 +83,9 @@ Puis retourne UN SEUL bloc JSON (pas de markdown, pas de commentaires avant/apr�
   "rating": "note /5 si trouvée",
   "menu": "DÉTAILLE les vrais plats/produits avec les vrais prix. Ex: 'Entrées: Tartare de saumon (14€), Soupe à l'oignon gratinée (9€). Plats: Magret de canard au miel (24€), Risotto aux cèpes (19€)...' — Sois le plus exhaustif possible avec les données disponibles.",
   "description": "4-5 phrases riches et spécifiques qui capturent l'ESSENCE de ce lieu. Pas de phrases génériques. Mentionne des détails concrets: le chef, l'histoire, la spécialité, ce qui le distingue. Écris comme un critique gastronomique passionné.",
-  "vibe": "3-4 phrases décrivant l'atmosphère avec des détails sensoriels: lumière, musique, décoration, matériaux, l'énergie du lieu. Ex: 'Lumière tamisée par des suspensions en cuivre, murs en pierre apparente, jazz en fond sonore. L'ambiance est celle d'un bistrot parisien authentique où le temps ralentit.'",
-  "uniqueSellingPoints": ["5 points forts CONCRETS et SPÉCIFIQUES à ce commerce — pas de banalités comme 'service de qualité'"],
-  "customerSentiment": "Synthèse DÉTAILLÉE de ce que les VRAIS clients disent: qu'est-ce qu'ils adorent ? qu'est-ce qui revient souvent ? Y a-t-il des points négatifs récurrents ? Cite des mots/expressions des avis réels si possible.",
+  "vibe": "3-4 phrases décrivant l'atmosphère avec des détails sensoriels: lumière, musique, décoration, matériaux, l'énergie du lieu.",
+  "uniqueSellingPoints": ["5 points forts CONCRETS et SPÉCIFIQUES à ce commerce"],
+  "customerSentiment": "Synthèse DÉTAILLÉE de ce que les VRAIS clients disent. Cite des mots/expressions des avis réels si possible.",
   "reviewHighlights": ["5 citations ou paraphrases marquantes d'avis clients réels"],
   "socialMedia": {
     "instagram": "@handle exact ou vide",
@@ -94,10 +94,10 @@ Puis retourne UN SEUL bloc JSON (pas de markdown, pas de commentaires avant/apr�
     "website": "URL du site web existant ou vide"
   },
   "colors": ["#hex1", "#hex2", "#hex3", "#hex4", "#hex5"],
-  "colorExplanation": "Explique pourquoi ces 5 couleurs correspondent à l'identité du commerce. Ex: 'Le bordeaux #8B1A1A évoque le vin et la gastronomie française, le doré #D4AF37 apporte l'élégance du lieu...'",
+  "colorExplanation": "Explique pourquoi ces 5 couleurs correspondent à l'identité du commerce.",
   "photos": [],
-  "targetAudience": "Qui sont les clients typiques ? (âge, style, occasion de visite)",
-  "websiteTone": "Quel ton adopter pour les textes du site ? (ex: 'Chaleureux et authentique, tutoiement, touches d'humour')",
+  "targetAudience": "Qui sont les clients typiques ?",
+  "websiteTone": "Quel ton adopter pour les textes du site ?",
   "heroTagline": "Propose 3 accroches percutantes pour la section hero du site, séparées par ' | '",
   "foundImages": [
     {
@@ -116,7 +116,9 @@ RÈGLES CRITIQUES :
 - Pour "menu": détaille TOUT ce que tu as trouvé, avec les prix réels.
 - N'invente JAMAIS de fausses informations. Utilise UNIQUEMENT les données de la recherche.`;
 
-    const output = await replicate.run("anthropic/claude-4.5-sonnet", {
+    // Create prediction (non-blocking) instead of waiting for completion
+    const prediction = await replicate.predictions.create({
+      model: "anthropic/claude-4.5-sonnet",
       input: {
         prompt: synthesisPrompt,
         max_tokens: 8000,
@@ -125,67 +127,16 @@ RÈGLES CRITIQUES :
       },
     });
 
-    const rawOutput = Array.isArray(output) ? output.join("") : String(output);
-    const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error("Failed to parse AI response");
-    }
-
-    const businessInfo = JSON.parse(jsonMatch[0]);
-
-    // Get user-chosen colors
-    const { data: project } = await supabase
-      .from("projects")
-      .select("user_colors, user_instructions")
-      .eq("id", projectId)
-      .single();
-
-    if (project?.user_colors && project.user_colors.length > 0) {
-      businessInfo.colors = project.user_colors;
-    }
-
-    // Save found images to project_images table
-    if (businessInfo.foundImages && businessInfo.foundImages.length > 0) {
-      const inserts = businessInfo.foundImages.map(
-        (img: {
-          url: string;
-          analysis: string;
-          quality: string;
-          suggestedPlacement: string;
-        }) => ({
-          project_id: projectId,
-          storage_path: img.url,
-          url: img.url,
-          type: "photo" as const,
-          analysis: {
-            description: img.analysis,
-            quality: (img.quality || "medium").toLowerCase().trim(),
-            suggestedPlacement: img.suggestedPlacement || "gallery",
-            dominantColors: [],
-            mood: "",
-            websiteRelevance: img.analysis,
-          },
-        })
-      );
-
-      await supabase.from("project_images").insert(inserts);
-
-      businessInfo.photos = businessInfo.foundImages.map(
-        (img: { url: string }) => img.url
-      );
-    }
-
-    // Save research results to project
+    // Store prediction ID and context in the project for later processing
     await supabase
       .from("projects")
       .update({
-        business_info: businessInfo,
-        status: "info_gathering",
+        status: "synthesizing",
         updated_at: new Date().toISOString(),
       })
       .eq("id", projectId);
 
-    return NextResponse.json({ businessInfo });
+    return NextResponse.json({ predictionId: prediction.id });
   } catch (error) {
     const msg =
       error instanceof Error ? error.message : "Synthesis failed";

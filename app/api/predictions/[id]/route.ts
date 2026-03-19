@@ -21,16 +21,27 @@ export async function GET(
     const prediction = await replicate.predictions.get(id);
 
     if (prediction.status === "succeeded") {
+      // Determine output type: image URL or text (Claude)
       let imageUrl: string | null = null;
+      let rawOutput: string | null = null;
 
       if (Array.isArray(prediction.output)) {
-        imageUrl = prediction.output[0];
+        const joined = prediction.output.join("");
+        // If it looks like a URL, it's an image; otherwise it's text (Claude)
+        if (joined.startsWith("http") && !joined.includes("{")) {
+          imageUrl = prediction.output[0];
+        } else {
+          rawOutput = joined;
+        }
       } else if (typeof prediction.output === "string") {
-        imageUrl = prediction.output;
+        if (prediction.output.startsWith("http") && !prediction.output.includes("{")) {
+          imageUrl = prediction.output;
+        } else {
+          rawOutput = prediction.output;
+        }
       }
 
-      // Try to update the variant with this image URL
-      // We find it by matching the prompt (since we stored the enhanced prompt)
+      // Try to update the variant with image URL (for image predictions)
       if (imageUrl && prediction.input && typeof prediction.input === "object" && "prompt" in prediction.input) {
         const promptText = (prediction.input as Record<string, unknown>).prompt as string;
         await supabase
@@ -43,6 +54,7 @@ export async function GET(
       return NextResponse.json({
         status: "succeeded",
         imageUrl,
+        rawOutput,
       });
     }
 

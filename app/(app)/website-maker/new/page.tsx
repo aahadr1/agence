@@ -208,9 +208,9 @@ export default function NewProjectPage() {
 
       setProgress(50);
 
-      // Step 5: AI synthesizes everything
+      // Step 5: Start AI synthesis (non-blocking)
       setCurrentStep("AI is building your business profile...");
-      setProgress(55);
+      setProgress(52);
 
       const synthesizeRes = await fetch("/api/research/synthesize", {
         method: "POST",
@@ -227,6 +227,51 @@ export default function NewProjectPage() {
       if (!synthesizeRes.ok) {
         const text = await synthesizeRes.text();
         let msg = "Synthesis failed";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
+      }
+
+      const { predictionId: synthPredictionId } = await synthesizeRes.json();
+
+      // Poll for synthesis completion
+      setCurrentStep("AI is deeply analyzing your business...");
+      let synthOutput = "";
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const pollRes = await fetch(`/api/predictions/${synthPredictionId}`);
+        const pollData = await pollRes.json().catch(() => ({}));
+
+        if (pollData.status === "succeeded") {
+          synthOutput = pollData.rawOutput || "";
+          break;
+        } else if (pollData.status === "failed" || pollData.status === "canceled") {
+          throw new Error("AI synthesis failed. Please try again.");
+        }
+
+        // Update progress while waiting
+        setProgress(52 + Math.min(12, i));
+      }
+
+      if (!synthOutput) {
+        throw new Error("Synthesis timed out");
+      }
+
+      // Save the parsed result
+      setCurrentStep("Saving business profile...");
+      setProgress(64);
+
+      const saveRes = await fetch("/api/research/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          rawOutput: synthOutput,
+        }),
+      });
+
+      if (!saveRes.ok) {
+        const text = await saveRes.text();
+        let msg = "Failed to save research";
         try { msg = JSON.parse(text).error || msg; } catch {}
         throw new Error(msg);
       }
