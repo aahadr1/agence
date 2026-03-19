@@ -74,11 +74,14 @@ export async function POST(request: Request) {
 
     if (buildError) throw buildError;
 
-    // Update project status
-    await supabase
+    // Update project status (non-blocking — constraint might not include 'building' yet)
+    supabase
       .from("projects")
       .update({ status: "building", updated_at: new Date().toISOString() })
-      .eq("id", projectId);
+      .eq("id", projectId)
+      .then(({ error: statusErr }) => {
+        if (statusErr) console.warn("Could not update project status:", statusErr.message);
+      });
 
     const photoList = photos
       .map(
@@ -171,8 +174,11 @@ FORMAT DE SORTIE — retourne UNIQUEMENT un tableau JSON valide, sans markdown :
       predictionId: prediction.id,
     });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Foundation generation failed";
-    console.error("Generate website foundation error:", msg, error);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    const msg = error instanceof Error ? error.message : String(error);
+    const detail = typeof error === "object" && error !== null && "details" in error
+      ? String((error as Record<string, unknown>).details)
+      : "";
+    console.error("Generate website foundation error:", msg, detail, error);
+    return NextResponse.json({ error: `${msg}${detail ? ` — ${detail}` : ""}` }, { status: 500 });
   }
 }
