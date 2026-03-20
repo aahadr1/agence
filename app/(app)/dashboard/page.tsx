@@ -5,7 +5,6 @@ import { Panel } from "@/components/ui/panel";
 import { Section } from "@/components/ui/section";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Activity, Globe, TrendingUp, Users } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 
 const stats = [
@@ -41,17 +40,6 @@ export default function DashboardPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-10 inline-block overflow-hidden rounded-sm bg-white px-4 py-3 shadow-none ring-1 ring-border">
-        <Image
-          src="/logo.png"
-          alt="LàHaut Agency"
-          width={180}
-          height={90}
-          className="h-auto w-auto object-contain"
-          priority
-        />
-      </div>
-
       <PageHeader
         eyebrow="Overview"
         title={`Hello, ${first}`}

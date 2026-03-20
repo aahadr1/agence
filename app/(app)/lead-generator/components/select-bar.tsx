@@ -29,7 +29,7 @@ export function SelectBar({
   if (selectedCount === 0) return null;
 
   return (
-    <div className="animate-fade-in fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 border border-border bg-card px-5 py-3 shadow-sm">
+    <div className="animate-fade-in fixed bottom-6 left-4 right-4 z-50 flex items-center gap-3 border border-border bg-card px-4 py-3 shadow-sm sm:left-1/2 sm:right-auto sm:w-auto sm:-translate-x-1/2 sm:px-5">
       <span className="font-mono text-xs tabular-nums text-foreground">
         {selectedCount} selected
       </span>

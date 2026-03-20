@@ -11,12 +11,12 @@ interface StepperProps {
 export function Stepper({ currentStep }: StepperProps) {
   return (
     <nav
-      className="mb-10 border-b border-border pb-10"
+      className="mb-8 border-b border-border pb-8 md:mb-10 md:pb-10"
       aria-label="Progress"
     >
       <div className="relative flex justify-between px-1">
         <div
-          className="pointer-events-none absolute left-[12%] right-[12%] top-[7px] h-px bg-black/[0.08]"
+          className="pointer-events-none absolute left-[12%] right-[12%] top-[7px] h-px bg-border"
           aria-hidden
         />
         {STEPS.map((step) => {
@@ -34,7 +34,7 @@ export function Stepper({ currentStep }: StepperProps) {
                   done
                     ? "border-foreground bg-foreground text-primary-foreground"
                     : active
-                      ? "animate-blue-glow border-[var(--blue)]"
+                      ? "animate-blue-glow"
                       : "border-border"
                 )}
                 style={active ? { borderColor: "var(--blue)" } : undefined}
@@ -51,16 +51,21 @@ export function Stepper({ currentStep }: StepperProps) {
                   </span>
                 )}
               </div>
+              {/* On mobile: show label only for active/done; hide inactive to save space */}
               <p
                 className={cn(
-                  "mt-3 text-center text-[10px] font-medium uppercase tracking-[0.14em]",
-                  done ? "text-foreground" : "text-muted-foreground"
+                  "mt-2 text-center text-[10px] font-medium uppercase tracking-[0.12em] transition-opacity md:mt-3 md:tracking-[0.14em]",
+                  done
+                    ? "text-foreground"
+                    : active
+                      ? "opacity-100"
+                      : "opacity-0 sm:opacity-100"
                 )}
                 style={active ? { color: "var(--blue)" } : undefined}
               >
                 {step.label}
               </p>
-              <p className="mt-1 hidden text-center text-[11px] leading-snug text-muted-foreground sm:block">
+              <p className="mt-1 hidden text-center text-[11px] leading-snug text-muted-foreground md:block">
                 {step.description}
               </p>
             </div>

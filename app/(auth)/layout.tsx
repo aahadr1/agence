@@ -9,14 +9,14 @@ export default function AuthLayout({
 }) {
   return (
     <div className="min-h-screen bg-background">
-      <div className="flex items-center justify-between gap-4 border-b border-border px-6 py-4 md:px-10">
+      <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 md:px-10 md:py-4">
         <Link href="/login" className="block">
-          <div className="overflow-hidden rounded-sm bg-white px-3 py-2">
+          <div className="overflow-hidden rounded-sm bg-white px-2 py-1.5 md:px-3 md:py-2">
             <Image
               src="/logo.png"
               alt="LàHaut Agency"
-              width={130}
-              height={65}
+              width={100}
+              height={50}
               className="h-auto w-auto object-contain"
               priority
             />
@@ -24,7 +24,7 @@ export default function AuthLayout({
         </Link>
         <ThemeToggle />
       </div>
-      <div className="mx-auto flex min-h-[calc(100vh-4.25rem)] max-w-md flex-col justify-center px-6 py-12 md:px-10">
+      <div className="mx-auto flex min-h-[calc(100svh-3.5rem)] max-w-md flex-col justify-center px-5 py-10 md:px-10 md:py-12">
         {children}
       </div>
     </div>
