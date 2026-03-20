@@ -34,15 +34,19 @@ export function Stepper({ currentStep }: StepperProps) {
                   done
                     ? "border-foreground bg-foreground text-primary-foreground"
                     : active
-                      ? "border-foreground"
+                      ? "animate-blue-glow border-[var(--blue)]"
                       : "border-border"
                 )}
+                style={active ? { borderColor: "var(--blue)" } : undefined}
                 aria-current={active ? "step" : undefined}
               >
                 {done ? (
                   <Check className="h-2.5 w-2.5" strokeWidth={2.5} />
                 ) : (
-                  <span className="font-mono text-[8px] tabular-nums text-muted-foreground">
+                  <span
+                    className="font-mono text-[8px] tabular-nums"
+                    style={active ? { color: "var(--blue)" } : undefined}
+                  >
                     {step.id}
                   </span>
                 )}
@@ -50,8 +54,9 @@ export function Stepper({ currentStep }: StepperProps) {
               <p
                 className={cn(
                   "mt-3 text-center text-[10px] font-medium uppercase tracking-[0.14em]",
-                  active || done ? "text-foreground" : "text-muted-foreground"
+                  done ? "text-foreground" : "text-muted-foreground"
                 )}
+                style={active ? { color: "var(--blue)" } : undefined}
               >
                 {step.label}
               </p>

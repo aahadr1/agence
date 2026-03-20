@@ -54,11 +54,16 @@ export function Sidebar() {
                   className={cn(
                     "relative flex items-center gap-3 border-l-2 border-transparent py-2.5 pr-3 pl-[calc(0.75rem-2px)] text-[13px] font-medium transition-colors",
                     isActive
-                      ? "border-foreground text-foreground"
+                      ? "text-foreground"
                       : "text-muted-foreground hover:text-foreground"
                   )}
+                  style={isActive ? { borderLeftColor: "var(--blue)" } : undefined}
                 >
-                  <Icon className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.5} />
+                  <Icon
+                    className="h-4 w-4 shrink-0"
+                    strokeWidth={1.5}
+                    style={isActive ? { color: "var(--blue)", opacity: 1 } : { opacity: 0.7 }}
+                  />
                   {item.label}
                 </Link>
               </li>
