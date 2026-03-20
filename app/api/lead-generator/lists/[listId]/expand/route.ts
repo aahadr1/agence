@@ -1,5 +1,5 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { runFullPipeline } from "@/lib/lead-agent";
+import { runDiscovery } from "@/lib/lead-agent";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -36,8 +36,8 @@ export async function POST(
       return NextResponse.json({ error: "Location is required" }, { status: 400 });
     }
 
-    // Run pipeline excluding already-known businesses
-    const { leads, keywords } = await runFullPipeline(
+    // Run discovery only (enrichment happens per-lead via /api/lead-generator/enrich)
+    const { leads, keywords } = await runDiscovery(
       searchNiche,
       searchLocation,
       list.excluded_business_names || []
@@ -60,7 +60,7 @@ export async function POST(
       .select()
       .single();
 
-    // Save new leads
+    // Save new leads with enrichment_status = "pending"
     const leadsToInsert = leads.map((lead) => ({
       search_id: search?.id,
       user_id: user.id,
@@ -78,23 +78,23 @@ export async function POST(
       has_website: lead.has_website,
       website_url: lead.website_url,
       google_maps_url: lead.google_maps_url,
-      website_quality: lead.website_quality,
-      website_score: lead.website_score,
-      owner_name: lead.owner_name,
-      owner_phone: lead.owner_phone,
-      owner_email: lead.owner_email,
-      owner_role: lead.owner_role,
-      linkedin_url: lead.linkedin_url,
-      siren: lead.siren,
-      company_type: lead.company_type,
-      creation_date: lead.creation_date,
-      revenue_bracket: lead.revenue_bracket,
-      employee_count: lead.employee_count,
-      facebook_url: lead.facebook_url,
-      instagram_url: lead.instagram_url,
-      follower_count: lead.follower_count,
-      enrichment_status: "completed",
-      enrichment_data: lead.enrichment_data || {},
+      website_quality: null,
+      website_score: null,
+      owner_name: null,
+      owner_phone: null,
+      owner_email: null,
+      owner_role: null,
+      linkedin_url: null,
+      siren: null,
+      company_type: null,
+      creation_date: null,
+      revenue_bracket: null,
+      employee_count: null,
+      facebook_url: null,
+      instagram_url: null,
+      follower_count: null,
+      enrichment_status: "pending",
+      enrichment_data: {},
     }));
 
     const { data: insertedLeads } = await serviceClient

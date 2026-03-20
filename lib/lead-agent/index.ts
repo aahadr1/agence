@@ -479,7 +479,23 @@ function writeCtxToLead(lead: LeadResult, ctx: EnrichmentContext) {
 }
 
 /**
+ * Enrich a single lead. Spins up its own browser session, runs
+ * all 7 enrichment steps, then closes the browser.
+ * Designed to be called per-lead from a short-lived serverless function.
+ */
+export async function runSingleLeadEnrichment(
+  lead: LeadResult,
+  location: string,
+  log: (msg: string) => void = console.log
+): Promise<LeadResult> {
+  const [enriched] = await runEnrichment([lead], location, log);
+  return enriched;
+}
+
+/**
  * Full pipeline: discovery + enrichment in one go.
+ * WARNING: This can easily exceed serverless timeouts.
+ * Prefer calling runDiscovery + runSingleLeadEnrichment separately.
  */
 export async function runFullPipeline(
   niche: string,
@@ -503,24 +519,6 @@ export async function runFullPipeline(
 
   log(`\n═══ Pipeline complete ═══`);
   log(`Total leads: ${enrichedLeads.length}`);
-  log(
-    `  Without website: ${enrichedLeads.filter((l) => !l.has_website).length}`
-  );
-  log(
-    `  With bad website: ${enrichedLeads.filter((l) => l.has_website && ["dead", "outdated", "poor"].includes(l.website_quality || "")).length}`
-  );
-  log(`  With phone: ${enrichedLeads.filter((l) => l.phone).length}`);
-  log(`  With email: ${enrichedLeads.filter((l) => l.email).length}`);
-  log(
-    `  With owner name: ${enrichedLeads.filter((l) => l.owner_name).length}`
-  );
-  log(
-    `  With owner phone: ${enrichedLeads.filter((l) => l.owner_phone).length}`
-  );
-  log(
-    `  With LinkedIn: ${enrichedLeads.filter((l) => l.linkedin_url).length}`
-  );
-  log(`  With SIREN: ${enrichedLeads.filter((l) => l.siren).length}`);
 
   return { leads: enrichedLeads, keywords };
 }

@@ -15,7 +15,7 @@ import {
   LayoutList,
   History,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { LeadCard } from "./components/lead-card";
 import { ListPanel } from "./components/list-panel";
 import { SelectBar } from "./components/select-bar";
@@ -60,6 +60,11 @@ export default function LeadGeneratorPage() {
   // Filters
   const [filterNoWebsite, setFilterNoWebsite] = useState(false);
   const [filterBadWebsite, setFilterBadWebsite] = useState(false);
+
+  // Enrichment
+  const [enrichingLeadId, setEnrichingLeadId] = useState<string | null>(null);
+  const [enrichmentProgress, setEnrichmentProgress] = useState<{ done: number; total: number } | null>(null);
+  const enrichAbortRef = useRef(false);
 
   // Outreach
   const [outreachModal, setOutreachModal] = useState<{
@@ -122,13 +127,75 @@ export default function LeadGeneratorPage() {
     }
   }, []);
 
+  /** Enrich leads one by one — call after discovery loads leads into state */
+  const enrichLeads = useCallback(async (leadsToEnrich: Lead[]) => {
+    const pending = leadsToEnrich.filter((l) => l.enrichment_status === "pending");
+    if (pending.length === 0) return;
+
+    enrichAbortRef.current = false;
+    setEnrichmentProgress({ done: 0, total: pending.length });
+
+    for (let i = 0; i < pending.length; i++) {
+      if (enrichAbortRef.current) break;
+
+      const lead = pending[i];
+      setEnrichingLeadId(lead.id);
+      setEnrichmentProgress({ done: i, total: pending.length });
+
+      // Mark as enriching in local state
+      setLeads((prev) =>
+        prev.map((l) =>
+          l.id === lead.id ? { ...l, enrichment_status: "enriching" as const } : l
+        )
+      );
+
+      try {
+        const res = await fetch("/api/lead-generator/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId: lead.id }),
+        });
+        const data = await safeJson(res);
+        if (data.lead) {
+          // Update the lead in state with enriched data
+          const enrichedLead = data.lead as Lead;
+          setLeads((prev) =>
+            prev.map((l) => (l.id === lead.id ? enrichedLead : l))
+          );
+          setListItems((prev) =>
+            prev.map((item) =>
+              item.lead_id === lead.id
+                ? { ...item, lead: enrichedLead }
+                : item
+            )
+          );
+        }
+      } catch {
+        // Mark as failed in state
+        setLeads((prev) =>
+          prev.map((l) =>
+            l.id === lead.id ? { ...l, enrichment_status: "failed" as const } : l
+          )
+        );
+      }
+    }
+
+    setEnrichingLeadId(null);
+    setEnrichmentProgress(null);
+  }, []);
+
   // Search handler
   const handleSearch = async () => {
     if (!niche.trim() || !location.trim()) return;
 
+    // Abort any running enrichment
+    enrichAbortRef.current = true;
+    setEnrichingLeadId(null);
+    setEnrichmentProgress(null);
+
     setPhase("analyzing");
     setPhaseMessage(
-      "AI agent browsing Google Maps with multiple search variations, then cross-referencing Google, PagesJaunes, and Facebook... this takes 5-10 minutes"
+      "AI agent browsing Google Maps with multiple search variations..."
     );
     setError(null);
     setLeads([]);
@@ -149,14 +216,23 @@ export default function LeadGeneratorPage() {
 
       const searchId = searchData.searchId as string;
       const leadsCount = searchData.leadsCount as number;
-      const withoutWebsite = searchData.withoutWebsite as number;
-      const badWebsite = searchData.badWebsite as number;
 
       setPhase("completed");
       setPhaseMessage(
-        `Found ${leadsCount} businesses — ${withoutWebsite} without a website, ${badWebsite} with a bad website!`
+        `Found ${leadsCount} businesses — now enriching each lead with detailed info...`
       );
-      await loadLeads(searchId);
+
+      // Load leads from DB and display immediately
+      const { data: discoveredLeads } = await supabase
+        .from("leads")
+        .select("*")
+        .eq("search_id", searchId)
+        .order("has_website", { ascending: true });
+
+      const loadedLeads = discoveredLeads || [];
+      setLeads(loadedLeads);
+      setSelectedSearchId(searchId);
+      setSelectedLeadIds(new Set());
 
       const { data: updatedSearches } = await supabase
         .from("lead_searches")
@@ -164,6 +240,9 @@ export default function LeadGeneratorPage() {
         .order("created_at", { ascending: false })
         .limit(20);
       setPastSearches(updatedSearches || []);
+
+      // Start enrichment in background (non-blocking)
+      enrichLeads(loadedLeads);
     } catch (err) {
       setPhase("failed");
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -233,6 +312,11 @@ export default function LeadGeneratorPage() {
     const list = lists.find((l) => l.id === listId);
     if (!list) return;
 
+    // Abort any running enrichment
+    enrichAbortRef.current = true;
+    setEnrichingLeadId(null);
+    setEnrichmentProgress(null);
+
     setPhase("analyzing");
     setPhaseMessage(`AI expanding list "${list.name}" — finding new businesses not already in the list...`);
     setError(null);
@@ -253,9 +337,20 @@ export default function LeadGeneratorPage() {
       if (!res.ok) throw new Error((data.error as string) || "Expand failed");
 
       setPhase("completed");
-      setPhaseMessage(`Added ${data.added} new leads to "${list.name}"!`);
-      await loadListItems(listId);
+      setPhaseMessage(`Added ${data.added} new leads to "${list.name}" — enriching...`);
+
+      // Reload list items and start enrichment
+      const listRes = await fetch(`/api/lead-generator/lists/${listId}`);
+      const listData = await safeJson(listRes);
+      const items = (listData.items as LeadListItem[]) || [];
+      setListItems(items);
       await refreshLists();
+
+      // Enrich only the newly added (pending) leads
+      const newLeads = items.map((i) => i.lead!).filter((l) => l && l.enrichment_status === "pending");
+      if (newLeads.length > 0) {
+        enrichLeads(newLeads);
+      }
     } catch (err) {
       setPhase("failed");
       setError(err instanceof Error ? err.message : "Expand failed");
@@ -366,7 +461,7 @@ export default function LeadGeneratorPage() {
 
         {phase !== "idle" && phaseMessage ? (
           <div className="mt-6 flex gap-3 border-t border-border pt-6">
-            {phase === "analyzing" ? (
+            {phase === "analyzing" || enrichmentProgress ? (
               <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
             ) : phase === "completed" ? (
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" strokeWidth={1.25} />
@@ -377,14 +472,7 @@ export default function LeadGeneratorPage() {
               <p className="text-sm leading-relaxed text-foreground">{phaseMessage}</p>
               {phase === "analyzing" ? (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {[
-                    "Query expansion",
-                    "Maps",
-                    "Search",
-                    "PagesJaunes",
-                    "Facebook",
-                    "Web check",
-                  ].map((s) => (
+                  {["Query expansion", "Maps discovery"].map((s) => (
                     <span
                       key={s}
                       className="border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
@@ -392,6 +480,31 @@ export default function LeadGeneratorPage() {
                       {s}
                     </span>
                   ))}
+                </div>
+              ) : null}
+              {enrichmentProgress ? (
+                <div className="mt-3">
+                  <div className="flex items-center gap-3">
+                    <div className="h-1 flex-1 bg-border">
+                      <div
+                        className="h-1 bg-foreground transition-all duration-500"
+                        style={{ width: `${((enrichmentProgress.done + 1) / enrichmentProgress.total) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
+                      {enrichmentProgress.done + 1}/{enrichmentProgress.total}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {["Google", "PagesJaunes", "Facebook", "Societe.com", "LinkedIn", "Owner", "Website"].map((s) => (
+                      <span
+                        key={s}
+                        className="border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+                      >
+                        {s}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </div>

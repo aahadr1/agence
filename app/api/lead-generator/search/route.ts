@@ -1,5 +1,5 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { runFullPipeline } from "@/lib/lead-agent";
+import { runDiscovery } from "@/lib/lead-agent";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -45,19 +45,19 @@ export async function POST(request: Request) {
       );
     }
 
-    // Run the full pipeline: discovery + enrichment
+    // Run discovery only (enrichment happens per-lead via /api/lead-generator/enrich)
     await serviceClient
       .from("lead_searches")
       .update({ status: "analyzing", updated_at: new Date().toISOString() })
       .eq("id", search.id);
 
-    const { leads, keywords } = await runFullPipeline(
+    const { leads, keywords } = await runDiscovery(
       niche,
       location,
       excludeNames || []
     );
 
-    // Save leads to database
+    // Save leads to database with enrichment_status = "pending"
     if (leads.length > 0) {
       const leadsToInsert = leads.map((lead) => ({
         search_id: search.id,
@@ -76,38 +76,29 @@ export async function POST(request: Request) {
         has_website: lead.has_website,
         website_url: lead.website_url,
         google_maps_url: lead.google_maps_url,
-        website_quality: lead.website_quality,
-        website_score: lead.website_score,
-        owner_name: lead.owner_name,
-        owner_phone: lead.owner_phone,
-        owner_email: lead.owner_email,
-        owner_role: lead.owner_role,
-        linkedin_url: lead.linkedin_url,
-        siren: lead.siren,
-        company_type: lead.company_type,
-        creation_date: lead.creation_date,
-        revenue_bracket: lead.revenue_bracket,
-        employee_count: lead.employee_count,
-        facebook_url: lead.facebook_url,
-        instagram_url: lead.instagram_url,
-        follower_count: lead.follower_count,
-        enrichment_status: "completed",
-        enrichment_data: lead.enrichment_data || {},
+        website_quality: null,
+        website_score: null,
+        owner_name: null,
+        owner_phone: null,
+        owner_email: null,
+        owner_role: null,
+        linkedin_url: null,
+        siren: null,
+        company_type: null,
+        creation_date: null,
+        revenue_bracket: null,
+        employee_count: null,
+        facebook_url: null,
+        instagram_url: null,
+        follower_count: null,
+        enrichment_status: "pending",
+        enrichment_data: {},
       }));
 
       await serviceClient.from("leads").insert(leadsToInsert);
     }
 
     // Mark search as completed
-    const noWebsiteCount = leads.filter((l) => !l.has_website).length;
-    const badWebsiteCount = leads.filter(
-      (l) =>
-        l.has_website &&
-        (l.website_quality === "dead" ||
-          l.website_quality === "outdated" ||
-          l.website_quality === "poor")
-    ).length;
-
     await serviceClient
       .from("lead_searches")
       .update({
@@ -120,8 +111,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       searchId: search.id,
       leadsCount: leads.length,
-      withoutWebsite: noWebsiteCount,
-      badWebsite: badWebsiteCount,
       keywords,
     });
   } catch (error) {

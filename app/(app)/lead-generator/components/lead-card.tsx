@@ -99,11 +99,23 @@ export function LeadCard({
             <h3 className="text-sm font-medium text-foreground md:text-base">
               {lead.business_name}
             </h3>
-            <WebsiteQualityBadge lead={lead} />
-            {lead.website_score !== null && lead.website_score > 0 && (
-              <span className="text-[10px] text-muted-foreground">
-                {lead.website_score}/100
+            {lead.enrichment_status === "pending" ? (
+              <span className="shrink-0 border border-border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                Awaiting enrichment
               </span>
+            ) : lead.enrichment_status === "enriching" ? (
+              <span className="flex shrink-0 items-center gap-1 border border-border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                <Loader2 className="h-2.5 w-2.5 animate-spin" /> Enriching
+              </span>
+            ) : (
+              <>
+                <WebsiteQualityBadge lead={lead} />
+                {lead.website_score !== null && lead.website_score > 0 && (
+                  <span className="text-[10px] text-muted-foreground">
+                    {lead.website_score}/100
+                  </span>
+                )}
+              </>
             )}
           </div>
 
