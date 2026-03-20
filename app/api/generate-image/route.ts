@@ -82,38 +82,9 @@ The website must look like a real, live, professional website screenshot at 4K r
       .update({ prompt: finalPrompt })
       .eq("id", variantId);
 
-    // Try Nano Banana 2 first, fallback to GPT Image 1.5
+    // Try GPT Image 1.5 first, fallback to Nano Banana 2
     let prediction;
     try {
-      const nanoBananaInput: Record<string, unknown> = {
-        prompt: finalPrompt,
-        aspect_ratio: "4:3",
-        output_format: "jpg",
-      };
-      if (imageInputs.length > 0) {
-        nanoBananaInput.image_input = imageInputs;
-      }
-
-      prediction = await replicate.predictions.create({
-        model: "google/nano-banana-2",
-        input: nanoBananaInput,
-      });
-
-      // Wait briefly to check if it fails immediately
-      await new Promise((r) => setTimeout(r, 3000));
-      const check = await replicate.predictions.get(prediction.id);
-
-      if (check.status === "failed") {
-        throw new Error((check.error as string) || "Nano Banana 2 failed");
-      }
-    } catch (nanoBananaError) {
-      console.warn(
-        "[generate-image] Nano Banana 2 failed, falling back to GPT Image 1.5:",
-        nanoBananaError instanceof Error
-          ? nanoBananaError.message
-          : nanoBananaError
-      );
-
       const gptInput: Record<string, unknown> = {
         prompt: finalPrompt,
         quality: "high",
@@ -132,6 +103,33 @@ The website must look like a real, live, professional website screenshot at 4K r
       prediction = await replicate.predictions.create({
         model: "openai/gpt-image-1.5",
         input: gptInput,
+      });
+
+      // Wait briefly to check if it fails immediately
+      await new Promise((r) => setTimeout(r, 3000));
+      const check = await replicate.predictions.get(prediction.id);
+
+      if (check.status === "failed") {
+        throw new Error((check.error as string) || "GPT Image 1.5 failed");
+      }
+    } catch (gptError) {
+      console.warn(
+        "[generate-image] GPT Image 1.5 failed, falling back to Nano Banana 2:",
+        gptError instanceof Error ? gptError.message : gptError
+      );
+
+      const nanoBananaInput: Record<string, unknown> = {
+        prompt: finalPrompt,
+        aspect_ratio: "4:3",
+        output_format: "jpg",
+      };
+      if (imageInputs.length > 0) {
+        nanoBananaInput.image_input = imageInputs;
+      }
+
+      prediction = await replicate.predictions.create({
+        model: "google/nano-banana-2",
+        input: nanoBananaInput,
       });
     }
 
