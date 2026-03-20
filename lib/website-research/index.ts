@@ -614,6 +614,31 @@ Be exhaustive. Every detail matters for the design team.`;
   return result;
 }
 
+// ── Helpers ──────────────────────────────────────────────────
+
+/** Check if the browser session is still alive. */
+function isAlive(session: BrowserSession): boolean {
+  try {
+    return session.page.isClosed() === false;
+  } catch {
+    return false;
+  }
+}
+
+/** Try to get a working page — relaunch browser if it crashed. */
+async function ensurePage(
+  session: BrowserSession,
+  log: Logger
+): Promise<BrowserSession> {
+  if (isAlive(session)) return session;
+
+  log("[Recovery] Browser crashed — relaunching...");
+  try {
+    await closeBrowser(session);
+  } catch {}
+  return launchBrowser();
+}
+
 // ── Main Pipeline ────────────────────────────────────────────
 
 export async function runWebsiteResearch(
@@ -621,56 +646,77 @@ export async function runWebsiteResearch(
   businessAddress: string,
   log: Logger = console.log
 ): Promise<WebsiteResearchResult> {
-  let session: BrowserSession | null = null;
+  let session = await launchBrowser();
+
+  // Partial results — each phase can fail independently
+  let mapsInfo: MapsBusinessInfo | null = null;
+  let mapsPhotos: string[] = [];
+  let mapsReviews: MapsReview[] = [];
+  let websiteResult: {
+    pages: WebsitePage[];
+    designNotes: string;
+    allImages: string[];
+  } | null = null;
+  let googleImages: string[] = [];
 
   try {
-    session = await launchBrowser();
-
     // Phase 1: Google Maps deep dive
     log("=== Phase 1/4: Google Maps research ===");
-    const mapsResult = await researchGoogleMaps(
-      session.page,
-      businessName,
-      businessAddress,
-      log
-    );
-
-    // Phase 2: Crawl business website (if found)
-    const websiteUrl = normalizeUrl(mapsResult.info?.website_url);
-    let websiteResult: {
-      pages: WebsitePage[];
-      designNotes: string;
-      allImages: string[];
-    } | null = null;
-
-    if (websiteUrl) {
-      log("=== Phase 2/4: Crawling business website ===");
-      websiteResult = await crawlBusinessWebsite(
-        session.context,
-        websiteUrl,
+    try {
+      session = await ensurePage(session, log);
+      const result = await researchGoogleMaps(
+        session.page,
         businessName,
+        businessAddress,
         log
       );
+      mapsInfo = result.info;
+      mapsPhotos = result.photos;
+      mapsReviews = result.reviews;
+    } catch (e) {
+      log(`[Phase 1 FAILED] Google Maps: ${e instanceof Error ? e.message : e}`);
+    }
+
+    // Phase 2: Crawl business website (if found)
+    const websiteUrl = normalizeUrl(mapsInfo?.website_url);
+    if (websiteUrl) {
+      log("=== Phase 2/4: Crawling business website ===");
+      try {
+        session = await ensurePage(session, log);
+        websiteResult = await crawlBusinessWebsite(
+          session.context,
+          websiteUrl,
+          businessName,
+          log
+        );
+      } catch (e) {
+        log(`[Phase 2 FAILED] Website crawl: ${e instanceof Error ? e.message : e}`);
+      }
     } else {
       log("=== Phase 2/4: No website found — skipping crawl ===");
     }
 
     // Phase 3: Google Images
     log("=== Phase 3/4: Google Images search ===");
-    const googleImages = await searchGoogleImages(
-      session.page,
-      businessName,
-      businessAddress,
-      log
-    );
+    try {
+      session = await ensurePage(session, log);
+      googleImages = await searchGoogleImages(
+        session.page,
+        businessName,
+        businessAddress,
+        log
+      );
+    } catch (e) {
+      log(`[Phase 3 FAILED] Google Images: ${e instanceof Error ? e.message : e}`);
+    }
 
-    // Phase 4: Gemini synthesis
+    // Phase 4: Gemini synthesis (no browser needed — pure API)
     log("=== Phase 4/4: Deep synthesis ===");
     const businessInfo = await synthesizeBusinessProfile(
       businessName,
       businessAddress,
-      mapsResult.info,
-      mapsResult.reviews,
+      mapsInfo,
+      mapsReviews,
       websiteResult?.pages || [],
       websiteResult?.designNotes || "",
       log
@@ -679,8 +725,7 @@ export async function runWebsiteResearch(
     // ── Combine images ──
     const allImages: ResearchImage[] = [];
 
-    // Maps photos — highest quality, from the actual business
-    for (const url of mapsResult.photos) {
+    for (const url of mapsPhotos) {
       allImages.push({
         url,
         description: "Business photo from Google Maps",
@@ -689,7 +734,6 @@ export async function runWebsiteResearch(
       });
     }
 
-    // Website images — authentic business imagery
     if (websiteResult) {
       for (const url of websiteResult.allImages.slice(0, 15)) {
         allImages.push({
@@ -701,7 +745,6 @@ export async function runWebsiteResearch(
       }
     }
 
-    // Google Images — supplementary
     for (const url of googleImages.slice(0, 10)) {
       allImages.push({
         url,
@@ -719,19 +762,19 @@ export async function runWebsiteResearch(
       businessInfo,
       images: allImages,
       rawData: {
-        mapsInfo: mapsResult.info,
+        mapsInfo,
         websiteContent:
           websiteResult?.pages
             .map((p) => `${p.title}: ${p.content}`)
             .join("\n\n") || null,
-        reviews: mapsResult.reviews.map(
+        reviews: mapsReviews.map(
           (r) => `${r.author} (${r.rating}★): ${r.text}`
         ),
       },
     };
   } finally {
-    if (session) {
+    try {
       await closeBrowser(session);
-    }
+    } catch {}
   }
 }
