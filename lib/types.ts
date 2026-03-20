@@ -62,7 +62,6 @@ export interface Variant {
   prompt: string;
   image_url: string | null;
   theme_name: string;
-  theme_description?: string;
   color_scheme: { primary: string; secondary: string; accent: string } | null;
   selected: boolean;
   created_at: string;

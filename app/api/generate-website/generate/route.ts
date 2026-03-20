@@ -349,6 +349,9 @@ Return ONLY a valid JSON array. No markdown. No explanation. No thinking.
       buildId: build.id,
       predictionId: prediction.id,
       imgMap: imgMap.map((i) => ({ alias: i.alias, url: i.url })),
+      businessInfo,
+      colorScheme,
+      lang,
     });
   } catch (error) {
     const msg =

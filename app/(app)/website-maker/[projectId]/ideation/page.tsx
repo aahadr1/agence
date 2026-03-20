@@ -192,8 +192,8 @@ export default function IdeationPage() {
         }
         description={
           generating
-            ? "The AI is synthesising web research, your logo, and the brief into three distinct design directions. Each gets a name, a colour palette, and a full-page mockup — this takes about a minute."
-            : "Three concepts, each with a different personality. Look at the name, colour swatches, and mockup thumbnail. When all three have loaded, pick one to carry into the build."
+            ? "Research-backed themes and mockups are being prepared."
+            : "Review thumbnails. When all three finish, continue to selection."
         }
         className="mb-10"
       />
@@ -271,11 +271,6 @@ export default function IdeationPage() {
                   <h3 className="text-sm font-medium text-foreground">
                     {variant.theme_name}
                   </h3>
-                  {variant.theme_description && (
-                    <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground line-clamp-2">
-                      {variant.theme_description}
-                    </p>
-                  )}
                 </div>
               </Panel>
             ))}

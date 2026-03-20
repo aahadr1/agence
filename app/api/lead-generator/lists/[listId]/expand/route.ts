@@ -8,34 +8,34 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ listId: string }> }
 ) {
-  const { listId } = await params;
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const serviceClient = await createServiceClient();
-
-  // Get list with keywords and excluded names
-  const { data: list } = await serviceClient
-    .from("lead_lists")
-    .select("*")
-    .eq("id", listId)
-    .eq("user_id", user.id)
-    .single();
-
-  if (!list) return NextResponse.json({ error: "List not found" }, { status: 404 });
-
-  const { niche, location } = await request.json();
-
-  // Use stored keywords or the provided niche/location
-  const searchNiche = niche || list.keywords?.[0] || "business";
-  const searchLocation = location || list.keywords?.[1] || "";
-
-  if (!searchLocation) {
-    return NextResponse.json({ error: "Location is required" }, { status: 400 });
-  }
-
   try {
+    const { listId } = await params;
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const serviceClient = await createServiceClient();
+
+    // Get list with keywords and excluded names
+    const { data: list } = await serviceClient
+      .from("lead_lists")
+      .select("*")
+      .eq("id", listId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (!list) return NextResponse.json({ error: "List not found" }, { status: 404 });
+
+    const { niche, location } = await request.json();
+
+    // Use stored keywords or the provided niche/location
+    const searchNiche = niche || list.keywords?.[0] || "business";
+    const searchLocation = location || list.keywords?.[1] || "";
+
+    if (!searchLocation) {
+      return NextResponse.json({ error: "Location is required" }, { status: 400 });
+    }
+
     // Run pipeline excluding already-known businesses
     const { leads, keywords } = await runFullPipeline(
       searchNiche,
@@ -131,7 +131,8 @@ export async function POST(
       total: leads.length,
     });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Expand failed";
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error("Lead generator error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

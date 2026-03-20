@@ -24,6 +24,20 @@ import { OutreachModal } from "./components/outreach-modal";
 type SearchPhase = "idle" | "searching" | "analyzing" | "completed" | "failed";
 type ViewTab = "search" | "lists";
 
+/** Safely parse a fetch response — handles non-JSON (HTML error pages, plain text) */
+async function safeJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      res.ok
+        ? `Invalid response: ${text.slice(0, 150)}`
+        : `Server error (${res.status}): ${text.slice(0, 150)}`
+    );
+  }
+}
+
 export default function LeadGeneratorPage() {
   const [niche, setNiche] = useState("");
   const [location, setLocation] = useState("");
@@ -65,10 +79,10 @@ export default function LeadGeneratorPage() {
           .select("*")
           .order("created_at", { ascending: false })
           .limit(20),
-        fetch("/api/lead-generator/lists").then((r) => r.json()),
+        fetch("/api/lead-generator/lists").then((r) => safeJson(r)).catch(() => ({ lists: [] })),
       ]);
       setPastSearches(searchesRes.data || []);
-      setLists(listsRes.lists || []);
+      setLists((listsRes.lists as LeadList[]) || []);
     };
     fetchData();
   }, [supabase]);
@@ -88,16 +102,24 @@ export default function LeadGeneratorPage() {
   );
 
   const loadListItems = useCallback(async (listId: string) => {
-    const res = await fetch(`/api/lead-generator/lists/${listId}`);
-    const data = await res.json();
-    setListItems(data.items || []);
+    try {
+      const res = await fetch(`/api/lead-generator/lists/${listId}`);
+      const data = await safeJson(res);
+      setListItems((data.items as LeadListItem[]) || []);
+    } catch {
+      setListItems([]);
+    }
     setActiveListId(listId);
   }, []);
 
   const refreshLists = useCallback(async () => {
-    const res = await fetch("/api/lead-generator/lists");
-    const data = await res.json();
-    setLists(data.lists || []);
+    try {
+      const res = await fetch("/api/lead-generator/lists");
+      const data = await safeJson(res);
+      setLists((data.lists as LeadList[]) || []);
+    } catch {
+      // keep existing lists on error
+    }
   }, []);
 
   // Search handler
@@ -120,13 +142,12 @@ export default function LeadGeneratorPage() {
         body: JSON.stringify({ niche: niche.trim(), location: location.trim() }),
       });
 
+      const searchData = await safeJson(searchRes);
       if (!searchRes.ok) {
-        const err = await searchRes.json();
-        throw new Error(err.error || "Search failed");
+        throw new Error((searchData.error as string) || "Search failed");
       }
 
-      const { searchId, leadsCount, withoutWebsite, badWebsite } =
-        await searchRes.json();
+      const { searchId, leadsCount, withoutWebsite, badWebsite } = searchData;
 
       setPhase("completed");
       setPhaseMessage(
@@ -225,8 +246,8 @@ export default function LeadGeneratorPage() {
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Expand failed");
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error((data.error as string) || "Expand failed");
 
       setPhase("completed");
       setPhaseMessage(`Added ${data.added} new leads to "${list.name}"!`);
@@ -248,7 +269,7 @@ export default function LeadGeneratorPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leadId, language: "fr" }),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (data.template) {
         const lead = leads.find((l) => l.id === leadId) ||
           listItems.find((i) => i.lead_id === leadId)?.lead;

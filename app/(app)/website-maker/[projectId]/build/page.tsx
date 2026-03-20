@@ -319,7 +319,7 @@ export default function BuildPage() {
         throw new Error(err.error || "Failed to start generation");
       }
 
-      const { buildId: newBuildId, predictionId, imgMap } = await safeJson(genRes);
+      const { buildId: newBuildId, predictionId, imgMap, businessInfo, colorScheme, lang } = await safeJson(genRes);
       setBuildId(newBuildId);
 
       const rawOutput = await pollPrediction(predictionId);
@@ -344,25 +344,16 @@ export default function BuildPage() {
       // ── Phase 2: Review + Improve + Expand ──
       setPhase("improving");
 
-      // Fetch project context for the review endpoint
-      let reviewContext: { businessInfo?: Record<string, unknown>; colorScheme?: Record<string, unknown> } = {};
-      try {
-        const ctxRes = await fetch(`/api/generate-website/build-status?projectId=${projectId}`);
-        if (ctxRes.ok) {
-          // We just need basic context, not the full build
-        }
-      } catch {}
-
       const reviewRes = await fetch("/api/generate-website/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           buildId: newBuildId,
           files,
-          businessInfo: reviewContext.businessInfo || {},
-          colorScheme: reviewContext.colorScheme || {},
+          businessInfo: businessInfo || {},
+          colorScheme: colorScheme || {},
           imgAliases: imgMap || [],
-          lang: "French",
+          lang: lang || "French",
         }),
       });
 

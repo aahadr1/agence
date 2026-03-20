@@ -62,7 +62,7 @@ export default function LoginPage() {
           Welcome back
         </h1>
         <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
-          Sign in to reach your Website Maker projects and Lead Generator searches.
+          Sign in to continue to your studio.
         </p>
       </header>
 

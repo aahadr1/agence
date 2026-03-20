@@ -69,6 +69,7 @@ export async function POST(request: Request) {
     const vercelFiles = files.map((file) => ({
       file: file.path,
       data: Buffer.from(file.content, "utf-8").toString("base64"),
+      encoding: "base64",
     }));
 
     const businessName =

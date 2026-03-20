@@ -5,27 +5,27 @@ import { NextResponse } from "next/server";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { niche, location, excludeNames } = await request.json();
-
-  if (!niche || !location) {
-    return NextResponse.json(
-      { error: "Niche and location are required" },
-      { status: 400 }
-    );
-  }
-
-  const serviceClient = await createServiceClient();
-
   try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { niche, location, excludeNames } = await request.json();
+
+    if (!niche || !location) {
+      return NextResponse.json(
+        { error: "Niche and location are required" },
+        { status: 400 }
+      );
+    }
+
+    const serviceClient = await createServiceClient();
+
     // Create search record
     const { data: search, error: insertErr } = await serviceClient
       .from("lead_searches")
@@ -127,7 +127,6 @@ export async function POST(request: Request) {
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Search failed";
     console.error("Lead generator error:", msg, error);
-
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

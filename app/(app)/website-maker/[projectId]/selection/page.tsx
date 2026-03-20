@@ -92,7 +92,7 @@ export default function SelectionPage() {
       <PageHeader
         eyebrow="Selection"
         title="Pick one direction"
-        description="The concept you choose sets the layout, palette, and tone for the full build. Click a card to select, then confirm — the AI will write every page to match."
+        description="The mockup you choose becomes the reference for the generated site."
         className="mb-10"
       />
 
@@ -160,14 +160,9 @@ export default function SelectionPage() {
                     </div>
                   )}
                 </div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    {variant.theme_name}
-                  </h3>
-                  {variant.theme_description && (
-                    <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground line-clamp-2">
-                      {variant.theme_description}
-                    </p>
-                  )}
+                <h3 className="text-sm font-medium text-foreground">
+                  {variant.theme_name}
+                </h3>
               </div>
             </button>
           );
