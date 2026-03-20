@@ -147,7 +147,10 @@ export default function LeadGeneratorPage() {
         throw new Error((searchData.error as string) || "Search failed");
       }
 
-      const { searchId, leadsCount, withoutWebsite, badWebsite } = searchData;
+      const searchId = searchData.searchId as string;
+      const leadsCount = searchData.leadsCount as number;
+      const withoutWebsite = searchData.withoutWebsite as number;
+      const badWebsite = searchData.badWebsite as number;
 
       setPhase("completed");
       setPhaseMessage(
@@ -275,7 +278,7 @@ export default function LeadGeneratorPage() {
           listItems.find((i) => i.lead_id === leadId)?.lead;
         setOutreachModal({
           businessName: lead?.business_name || "Business",
-          template: data.template,
+          template: data.template as string,
         });
       }
     } catch {
