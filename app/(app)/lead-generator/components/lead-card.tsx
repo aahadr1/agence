@@ -16,6 +16,9 @@ import {
   Users,
   MessageSquare,
   Loader2,
+  Linkedin,
+  Building2,
+  Hash,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -140,15 +143,31 @@ export function LeadCard({
               </span>
             )}
             {lead.owner_name && (
-              <span className="flex items-center gap-1">
+              <span className="flex items-center gap-1 font-medium text-foreground">
                 <User className="w-3 h-3" />
                 {lead.owner_name}
+                {lead.owner_role && (
+                  <span className="font-normal text-muted-foreground">({lead.owner_role})</span>
+                )}
               </span>
+            )}
+            {lead.owner_phone && (
+              <a href={`tel:${lead.owner_phone}`} className="flex items-center gap-1 text-primary hover:underline">
+                <Phone className="w-3 h-3" />
+                {lead.owner_phone}
+                <span className="text-[9px] text-muted-foreground">(perso)</span>
+              </a>
             )}
             {lead.follower_count && (
               <span className="flex items-center gap-1">
                 <Users className="w-3 h-3" />
                 {lead.follower_count.toLocaleString()} followers
+              </span>
+            )}
+            {lead.siren && (
+              <span className="flex items-center gap-1">
+                <Hash className="w-3 h-3" />
+                {lead.siren}
               </span>
             )}
           </div>
@@ -177,6 +196,12 @@ export function LeadCard({
               <a href={lead.instagram_url} target="_blank" rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-pink-500/10 hover:bg-pink-500/20 transition-all text-pink-400">
                 <Instagram className="w-3 h-3" /> Instagram
+              </a>
+            )}
+            {lead.linkedin_url && (
+              <a href={lead.linkedin_url} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 transition-all text-blue-500">
+                <Linkedin className="w-3 h-3" /> LinkedIn
               </a>
             )}
           </div>
@@ -212,6 +237,54 @@ export function LeadCard({
 
       {expanded && (
         <div className="mt-4 pt-4 border-t border-border space-y-3 ml-8">
+          {/* Owner & Company info */}
+          {(lead.owner_name || lead.company_type || lead.siren) && (
+            <div>
+              <p className="text-xs font-semibold text-foreground mb-1.5 flex items-center gap-1">
+                <Building2 className="w-3 h-3" /> Company Info
+              </p>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                {lead.owner_name && (
+                  <p>
+                    <span className="text-foreground/70">Owner:</span> {lead.owner_name}
+                    {lead.owner_role && ` (${lead.owner_role})`}
+                  </p>
+                )}
+                {lead.owner_phone && (
+                  <p>
+                    <span className="text-foreground/70">Owner phone:</span>{" "}
+                    <a href={`tel:${lead.owner_phone}`} className="text-primary hover:underline">
+                      {lead.owner_phone}
+                    </a>
+                  </p>
+                )}
+                {lead.owner_email && (
+                  <p>
+                    <span className="text-foreground/70">Owner email:</span>{" "}
+                    <a href={`mailto:${lead.owner_email}`} className="hover:underline">
+                      {lead.owner_email}
+                    </a>
+                  </p>
+                )}
+                {lead.company_type && (
+                  <p><span className="text-foreground/70">Type:</span> {lead.company_type}</p>
+                )}
+                {lead.siren && (
+                  <p><span className="text-foreground/70">SIREN:</span> {lead.siren}</p>
+                )}
+                {lead.creation_date && (
+                  <p><span className="text-foreground/70">Created:</span> {lead.creation_date}</p>
+                )}
+                {lead.revenue_bracket && (
+                  <p><span className="text-foreground/70">Revenue:</span> {lead.revenue_bracket}</p>
+                )}
+                {lead.employee_count && (
+                  <p><span className="text-foreground/70">Employees:</span> {lead.employee_count}</p>
+                )}
+              </div>
+            </div>
+          )}
+
           {lead.review_highlights && lead.review_highlights.length > 0 && (
             <div>
               <p className="text-xs font-semibold text-foreground mb-1.5">Reviews</p>

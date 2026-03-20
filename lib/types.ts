@@ -106,6 +106,15 @@ export interface Lead {
   website_quality: WebsiteQuality | null;
   website_score: number | null;
   owner_name: string | null;
+  owner_phone: string | null;
+  owner_email: string | null;
+  owner_role: string | null;
+  linkedin_url: string | null;
+  siren: string | null;
+  company_type: string | null;
+  creation_date: string | null;
+  revenue_bracket: string | null;
+  employee_count: string | null;
   facebook_url: string | null;
   instagram_url: string | null;
   follower_count: number | null;

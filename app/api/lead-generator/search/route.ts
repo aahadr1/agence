@@ -79,11 +79,20 @@ export async function POST(request: Request) {
         website_quality: lead.website_quality,
         website_score: lead.website_score,
         owner_name: lead.owner_name,
+        owner_phone: lead.owner_phone,
+        owner_email: lead.owner_email,
+        owner_role: lead.owner_role,
+        linkedin_url: lead.linkedin_url,
+        siren: lead.siren,
+        company_type: lead.company_type,
+        creation_date: lead.creation_date,
+        revenue_bracket: lead.revenue_bracket,
+        employee_count: lead.employee_count,
         facebook_url: lead.facebook_url,
         instagram_url: lead.instagram_url,
         follower_count: lead.follower_count,
         enrichment_status: "completed",
-        enrichment_data: {},
+        enrichment_data: lead.enrichment_data || {},
       }));
 
       await serviceClient.from("leads").insert(leadsToInsert);
