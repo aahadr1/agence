@@ -1,26 +1,28 @@
 "use client";
 
+import { PageHeader } from "@/components/ui/page-header";
+import { Panel } from "@/components/ui/panel";
 import { createClient } from "@/lib/supabase/client";
-import { Lead, LeadSearch } from "@/lib/types";
+import { Lead, LeadList, LeadListItem, LeadSearch } from "@/lib/types";
 import {
   Search,
   MapPin,
   Loader2,
   Building2,
-  Phone,
-  Mail,
-  Star,
-  Globe,
-  ExternalLink,
-  AlertCircle,
   CheckCircle2,
   XCircle,
-  ChevronDown,
-  ChevronUp,
+  AlertCircle,
+  LayoutList,
+  History,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { LeadCard } from "./components/lead-card";
+import { ListPanel } from "./components/list-panel";
+import { SelectBar } from "./components/select-bar";
+import { OutreachModal } from "./components/outreach-modal";
 
-type SearchPhase = "idle" | "searching" | "analyzing" | "saving" | "completed" | "failed";
+type SearchPhase = "idle" | "searching" | "analyzing" | "completed" | "failed";
+type ViewTab = "search" | "lists";
 
 export default function LeadGeneratorPage() {
   const [niche, setNiche] = useState("");
@@ -31,25 +33,46 @@ export default function LeadGeneratorPage() {
   const [error, setError] = useState<string | null>(null);
   const [pastSearches, setPastSearches] = useState<LeadSearch[]>([]);
   const [selectedSearchId, setSelectedSearchId] = useState<string | null>(null);
-  const [expandedLead, setExpandedLead] = useState<string | null>(null);
+
+  // Lists
+  const [lists, setLists] = useState<LeadList[]>([]);
+  const [activeListId, setActiveListId] = useState<string | null>(null);
+  const [listItems, setListItems] = useState<LeadListItem[]>([]);
+  const [viewTab, setViewTab] = useState<ViewTab>("search");
+
+  // Selection
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+
+  // Filters
   const [filterNoWebsite, setFilterNoWebsite] = useState(false);
+  const [filterBadWebsite, setFilterBadWebsite] = useState(false);
+
+  // Outreach
+  const [outreachModal, setOutreachModal] = useState<{
+    businessName: string;
+    template: string;
+  } | null>(null);
+  const [generatingOutreachId, setGeneratingOutreachId] = useState<string | null>(null);
 
   const supabase = createClient();
 
-  // Load past searches on mount
+  // Load data on mount
   useEffect(() => {
-    const fetchSearches = async () => {
-      const { data } = await supabase
-        .from("lead_searches")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(20);
-      setPastSearches(data || []);
+    const fetchData = async () => {
+      const [searchesRes, listsRes] = await Promise.all([
+        supabase
+          .from("lead_searches")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(20),
+        fetch("/api/lead-generator/lists").then((r) => r.json()),
+      ]);
+      setPastSearches(searchesRes.data || []);
+      setLists(listsRes.lists || []);
     };
-    fetchSearches();
+    fetchData();
   }, [supabase]);
 
-  // Load leads for a search
   const loadLeads = useCallback(
     async (searchId: string) => {
       const { data } = await supabase
@@ -59,33 +82,42 @@ export default function LeadGeneratorPage() {
         .order("has_website", { ascending: true });
       setLeads(data || []);
       setSelectedSearchId(searchId);
+      setSelectedLeadIds(new Set());
     },
     [supabase]
   );
 
+  const loadListItems = useCallback(async (listId: string) => {
+    const res = await fetch(`/api/lead-generator/lists/${listId}`);
+    const data = await res.json();
+    setListItems(data.items || []);
+    setActiveListId(listId);
+  }, []);
+
+  const refreshLists = useCallback(async () => {
+    const res = await fetch("/api/lead-generator/lists");
+    const data = await res.json();
+    setLists(data.lists || []);
+  }, []);
+
+  // Search handler
   const handleSearch = async () => {
     if (!niche.trim() || !location.trim()) return;
 
-    setPhase("searching");
-    setPhaseMessage("Launching browser agent — navigating Google Maps...");
+    setPhase("analyzing");
+    setPhaseMessage(
+      "AI agent browsing Google Maps with multiple search variations, then cross-referencing Google, PagesJaunes, and Facebook... this takes 5-10 minutes"
+    );
     setError(null);
     setLeads([]);
     setSelectedSearchId(null);
+    setSelectedLeadIds(new Set());
 
     try {
-      // Single call: agent browses Google Maps, extracts businesses, saves to DB
-      setPhase("analyzing");
-      setPhaseMessage(
-        "AI agent is browsing Google Maps, clicking through each business to check for websites... this takes 2-4 minutes"
-      );
-
       const searchRes = await fetch("/api/lead-generator/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          niche: niche.trim(),
-          location: location.trim(),
-        }),
+        body: JSON.stringify({ niche: niche.trim(), location: location.trim() }),
       });
 
       if (!searchRes.ok) {
@@ -93,16 +125,15 @@ export default function LeadGeneratorPage() {
         throw new Error(err.error || "Search failed");
       }
 
-      const { searchId, leadsCount, withoutWebsite } = await searchRes.json();
+      const { searchId, leadsCount, withoutWebsite, badWebsite } =
+        await searchRes.json();
 
-      // Load results
       setPhase("completed");
       setPhaseMessage(
-        `Found ${leadsCount} businesses — ${withoutWebsite} without a website!`
+        `Found ${leadsCount} businesses — ${withoutWebsite} without a website, ${badWebsite} with a bad website!`
       );
       await loadLeads(searchId);
 
-      // Refresh past searches
       const { data: updatedSearches } = await supabase
         .from("lead_searches")
         .select("*")
@@ -116,357 +147,422 @@ export default function LeadGeneratorPage() {
     }
   };
 
-  const filteredLeads = filterNoWebsite
-    ? leads.filter((l) => !l.has_website)
+  // Selection
+  const toggleSelect = (id: string) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // List actions
+  const handleCreateList = async (name: string) => {
+    const res = await fetch("/api/lead-generator/lists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) await refreshLists();
+  };
+
+  const handleCreateListWithSelected = async (name: string) => {
+    const leadIds = Array.from(selectedLeadIds);
+    const res = await fetch("/api/lead-generator/lists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, leadIds }),
+    });
+    if (res.ok) {
+      await refreshLists();
+      setSelectedLeadIds(new Set());
+    }
+  };
+
+  const handleAddToList = async (listId: string) => {
+    const leadIds = Array.from(selectedLeadIds);
+    await fetch(`/api/lead-generator/lists/${listId}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leadIds }),
+    });
+    setSelectedLeadIds(new Set());
+    if (activeListId === listId) await loadListItems(listId);
+    await refreshLists();
+  };
+
+  const handleDeleteList = async (listId: string) => {
+    await fetch(`/api/lead-generator/lists/${listId}`, { method: "DELETE" });
+    if (activeListId === listId) {
+      setActiveListId(null);
+      setListItems([]);
+    }
+    await refreshLists();
+  };
+
+  const handleExportList = (listId: string) => {
+    window.open(`/api/lead-generator/lists/${listId}/export`, "_blank");
+  };
+
+  const handleExpandList = async (listId: string) => {
+    const list = lists.find((l) => l.id === listId);
+    if (!list) return;
+
+    setPhase("analyzing");
+    setPhaseMessage(`AI expanding list "${list.name}" — finding new businesses not already in the list...`);
+    setError(null);
+    setViewTab("lists");
+    setActiveListId(listId);
+
+    try {
+      const res = await fetch(`/api/lead-generator/lists/${listId}/expand`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          niche: list.keywords?.[0] || niche,
+          location: list.keywords?.[1] || location,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Expand failed");
+
+      setPhase("completed");
+      setPhaseMessage(`Added ${data.added} new leads to "${list.name}"!`);
+      await loadListItems(listId);
+      await refreshLists();
+    } catch (err) {
+      setPhase("failed");
+      setError(err instanceof Error ? err.message : "Expand failed");
+      setPhaseMessage("");
+    }
+  };
+
+  // Outreach
+  const handleGenerateOutreach = async (leadId: string) => {
+    setGeneratingOutreachId(leadId);
+    try {
+      const res = await fetch("/api/lead-generator/outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, language: "fr" }),
+      });
+      const data = await res.json();
+      if (data.template) {
+        const lead = leads.find((l) => l.id === leadId) ||
+          listItems.find((i) => i.lead_id === leadId)?.lead;
+        setOutreachModal({
+          businessName: lead?.business_name || "Business",
+          template: data.template,
+        });
+      }
+    } catch {
+      // Silently fail
+    }
+    setGeneratingOutreachId(null);
+  };
+
+  // Filter logic
+  const displayLeads = viewTab === "lists" && activeListId
+    ? listItems.map((i) => i.lead!).filter(Boolean)
     : leads;
 
-  const noWebsiteCount = leads.filter((l) => !l.has_website).length;
+  const filteredLeads = displayLeads.filter((l) => {
+    if (filterNoWebsite && l.has_website) return false;
+    if (filterBadWebsite && !(l.website_quality === "dead" || l.website_quality === "outdated" || l.website_quality === "poor")) return false;
+    return true;
+  });
+
+  const noWebsiteCount = displayLeads.filter((l) => !l.has_website).length;
+  const badWebsiteCount = displayLeads.filter((l) =>
+    l.has_website && (l.website_quality === "dead" || l.website_quality === "outdated" || l.website_quality === "poor")
+  ).length;
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground">Lead Generator</h1>
-        <p className="text-muted-foreground mt-1">
-          Find businesses without websites — your next clients
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Prospecting"
+        title="Lead generator"
+        description="Niche plus location. The agent maps the market, then enriches each row."
+      />
 
-      {/* Search form */}
-      <div className="rounded-2xl border border-border bg-card p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <Panel padding="md" className="mb-8 rounded-sm">
+        <div className="mb-6 grid grid-cols-1 gap-5 md:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">
-              Business Niche
-            </label>
+            <label className="label-eyebrow mb-2 block">Niche</label>
             <div className="relative">
-              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Building2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.25} />
               <input
                 type="text"
                 value={niche}
                 onChange={(e) => setNiche(e.target.value)}
-                placeholder="e.g. Restaurant, Plumber, Hair salon..."
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-sm"
-                disabled={phase !== "idle" && phase !== "completed" && phase !== "failed"}
+                placeholder="Restaurant, plumber, salon…"
+                className="input-minimal pl-10"
+                disabled={phase === "analyzing"}
               />
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">
-              Location
-            </label>
+            <label className="label-eyebrow mb-2 block">Location</label>
             <div className="relative">
-              <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.25} />
               <input
                 type="text"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g. Montreal, Paris 11e, Brooklyn NY..."
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-sm"
-                disabled={phase !== "idle" && phase !== "completed" && phase !== "failed"}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSearch();
-                }}
+                placeholder="City, arrondissement, region…"
+                className="input-minimal pl-10"
+                disabled={phase === "analyzing"}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
             </div>
           </div>
         </div>
         <button
+          type="button"
           onClick={handleSearch}
-          disabled={
-            !niche.trim() ||
-            !location.trim() ||
-            (phase !== "idle" && phase !== "completed" && phase !== "failed")
-          }
-          className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25 disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!niche.trim() || !location.trim() || phase === "analyzing"}
+          className="btn-solid disabled:cursor-not-allowed"
         >
-          {phase === "searching" || phase === "analyzing" || phase === "saving" ? (
+          {phase === "analyzing" ? (
             <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Researching...
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Researching
             </>
           ) : (
             <>
-              <Search className="w-4 h-4" />
-              Find Leads
+              <Search className="h-4 w-4" strokeWidth={1.25} />
+              Run search
             </>
           )}
         </button>
 
-        {/* Progress indicator */}
-        {phase !== "idle" && phaseMessage && (
-          <div className="mt-4 flex items-start gap-3 p-3 rounded-xl bg-secondary/50">
-            {phase === "searching" || phase === "analyzing" || phase === "saving" ? (
-              <Loader2 className="w-4 h-4 animate-spin text-primary mt-0.5 shrink-0" />
+        {phase !== "idle" && phaseMessage ? (
+          <div className="mt-6 flex gap-3 border-t border-border pt-6">
+            {phase === "analyzing" ? (
+              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
             ) : phase === "completed" ? (
-              <CheckCircle2 className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" strokeWidth={1.25} />
             ) : (
-              <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" strokeWidth={1.25} />
             )}
             <div>
-              <p className="text-sm text-foreground">{phaseMessage}</p>
-              {(phase === "searching" || phase === "analyzing") && (
-                <div className="flex gap-2 mt-2">
-                  {["Browser", "Google Maps", "Gemini Vision", "Extract Data"].map(
-                    (s) => (
-                      <span
-                        key={s}
-                        className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-primary/10 text-primary"
-                      >
-                        {s}
-                      </span>
-                    )
-                  )}
+              <p className="text-sm leading-relaxed text-foreground">{phaseMessage}</p>
+              {phase === "analyzing" ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {[
+                    "Query expansion",
+                    "Maps",
+                    "Search",
+                    "PagesJaunes",
+                    "Facebook",
+                    "Web check",
+                  ].map((s) => (
+                    <span
+                      key={s}
+                      className="border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+                    >
+                      {s}
+                    </span>
+                  ))}
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
-        )}
+        ) : null}
 
-        {error && (
-          <div className="mt-4 flex items-center gap-2 p-3 rounded-xl bg-red-500/10 text-red-400 text-sm">
-            <XCircle className="w-4 h-4 shrink-0" />
+        {error ? (
+          <div className="mt-4 flex items-center gap-2 border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <XCircle className="h-4 w-4 shrink-0" strokeWidth={1.25} />
             {error}
           </div>
-        )}
-      </div>
+        ) : null}
+      </Panel>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Past searches sidebar */}
-        <div className="lg:col-span-1">
-          <div className="rounded-2xl border border-border bg-card p-4">
-            <h3 className="text-sm font-semibold text-foreground mb-3">
-              Search History
-            </h3>
-            {pastSearches.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No searches yet</p>
-            ) : (
-              <div className="space-y-2">
-                {pastSearches.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => loadLeads(s.id)}
-                    className={`w-full text-left p-3 rounded-xl transition-all text-sm ${
-                      selectedSearchId === s.id
-                        ? "bg-primary/15 border border-primary/30"
-                        : "bg-secondary/50 hover:bg-secondary border border-transparent"
-                    }`}
-                  >
-                    <p className="font-medium text-foreground truncate">
-                      {s.niche}
-                    </p>
-                    <p className="text-xs text-muted-foreground truncate">
-                      {s.location}
-                    </p>
-                    <div className="flex items-center justify-between mt-1.5">
-                      <span className="text-[10px] text-muted-foreground">
-                        {new Date(s.created_at).toLocaleDateString()}
-                      </span>
-                      {s.status === "completed" ? (
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">
-                          {s.leads_count} leads
-                        </span>
-                      ) : s.status === "failed" ? (
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">
-                          Failed
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">
-                          {s.status}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+      <div className="grid grid-cols-1 gap-8 border-t border-border pt-10 lg:grid-cols-4">
+        <div className="space-y-4 lg:col-span-1">
+          <div className="flex border border-border">
+            <button
+              type="button"
+              onClick={() => setViewTab("search")}
+              className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[10px] font-medium uppercase tracking-[0.1em] transition-colors ${
+                viewTab === "search"
+                  ? "-mb-px border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <History className="h-3 w-3" strokeWidth={1.25} /> History
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewTab("lists")}
+              className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[10px] font-medium uppercase tracking-[0.1em] transition-colors ${
+                viewTab === "lists"
+                  ? "-mb-px border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <LayoutList className="h-3 w-3" strokeWidth={1.25} /> Lists
+            </button>
           </div>
+
+          {viewTab === "search" ? (
+            <Panel padding="sm" className="rounded-sm">
+              <h3 className="label-eyebrow mb-4">Past runs</h3>
+              {pastSearches.length === 0 ? (
+                <p className="text-xs text-muted-foreground">None yet.</p>
+              ) : (
+                <div className="divide-y divide-border border border-border">
+                  {pastSearches.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        loadLeads(s.id);
+                        setViewTab("search");
+                      }}
+                      className={`w-full px-3 py-3 text-left text-sm transition-colors hover:bg-secondary/40 ${
+                        selectedSearchId === s.id ? "bg-secondary/50" : ""
+                      }`}
+                    >
+                      <p className="truncate font-medium text-foreground">{s.niche}</p>
+                      <p className="truncate text-xs text-muted-foreground">{s.location}</p>
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {new Date(s.created_at).toLocaleDateString()}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                          {s.status === "completed"
+                            ? `${s.leads_count} leads`
+                            : s.status === "failed"
+                              ? "Failed"
+                              : s.status}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          ) : (
+            <ListPanel
+              lists={lists}
+              activeListId={activeListId}
+              onSelectList={(id) => { loadListItems(id); }}
+              onCreateList={handleCreateList}
+              onDeleteList={handleDeleteList}
+              onExportList={handleExportList}
+              onExpandList={handleExpandList}
+            />
+          )}
         </div>
 
-        {/* Results */}
         <div className="lg:col-span-3">
-          {leads.length > 0 ? (
+          {filteredLeads.length > 0 || displayLeads.length > 0 ? (
             <>
-              {/* Filter bar */}
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-muted-foreground">
-                    {filteredLeads.length} businesses
+              <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {filteredLeads.length} shown
                   </span>
                   <button
-                    onClick={() => setFilterNoWebsite(!filterNoWebsite)}
-                    className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-all ${
+                    type="button"
+                    onClick={() => {
+                      setFilterNoWebsite(!filterNoWebsite);
+                      setFilterBadWebsite(false);
+                    }}
+                    className={`border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em] transition-colors ${
                       filterNoWebsite
-                        ? "bg-primary/20 text-primary border border-primary/30"
-                        : "bg-secondary text-muted-foreground hover:text-foreground border border-transparent"
+                        ? "border-foreground bg-foreground text-primary-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/25"
                     }`}
                   >
-                    <XCircle className="w-3 h-3" />
-                    No website only ({noWebsiteCount})
+                    No site ({noWebsiteCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterBadWebsite(!filterBadWebsite);
+                      setFilterNoWebsite(false);
+                    }}
+                    className={`border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em] transition-colors ${
+                      filterBadWebsite
+                        ? "border-foreground bg-foreground text-primary-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/25"
+                    }`}
+                  >
+                    Weak site ({badWebsiteCount})
                   </button>
                 </div>
+
+                {displayLeads.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedLeadIds.size === filteredLeads.length) {
+                        setSelectedLeadIds(new Set());
+                      } else {
+                        setSelectedLeadIds(new Set(filteredLeads.map((l) => l.id)));
+                      }
+                    }}
+                    className="text-[11px] font-medium underline underline-offset-4 hover:no-underline"
+                  >
+                    {selectedLeadIds.size === filteredLeads.length
+                      ? "Clear selection"
+                      : "Select all"}
+                  </button>
+                ) : null}
               </div>
 
               {/* Lead cards */}
               <div className="space-y-3">
                 {filteredLeads.map((lead) => (
-                  <div
+                  <LeadCard
                     key={lead.id}
-                    className={`rounded-2xl border bg-card p-5 transition-all duration-200 ${
-                      lead.has_website
-                        ? "border-border opacity-60"
-                        : "border-primary/20 shadow-sm shadow-primary/5"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="font-semibold text-foreground truncate">
-                            {lead.business_name}
-                          </h3>
-                          {!lead.has_website ? (
-                            <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">
-                              NO WEBSITE
-                            </span>
-                          ) : (
-                            <span className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">
-                              Has website
-                            </span>
-                          )}
-                        </div>
-                        {lead.description && (
-                          <p className="text-sm text-muted-foreground mb-2 line-clamp-2">
-                            {lead.description}
-                          </p>
-                        )}
-
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                          {lead.address && (
-                            <span className="flex items-center gap-1">
-                              <MapPin className="w-3 h-3" />
-                              {lead.address}
-                            </span>
-                          )}
-                          {lead.phone && (
-                            <a
-                              href={`tel:${lead.phone}`}
-                              className="flex items-center gap-1 text-primary hover:underline"
-                            >
-                              <Phone className="w-3 h-3" />
-                              {lead.phone}
-                            </a>
-                          )}
-                          {lead.email && (
-                            <a
-                              href={`mailto:${lead.email}`}
-                              className="flex items-center gap-1 text-primary hover:underline"
-                            >
-                              <Mail className="w-3 h-3" />
-                              {lead.email}
-                            </a>
-                          )}
-                          {lead.rating && (
-                            <span className="flex items-center gap-1">
-                              <Star className="w-3 h-3 text-yellow-400" />
-                              {lead.rating}
-                              {lead.review_count && (
-                                <span className="text-muted-foreground">
-                                  ({lead.review_count} reviews)
-                                </span>
-                              )}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 ml-4 shrink-0">
-                        {lead.google_maps_url && (
-                          <a
-                            href={lead.google_maps_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 transition-all"
-                            title="View on Google Maps"
-                          >
-                            <MapPin className="w-4 h-4 text-muted-foreground" />
-                          </a>
-                        )}
-                        {lead.website_url && (
-                          <a
-                            href={lead.website_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 transition-all"
-                            title="Visit website"
-                          >
-                            <Globe className="w-4 h-4 text-muted-foreground" />
-                          </a>
-                        )}
-                        <button
-                          onClick={() =>
-                            setExpandedLead(
-                              expandedLead === lead.id ? null : lead.id
-                            )
-                          }
-                          className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 transition-all"
-                        >
-                          {expandedLead === lead.id ? (
-                            <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                          ) : (
-                            <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Expanded details */}
-                    {expandedLead === lead.id && (
-                      <div className="mt-4 pt-4 border-t border-border space-y-3">
-                        {lead.review_highlights &&
-                          lead.review_highlights.length > 0 && (
-                            <div>
-                              <p className="text-xs font-semibold text-foreground mb-1.5">
-                                Review Highlights
-                              </p>
-                              <div className="space-y-1">
-                                {lead.review_highlights.map((r, i) => (
-                                  <p
-                                    key={i}
-                                    className="text-xs text-muted-foreground pl-3 border-l-2 border-primary/30"
-                                  >
-                                    &ldquo;{r}&rdquo;
-                                  </p>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        {lead.source && (
-                          <p className="text-[10px] text-muted-foreground">
-                            Source: {lead.source}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                    lead={lead}
+                    selected={selectedLeadIds.has(lead.id)}
+                    onSelect={toggleSelect}
+                    onGenerateOutreach={handleGenerateOutreach}
+                    generatingOutreach={generatingOutreachId === lead.id}
+                  />
                 ))}
               </div>
             </>
           ) : phase === "idle" ? (
-            <div className="rounded-2xl border border-border bg-card p-12 text-center">
-              <div className="inline-flex items-center justify-center p-4 rounded-2xl bg-secondary mb-4">
-                <Search className="w-10 h-10 text-muted-foreground" />
-              </div>
-              <h2 className="text-lg font-semibold text-foreground mb-2">
-                Find your next clients
+            <Panel padding="lg" className="rounded-sm text-center">
+              <Search className="mx-auto mb-5 h-8 w-8 text-muted-foreground" strokeWidth={1} />
+              <p className="label-eyebrow mb-2">Start</p>
+              <h2 className="font-display text-xl font-medium text-foreground md:text-2xl">
+                Run a search
               </h2>
-              <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                Enter a business niche and location above. The AI will search
-                Google Maps, directories, and review sites to find businesses
-                that don&apos;t have a website yet.
+              <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">
+                Maps-first discovery, then enrichment across search and directories.
+                Results appear in the list on the right.
               </p>
-            </div>
+            </Panel>
           ) : null}
         </div>
       </div>
+
+      {/* Selection action bar */}
+      <SelectBar
+        selectedCount={selectedLeadIds.size}
+        lists={lists}
+        onAddToList={handleAddToList}
+        onCreateListWithSelected={handleCreateListWithSelected}
+        onClearSelection={() => setSelectedLeadIds(new Set())}
+        onExportSelected={() => {}}
+      />
+
+      {/* Outreach modal */}
+      {outreachModal && (
+        <OutreachModal
+          businessName={outreachModal.businessName}
+          template={outreachModal.template}
+          onClose={() => setOutreachModal(null)}
+        />
+      )}
     </div>
   );
 }

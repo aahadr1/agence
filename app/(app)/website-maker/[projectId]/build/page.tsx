@@ -1,13 +1,15 @@
 "use client";
 
+import { PageHeader } from "@/components/ui/page-header";
+import { Panel } from "@/components/ui/panel";
 import { Stepper } from "@/components/website-maker/stepper";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
   Check,
   Code2,
-  ExternalLink,
   Eye,
+  ExternalLink,
   Globe,
   Loader2,
   Monitor,
@@ -362,95 +364,77 @@ export default function BuildPage() {
 
   if (showPreview && previewUrl) {
     return (
-      <div className="animate-fade-in max-w-[1400px] mx-auto">
+      <div className="animate-fade-in mx-auto max-w-[1400px]">
         <Stepper currentStep={4} />
 
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              {phase === "deployed" && vercelUrl ? (
-                <div className="flex items-center gap-2 text-green-400">
-                  <Globe className="w-5 h-5" />
-                  <h2 className="text-xl font-bold text-foreground">
-                    Your website is live!
-                  </h2>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 text-primary">
-                  <Eye className="w-5 h-5" />
-                  <h2 className="text-xl font-bold text-foreground">
-                    Website Preview
-                  </h2>
-                </div>
-              )}
-            </div>
-            <p className="text-muted-foreground text-sm">
-              {filesCount} pages generated
-              {vercelUrl && (
+        <PageHeader
+          eyebrow={phase === "deployed" && vercelUrl ? "Live" : "Build"}
+          title={
+            phase === "deployed" && vercelUrl
+              ? "Site is published"
+              : "Preview"
+          }
+          description={
+            <>
+              {filesCount} pages
+              {vercelUrl ? (
                 <>
-                  {" "}—{" "}
+                  {" · "}
                   <a
                     href={vercelUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-primary hover:underline"
+                    className="underline underline-offset-4 hover:no-underline"
                   >
                     {vercelUrl}
                   </a>
                 </>
-              )}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
+              ) : null}
+            </>
+          }
+          className="mb-8"
+        >
+          <div className="flex flex-wrap items-center gap-2">
             {phase === "deploying" ? (
-              <div className="inline-flex items-center gap-2 rounded-xl bg-secondary px-4 py-2.5 text-sm text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Publishing...
-              </div>
+              <span className="inline-flex items-center gap-2 border border-border px-3 py-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Publishing
+              </span>
             ) : vercelUrl ? (
               <a
                 href={vercelUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-500 transition-all shadow-lg shadow-green-600/25"
+                className="btn-solid"
               >
-                <ExternalLink className="w-4 h-4" />
-                Open Live Site
+                <ExternalLink className="h-4 w-4" strokeWidth={1.25} />
+                Open live
               </a>
             ) : (
-              <button
-                onClick={handleDeploy}
-                className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25"
-              >
-                <Rocket className="w-4 h-4" />
-                Publish to Web
+              <button type="button" onClick={handleDeploy} className="btn-solid">
+                <Rocket className="h-4 w-4" strokeWidth={1.25} />
+                Publish
               </button>
             )}
-            <button
-              onClick={handleRetry}
-              className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all"
-            >
-              <RefreshCw className="w-4 h-4" />
+            <button type="button" onClick={handleRetry} className="btn-outline">
+              <RefreshCw className="h-4 w-4" strokeWidth={1.25} />
               Regenerate
             </button>
           </div>
-        </div>
+        </PageHeader>
 
-        {/* Page tabs + Viewport controls */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
-          {/* Page tabs */}
+        <div className="mb-4 flex flex-col justify-between gap-4 border-t border-border pt-8 sm:flex-row sm:items-center">
           <div className="flex items-center gap-1 overflow-x-auto pb-1">
             {pages.map((page) => (
               <button
                 key={page.path}
+                type="button"
                 onClick={() => setActivePage(page.path)}
                 className={cn(
-                  "px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all",
+                  "whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium uppercase tracking-[0.08em] transition-colors",
                   activePage === page.path
-                    ? "bg-primary text-primary-foreground shadow-md"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                    ? "-mb-px border-foreground text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
                 )}
               >
                 {page.label}
@@ -458,8 +442,7 @@ export default function BuildPage() {
             ))}
           </div>
 
-          {/* Viewport switcher */}
-          <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
+          <div className="flex items-center gap-0 border border-border p-0.5">
             {[
               { mode: "desktop" as ViewportMode, icon: Monitor, label: "Desktop" },
               { mode: "tablet" as ViewportMode, icon: Tablet, label: "Tablet" },
@@ -467,51 +450,47 @@ export default function BuildPage() {
             ].map(({ mode, icon: Icon, label }) => (
               <button
                 key={mode}
+                type="button"
                 onClick={() => setViewportMode(mode)}
                 title={label}
                 className={cn(
-                  "p-2 rounded-md transition-all",
+                  "p-2 transition-colors",
                   viewportMode === mode
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "bg-foreground text-primary-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <Icon className="w-4 h-4" />
+                <Icon className="h-4 w-4" strokeWidth={1.25} />
               </button>
             ))}
           </div>
         </div>
 
-        {/* Browser chrome + iframe */}
-        <div className="rounded-2xl border border-border overflow-hidden shadow-xl bg-card">
-          {/* Browser bar */}
-          <div className="flex items-center gap-2 px-4 py-3 bg-secondary/50 border-b border-border">
-            <div className="flex gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-red-400" />
-              <div className="w-3 h-3 rounded-full bg-yellow-400" />
-              <div className="w-3 h-3 rounded-full bg-green-400" />
+        <Panel padding="none" className="overflow-hidden rounded-sm border-border">
+          <div className="flex items-center gap-3 border-b border-border bg-secondary/30 px-4 py-3">
+            <div className="flex gap-1">
+              <span className="h-2 w-2 rounded-full bg-black/15" />
+              <span className="h-2 w-2 rounded-full bg-black/10" />
+              <span className="h-2 w-2 rounded-full bg-black/20" />
             </div>
-            <div className="flex-1 flex items-center justify-center">
-              <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-1.5 text-xs text-muted-foreground max-w-md w-full">
-                <Globe className="w-3 h-3 shrink-0" />
-                <span className="truncate">
-                  {vercelUrl || `preview — ${activePage}`}
-                </span>
-              </div>
+            <div className="mx-auto flex max-w-md flex-1 items-center gap-2 border border-border bg-background px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
+              <Globe className="h-3 w-3 shrink-0" strokeWidth={1.25} />
+              <span className="truncate">
+                {vercelUrl || activePage}
+              </span>
             </div>
             <a
               href={previewUrl + activePage}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="text-muted-foreground hover:text-foreground"
             >
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className="h-4 w-4" strokeWidth={1.25} />
             </a>
           </div>
 
-          {/* Iframe container */}
           <div
-            className="bg-white flex justify-center"
+            className="flex justify-center bg-[var(--preview-chrome)]"
             style={{ minHeight: "80vh" }}
           >
             <iframe
@@ -526,151 +505,114 @@ export default function BuildPage() {
               title="Website Preview"
             />
           </div>
-        </div>
+        </Panel>
 
         {error && (
-          <div className="mt-4 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4 text-center">
-            <p className="text-sm text-yellow-400">{error}</p>
+          <div className="mt-4 border border-border bg-secondary/50 p-4 text-center">
+            <p className="text-sm text-foreground">{error}</p>
           </div>
         )}
       </div>
     );
   }
 
-  // Building / Error states
   return (
-    <div className="animate-fade-in max-w-3xl mx-auto">
+    <div className="animate-fade-in mx-auto max-w-3xl">
       <Stepper currentStep={4} />
 
-      <div className="text-center mb-10">
-        <h2 className="text-xl font-bold text-foreground mb-2">
-          Building Your Website
-        </h2>
-        <p className="text-muted-foreground text-sm">
-          AI is generating a complete multi-page website from your selected
-          design
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Build"
+        title="Generating site"
+        description="One pass writes all pages; preview appears when parsing finishes."
+        className="mb-10"
+      />
 
-      {/* Progress steps */}
-      <div className="space-y-4 mb-10">
+      <div className="mb-10 space-y-0 border border-border bg-card">
         {PROGRESS_STEPS.map((step, index) => {
           const isCurrent = index === currentStepIndex;
           const isDone = index < currentStepIndex;
-          const isFailed =
-            phase === "failed" && index === currentStepIndex;
+          const isFailed = phase === "failed" && index === currentStepIndex;
           const Icon = step.icon;
 
           return (
             <div
               key={step.key}
               className={cn(
-                "flex items-center gap-4 rounded-xl border p-4 transition-all duration-500",
-                isCurrent && !isFailed
-                  ? "border-primary bg-primary/5 shadow-lg shadow-primary/10"
-                  : isDone
-                  ? "border-green-500/30 bg-green-500/5"
-                  : isFailed
-                  ? "border-red-500/30 bg-red-500/5"
-                  : "border-border bg-card opacity-50"
+                "flex items-center gap-4 border-b border-border p-4 last:border-b-0",
+                isCurrent && !isFailed && "bg-secondary/30",
+                isFailed && "bg-destructive/5"
               )}
             >
               <div
                 className={cn(
-                  "flex items-center justify-center w-10 h-10 rounded-xl transition-all",
-                  isCurrent && !isFailed
-                    ? "bg-primary text-primary-foreground"
-                    : isDone
-                    ? "bg-green-500/10 text-green-400"
-                    : isFailed
-                    ? "bg-red-500/10 text-red-400"
-                    : "bg-secondary text-muted-foreground"
+                  "flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-background",
+                  isDone && "border-foreground bg-foreground text-primary-foreground"
                 )}
               >
                 {isDone ? (
-                  <Check className="w-5 h-5" />
+                  <Check className="h-4 w-4" strokeWidth={2} />
                 ) : isFailed ? (
-                  <AlertTriangle className="w-5 h-5" />
+                  <AlertTriangle className="h-4 w-4 text-destructive" />
                 ) : isCurrent ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 ) : (
-                  <Icon className="w-5 h-5" />
+                  <Icon className="h-4 w-4 text-muted-foreground" strokeWidth={1.25} />
                 )}
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <p
                   className={cn(
-                    "font-semibold text-sm",
-                    isCurrent || isDone
-                      ? "text-foreground"
-                      : "text-muted-foreground"
+                    "text-sm font-medium",
+                    isCurrent || isDone ? "text-foreground" : "text-muted-foreground"
                   )}
                 >
                   {step.label}
                 </p>
-                {isCurrent && (
-                  <p className="text-xs text-muted-foreground mt-0.5 animate-fade-in">
+                {isCurrent ? (
+                  <p className="mt-0.5 text-xs text-muted-foreground">
                     {PHASE_INFO[phase]?.description}
                   </p>
-                )}
-                {isDone && (
-                  <p className="text-xs text-green-400 mt-0.5">
-                    Complete
+                ) : null}
+                {isDone ? (
+                  <p className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+                    Done
                   </p>
-                )}
+                ) : null}
               </div>
-              {isCurrent && filesCount > 0 && (
-                <div className="text-xs text-muted-foreground">
-                  {filesCount} pages
-                </div>
-              )}
+              {isCurrent && filesCount > 0 ? (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {filesCount} pg
+                </span>
+              ) : null}
             </div>
           );
         })}
       </div>
 
-      {/* Generating animation */}
       {phase === "generating" && (
-        <div className="text-center animate-fade-in">
-          <div className="inline-flex flex-col items-center gap-3 rounded-2xl border border-border bg-card p-8">
-            <div className="relative">
-              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-                <Code2 className="w-8 h-8 text-primary" />
-              </div>
-              <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary flex items-center justify-center animate-pulse">
-                <Loader2 className="w-3 h-3 text-primary-foreground animate-spin" />
-              </div>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                AI is writing your website...
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                This usually takes 2-4 minutes
-              </p>
-            </div>
+        <Panel padding="lg" className="rounded-sm text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-border">
+            <Code2 className="h-5 w-5 text-muted-foreground" strokeWidth={1.25} />
           </div>
-        </div>
+          <p className="text-sm font-medium text-foreground">Writing pages…</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Typically two to four minutes.
+          </p>
+        </Panel>
       )}
 
-      {/* Error state */}
       {phase === "failed" && error && (
-        <div className="text-center animate-fade-in">
-          <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-6 mb-6">
-            <AlertTriangle className="w-8 h-8 text-red-400 mx-auto mb-3" />
-            <p className="text-sm text-red-400 font-medium mb-1">
-              Build Failed
-            </p>
-            <p className="text-xs text-muted-foreground max-w-md mx-auto">
+        <div className="text-center">
+          <Panel padding="md" className="mb-6 rounded-sm border-destructive/20">
+            <AlertTriangle className="mx-auto mb-3 h-7 w-7 text-destructive" />
+            <p className="text-sm font-medium text-destructive">Build failed</p>
+            <p className="mx-auto mt-2 max-w-md text-xs text-muted-foreground">
               {error}
             </p>
-          </div>
-          <button
-            onClick={handleRetry}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Retry Build
+          </Panel>
+          <button type="button" onClick={handleRetry} className="btn-solid">
+            <RefreshCw className="h-4 w-4" strokeWidth={1.25} />
+            Retry
           </button>
         </div>
       )}

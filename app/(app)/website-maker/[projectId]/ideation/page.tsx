@@ -1,8 +1,10 @@
 "use client";
 
+import { PageHeader } from "@/components/ui/page-header";
+import { Panel } from "@/components/ui/panel";
 import { Stepper } from "@/components/website-maker/stepper";
 import { Variant } from "@/lib/types";
-import { Loader2, Sparkles, Wand2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -62,7 +64,6 @@ export default function IdeationPage() {
 
     const startIdeation = async () => {
       try {
-        // Step 1: Start ideation prediction
         const ideationRes = await fetch("/api/ideation", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -80,7 +81,6 @@ export default function IdeationPage() {
           throw new Error("Ideation API did not return a prediction ID");
         }
 
-        // Poll ideation prediction
         let ideationOutput: string | null = null;
         for (let i = 0; i < 120; i++) {
           await new Promise((r) => setTimeout(r, 3000));
@@ -101,7 +101,6 @@ export default function IdeationPage() {
         }
         if (!ideationOutput) throw new Error("Ideation timed out");
 
-        // Save concepts
         const saveRes = await fetch("/api/ideation/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -120,7 +119,6 @@ export default function IdeationPage() {
         setVariants(newVariants);
         setGenerating(false);
 
-        // Step 2: Generate images for each variant (in parallel)
         const initialStatuses: Record<
           string,
           "pending" | "generating" | "done" | "failed"
@@ -143,11 +141,6 @@ export default function IdeationPage() {
             });
 
             if (!imgRes.ok) {
-              const errData = await safeJson(imgRes).catch(() => ({}));
-              console.error(
-                `[generate-image] variant ${variant.id} failed:`,
-                errData
-              );
               setImageStatuses((prev) => ({
                 ...prev,
                 [variant.id]: "failed",
@@ -157,11 +150,7 @@ export default function IdeationPage() {
 
             const { predictionId } = await safeJson(imgRes);
             pollPrediction(predictionId, variant.id);
-          } catch (err) {
-            console.error(
-              `[generate-image] variant ${variant.id} error:`,
-              err
-            );
+          } catch {
             setImageStatuses((prev) => ({
               ...prev,
               [variant.id]: "failed",
@@ -191,115 +180,111 @@ export default function IdeationPage() {
   };
 
   return (
-    <div className="animate-fade-in max-w-5xl mx-auto">
+    <div className="animate-fade-in mx-auto max-w-5xl">
       <Stepper currentStep={2} />
 
-      <div className="text-center mb-8">
-        <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-primary/10 mb-4">
-          <Wand2 className="w-7 h-7 text-primary" />
-        </div>
-        <h2 className="text-xl font-bold text-foreground">
-          {generating
-            ? "AI is designing your concepts..."
-            : "Your Website Concepts"}
-        </h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          {generating
-            ? "Creating 3 unique design variations for your business"
-            : "3 unique designs generated. Waiting for visuals..."}
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Concepts"
+        title={
+          generating
+            ? "Designing directions"
+            : "Three directions"
+        }
+        description={
+          generating
+            ? "Research-backed themes and mockups are being prepared."
+            : "Review thumbnails. When all three finish, continue to selection."
+        }
+        className="mb-10"
+      />
 
-      {error && (
-        <p className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2 mb-6 text-center">
+      {error ? (
+        <p className="mb-8 border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}
         </p>
-      )}
+      ) : null}
 
       {generating ? (
-        <div className="flex flex-col items-center py-12">
-          <Loader2 className="w-10 h-10 text-primary animate-spin mb-6" />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
+        <div className="flex flex-col items-center border-t border-border py-14">
+          <Loader2 className="mb-6 h-8 w-8 animate-spin text-muted-foreground" />
+          <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-3">
             {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="rounded-2xl border border-border bg-card overflow-hidden"
-              >
+              <Panel key={i} padding="none" className="overflow-hidden rounded-sm">
                 <div className="aspect-[4/3] animate-shimmer" />
-                <div className="p-4 space-y-2">
-                  <div className="h-4 w-24 rounded animate-shimmer" />
-                  <div className="h-3 w-full rounded animate-shimmer" />
-                  <div className="h-3 w-3/4 rounded animate-shimmer" />
+                <div className="space-y-2 border-t border-border p-4">
+                  <div className="h-3 w-20 animate-shimmer" />
+                  <div className="h-2 w-full animate-shimmer" />
                 </div>
-              </div>
+              </Panel>
             ))}
           </div>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 gap-6 border-t border-border pt-10 md:grid-cols-3">
             {variants.map((variant, index) => (
-              <div
+              <Panel
                 key={variant.id}
-                className="rounded-2xl border border-border bg-card overflow-hidden animate-fade-in"
-                style={{ animationDelay: `${index * 150}ms` }}
+                padding="none"
+                className="overflow-hidden rounded-sm animate-fade-in"
               >
-                <div className="aspect-[4/3] relative bg-secondary">
+                <div className="aspect-[4/3] bg-secondary">
                   {imageStatuses[variant.id] === "done" &&
                   variant.image_url ? (
                     <img
                       src={variant.image_url}
                       alt={variant.theme_name}
-                      className="w-full h-full object-cover transition-opacity duration-500"
+                      className="h-full w-full object-cover"
                     />
                   ) : imageStatuses[variant.id] === "failed" ? (
-                    <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                      Failed to generate
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      Failed
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-full gap-3">
-                      <Loader2 className="w-6 h-6 text-primary animate-spin" />
-                      <span className="text-xs text-muted-foreground">
-                        Generating image...
+                    <div className="flex h-full flex-col items-center justify-center gap-2">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                        Rendering
                       </span>
                     </div>
                   )}
                 </div>
-                <div className="p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                      Variant {index + 1}
+                <div className="border-t border-border p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                      {String(index + 1).padStart(2, "0")}
                     </span>
                     {variant.color_scheme && (
-                      <div className="flex gap-1 ml-auto">
-                        {Object.values(variant.color_scheme).map(
-                          (color, ci) => (
+                      <div className="ml-auto flex gap-1">
+                        {Object.values(variant.color_scheme)
+                          .filter((c) => typeof c === "string" && c.startsWith("#"))
+                          .map((color, ci) => (
                             <div
                               key={ci}
-                              className="w-4 h-4 rounded-full border border-border"
-                              style={{ backgroundColor: color }}
+                              className="h-3 w-3 border border-border"
+                              style={{ backgroundColor: color as string }}
                             />
-                          )
-                        )}
+                          ))}
                       </div>
                     )}
                   </div>
-                  <h3 className="font-semibold text-foreground text-sm">
+                  <h3 className="text-sm font-medium text-foreground">
                     {variant.theme_name}
                   </h3>
                 </div>
-              </div>
+              </Panel>
             ))}
           </div>
 
           {allDone && (
-            <div className="mt-8 text-center animate-fade-in">
+            <div className="mt-12 flex justify-center border-t border-border pt-10">
               <button
+                type="button"
                 onClick={handleProceed}
-                className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25"
+                className="btn-solid"
               >
-                <Sparkles className="w-4 h-4" />
-                Choose Your Favorite
+                <Sparkles className="h-4 w-4" strokeWidth={1.25} />
+                Choose a design
               </button>
             </div>
           )}

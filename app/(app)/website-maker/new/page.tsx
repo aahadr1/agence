@@ -1,5 +1,7 @@
 "use client";
 
+import { PageHeader } from "@/components/ui/page-header";
+import { Panel } from "@/components/ui/panel";
 import { Stepper } from "@/components/website-maker/stepper";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -13,7 +15,6 @@ import {
   MessageSquare,
   Palette,
   Plus,
-  Search,
   Sparkles,
   Trash2,
   Upload,
@@ -418,146 +419,138 @@ export default function NewProjectPage() {
   // Processing view
   if (phase === "processing" || phase === "done") {
     return (
-      <div className="animate-fade-in max-w-2xl mx-auto">
+      <div className="animate-fade-in mx-auto max-w-2xl">
         <Stepper currentStep={phase === "done" ? 2 : 1} />
 
-        <div className="text-center py-8">
-          <div className="inline-flex items-center justify-center p-4 rounded-2xl bg-primary/10 mb-6">
-            {phase === "done" ? (
-              <Check className="w-8 h-8 text-green-400" />
-            ) : (
-              <Loader2 className="w-8 h-8 text-primary animate-spin" />
-            )}
-          </div>
-          <h2 className="text-xl font-bold text-foreground mb-2">
-            {phase === "done"
-              ? "Your designs are ready!"
-              : "Building your website concepts"}
-          </h2>
-          <p className="text-muted-foreground text-sm mb-8">{currentStep}</p>
-
-          {/* Progress bar */}
-          <div className="max-w-md mx-auto">
-            <div className="h-2 bg-secondary rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-primary to-accent rounded-full transition-all duration-700 ease-out"
-                style={{ width: `${progress}%` }}
-              />
+        <Panel padding="lg" className="rounded-sm">
+          <div className="flex flex-col items-center py-4 text-center">
+            <div className="mb-6 flex h-12 w-12 items-center justify-center border border-border bg-background">
+              {phase === "done" ? (
+                <Check className="h-5 w-5 text-foreground" strokeWidth={1.5} />
+              ) : (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              )}
             </div>
-            <p className="text-xs text-muted-foreground mt-2">{progress}%</p>
-          </div>
+            <h2 className="font-display text-xl font-medium text-foreground md:text-2xl">
+              {phase === "done"
+                ? "Designs are ready"
+                : "Building concepts"}
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">{currentStep}</p>
 
-          {/* Pipeline steps visualization */}
-          <div className="mt-10 grid grid-cols-3 md:grid-cols-6 gap-3 max-w-2xl mx-auto">
-            {[
-              { label: "Upload", threshold: 15 },
-              { label: "Search", threshold: 30 },
-              { label: "Vision", threshold: 45 },
-              { label: "Synthesis", threshold: 60 },
-              { label: "Concepts", threshold: 80 },
-              { label: "Mockups", threshold: 95 },
-            ].map((step) => (
-              <div
-                key={step.label}
-                className={cn(
-                  "rounded-xl border p-3 transition-all duration-500",
-                  progress >= step.threshold
-                    ? "border-primary/50 bg-primary/5"
-                    : progress >= step.threshold - 15
-                    ? "border-border bg-card animate-pulse"
-                    : "border-border bg-card opacity-40"
-                )}
-              >
+            <div className="mt-8 w-full max-w-md">
+              <div className="h-px w-full overflow-hidden bg-black/[0.08]">
                 <div
+                  className="h-px bg-foreground transition-all duration-700 ease-out"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <p className="mt-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+                {progress}%
+              </p>
+            </div>
+
+            <div className="mt-10 grid w-full max-w-2xl grid-cols-3 gap-px bg-black/[0.08] md:grid-cols-6">
+              {[
+                { label: "Upload", threshold: 15 },
+                { label: "Search", threshold: 30 },
+                { label: "Vision", threshold: 45 },
+                { label: "Synthesis", threshold: 60 },
+                { label: "Concepts", threshold: 80 },
+                { label: "Mockups", threshold: 95 },
+              ].map((step) => (
+                <div
+                  key={step.label}
                   className={cn(
-                    "text-xs font-semibold mb-1",
+                    "border border-border bg-card p-3 text-left transition-colors",
                     progress >= step.threshold
-                      ? "text-primary"
-                      : "text-muted-foreground"
+                      ? "bg-secondary/60"
+                      : "opacity-50"
                   )}
                 >
-                  {progress >= step.threshold ? (
-                    <Check className="w-3 h-3 inline mr-1" />
-                  ) : null}
-                  {step.label}
-                </div>
-                <div className="h-1 bg-secondary rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-primary rounded-full transition-all duration-500"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        Math.max(
-                          0,
-                          ((progress - step.threshold + 15) / 15) * 100
-                        )
-                      )}%`,
-                    }}
-                  />
+                    className={cn(
+                      "mb-2 text-[10px] font-medium uppercase tracking-[0.1em]",
+                      progress >= step.threshold
+                        ? "text-foreground"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {progress >= step.threshold ? (
+                      <Check className="mr-1 inline h-3 w-3" strokeWidth={2} />
+                    ) : null}
+                    {step.label}
+                  </div>
+                  <div className="h-px w-full overflow-hidden bg-black/[0.06]">
+                    <div
+                      className="h-px bg-foreground transition-all duration-500"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(
+                            0,
+                            ((progress - step.threshold + 15) / 15) * 100
+                          )
+                        )}%`,
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        </Panel>
       </div>
     );
   }
 
   return (
-    <div className="animate-fade-in max-w-3xl mx-auto">
+    <div className="animate-fade-in mx-auto max-w-3xl">
       <Stepper currentStep={1} />
 
-      <div className="text-center mb-6">
-        <h2 className="text-xl font-bold text-foreground">
-          Create Your Website
-        </h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Tell us about the business and upload assets — AI handles the rest
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Step one"
+        title="Business & assets"
+        description="Name, address, logo, and optional photos. We research the rest on the web."
+        className="mb-10"
+      />
 
-      <form onSubmit={handleSubmit} className="space-y-5">
-        {/* Business info card */}
-        <div className="rounded-2xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-primary" />
-            Business Details
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Panel padding="md" className="rounded-sm">
+          <h3 className="label-eyebrow mb-6 flex items-center gap-2">
+            <Building2 className="h-3.5 w-3.5" strokeWidth={1.25} />
+            Details
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1.5">
-                <Building2 className="w-3 h-3" /> Business Name *
-              </label>
+              <label className="label-eyebrow mb-2 block">Business name *</label>
               <input
                 type="text"
                 value={businessName}
                 onChange={(e) => setBusinessName(e.target.value)}
                 required
-                className="w-full rounded-xl border border-input bg-secondary px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-all"
+                className="input-minimal"
                 placeholder="e.g. La Belle Assiette"
               />
             </div>
             <div>
-              <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1.5">
-                <MapPin className="w-3 h-3" /> Business Address *
-              </label>
+              <label className="label-eyebrow mb-2 block">Address *</label>
               <input
                 type="text"
                 value={businessAddress}
                 onChange={(e) => setBusinessAddress(e.target.value)}
                 required
-                className="w-full rounded-xl border border-input bg-secondary px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-all"
+                className="input-minimal"
                 placeholder="e.g. 42 Rue de Rivoli, Paris"
               />
             </div>
           </div>
-        </div>
+        </Panel>
 
-        {/* Logo upload - mandatory */}
-        <div className="rounded-2xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
-            <Upload className="w-4 h-4 text-primary" />
-            Logo *
+        <Panel padding="md" className="rounded-sm">
+          <h3 className="label-eyebrow mb-6 flex items-center gap-2">
+            <Upload className="h-3.5 w-3.5" strokeWidth={1.25} />
+            Logo (required)
           </h3>
           <input
             ref={logoInputRef}
@@ -568,11 +561,11 @@ export default function NewProjectPage() {
           />
           {logoPreview ? (
             <div className="flex items-center gap-4">
-              <div className="relative w-20 h-20 rounded-xl border border-border overflow-hidden bg-secondary">
+              <div className="relative h-20 w-20 overflow-hidden border border-border bg-secondary">
                 <img
                   src={logoPreview}
                   alt="Logo"
-                  className="w-full h-full object-contain p-1"
+                  className="h-full w-full object-contain p-1"
                 />
                 <button
                   type="button"
@@ -580,9 +573,9 @@ export default function NewProjectPage() {
                     setLogoFile(null);
                     setLogoPreview(null);
                   }}
-                  className="absolute -top-1 -right-1 p-1 rounded-full bg-destructive text-destructive-foreground shadow-lg"
+                  className="absolute -right-1 -top-1 border border-border bg-background p-1 text-destructive"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="h-3 w-3" />
                 </button>
               </div>
               <div>
@@ -598,33 +591,29 @@ export default function NewProjectPage() {
             <button
               type="button"
               onClick={() => logoInputRef.current?.click()}
-              className="w-full border-2 border-dashed border-border rounded-xl p-6 flex flex-col items-center gap-2 hover:border-primary/50 hover:bg-primary/5 transition-all"
+              className="flex w-full flex-col items-center gap-2 border border-dashed border-border bg-background p-8 transition-colors hover:border-foreground/25 hover:bg-secondary/30"
             >
-              <div className="p-2 rounded-xl bg-primary/10">
-                <Upload className="w-5 h-5 text-primary" />
-              </div>
+              <Upload className="h-5 w-5 text-muted-foreground" strokeWidth={1.25} />
               <p className="text-sm font-medium text-foreground">
-                Upload your logo
+                Upload logo
               </p>
               <p className="text-xs text-muted-foreground">
-                PNG, JPG, SVG — will be analyzed by AI
+                PNG, JPG, SVG
               </p>
             </button>
           )}
-        </div>
+        </Panel>
 
-        {/* Photos upload - optional */}
-        <div className="rounded-2xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-1 flex items-center gap-2">
-            <Camera className="w-4 h-4 text-primary" />
-            Business Photos
-            <span className="text-xs text-muted-foreground font-normal">
-              (optional)
+        <Panel padding="md" className="rounded-sm">
+          <h3 className="label-eyebrow mb-2 flex items-center gap-2">
+            <Camera className="h-3.5 w-3.5" strokeWidth={1.25} />
+            Photos
+            <span className="font-sans text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+              optional
             </span>
           </h3>
-          <p className="text-xs text-muted-foreground mb-4">
-            Interior, food, team, exterior — the more context, the better the
-            website
+          <p className="mb-5 text-xs text-muted-foreground">
+            Interior, food, team, exterior — more context helps the mockups.
           </p>
           <input
             ref={photosInputRef}
@@ -666,10 +655,10 @@ export default function NewProjectPage() {
               </span>
             </button>
           </div>
-        </div>
+        </Panel>
 
         {/* Color picker */}
-        <div className="rounded-2xl border border-border bg-card p-5">
+        <Panel padding="md" className="rounded-sm">
           <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
             <Palette className="w-4 h-4 text-primary" />
             Brand Colors
@@ -720,10 +709,10 @@ export default function NewProjectPage() {
                         type="button"
                         onClick={() => setColor1(c)}
                         className={cn(
-                          "w-8 h-8 rounded-full border-2 transition-all duration-200 hover:scale-110",
+                          "h-8 w-8 border transition-all",
                           color1 === c
-                            ? "border-white scale-110 shadow-lg"
-                            : "border-transparent"
+                            ? "border-foreground ring-1 ring-foreground"
+                            : "border-border hover:border-foreground/30"
                         )}
                         style={{ backgroundColor: c }}
                       />
@@ -731,7 +720,7 @@ export default function NewProjectPage() {
                   </div>
                   <div className="flex items-center gap-2 ml-auto">
                     <div
-                      className="w-10 h-10 rounded-xl border border-border shadow-inner"
+                      className="h-10 w-10 border border-border"
                       style={{ backgroundColor: color1 }}
                     />
                     <input
@@ -757,10 +746,10 @@ export default function NewProjectPage() {
                         type="button"
                         onClick={() => setColor2(c)}
                         className={cn(
-                          "w-8 h-8 rounded-full border-2 transition-all duration-200 hover:scale-110",
+                          "h-8 w-8 border transition-all",
                           color2 === c
-                            ? "border-white scale-110 shadow-lg"
-                            : "border-transparent"
+                            ? "border-foreground ring-1 ring-foreground"
+                            : "border-border hover:border-foreground/30"
                         )}
                         style={{ backgroundColor: c }}
                       />
@@ -782,25 +771,27 @@ export default function NewProjectPage() {
               </div>
 
               {/* Preview */}
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary">
-                <span className="text-xs text-muted-foreground">Preview:</span>
+              <div className="flex items-center gap-3 border border-border bg-secondary/40 p-3">
+                <span className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+                  Preview
+                </span>
                 <div className="flex gap-2">
                   <div
-                    className="w-16 h-8 rounded-lg"
+                    className="h-8 w-16"
                     style={{
                       background: `linear-gradient(135deg, ${color1}, ${color2})`,
                     }}
                   />
                   <div
-                    className="w-8 h-8 rounded-lg"
+                    className="h-8 w-8"
                     style={{ backgroundColor: color1 }}
                   />
                   <div
-                    className="w-8 h-8 rounded-lg"
+                    className="h-8 w-8"
                     style={{ backgroundColor: color2 }}
                   />
                 </div>
-                <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
                   {color1} · {color2}
                 </span>
               </div>
@@ -808,50 +799,44 @@ export default function NewProjectPage() {
           )}
 
           {colorMode === "auto" && (
-            <p className="text-xs text-muted-foreground bg-secondary rounded-xl p-3">
-              <Sparkles className="w-3 h-3 inline mr-1 text-primary" />
-              AI will extract colors from your logo and research to pick the
-              perfect palette
+            <p className="border border-border bg-secondary/40 p-4 text-xs leading-relaxed text-muted-foreground">
+              <Sparkles className="mr-1 inline h-3 w-3" strokeWidth={1.25} />
+              We infer palette from your logo and web research when you leave
+              this on auto.
             </p>
           )}
-        </div>
+        </Panel>
 
-        {/* Instructions - optional */}
-        <div className="rounded-2xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-1 flex items-center gap-2">
-            <MessageSquare className="w-4 h-4 text-primary" />
-            Additional Instructions
-            <span className="text-xs text-muted-foreground font-normal">
-              (optional)
+        <Panel padding="md" className="rounded-sm">
+          <h3 className="label-eyebrow mb-2 flex items-center gap-2">
+            <MessageSquare className="h-3.5 w-3.5" strokeWidth={1.25} />
+            Notes
+            <span className="font-sans text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+              optional
             </span>
           </h3>
-          <p className="text-xs text-muted-foreground mb-3">
-            Anything specific you want the AI to know — style preferences,
-            target audience, special requests
+          <p className="mb-4 text-xs text-muted-foreground">
+            Audience, tone, or constraints for the AI.
           </p>
           <textarea
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
             rows={3}
-            className="w-full rounded-xl border border-input bg-secondary px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-all resize-none"
-            placeholder="e.g. We target young professionals, the vibe should feel premium but approachable..."
+            className="input-minimal resize-none"
+            placeholder="e.g. Premium but approachable; young professionals…"
           />
-        </div>
+        </Panel>
 
-        {error && (
-          <p className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+        {error ? (
+          <p className="border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {error}
           </p>
-        )}
+        ) : null}
 
-        {/* Submit */}
-        <button
-          type="submit"
-          className="w-full rounded-xl bg-primary py-3.5 px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
-        >
-          <Sparkles className="w-4 h-4" />
-          Generate Website Concepts
-          <ArrowRight className="w-4 h-4" />
+        <button type="submit" className="btn-solid w-full py-3.5">
+          <Sparkles className="h-4 w-4" strokeWidth={1.25} />
+          Generate concepts
+          <ArrowRight className="h-4 w-4" strokeWidth={1.25} />
         </button>
       </form>
     </div>

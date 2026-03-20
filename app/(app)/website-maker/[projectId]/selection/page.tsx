@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/ui/page-header";
 import { Stepper } from "@/components/website-maker/stepper";
 import { createClient } from "@/lib/supabase/client";
 import { Variant } from "@/lib/types";
@@ -30,7 +31,6 @@ export default function SelectionPage() {
         setVariants(data);
         const selected = data.find((v) => v.selected);
         if (selected) {
-          // Already confirmed — go to build page
           router.push(`/website-maker/${projectId}/build`);
           return;
         }
@@ -38,7 +38,7 @@ export default function SelectionPage() {
       setLoading(false);
     };
     fetchVariants();
-  }, [projectId, supabase]);
+  }, [projectId, router, supabase]);
 
   const handleSelect = (id: string) => {
     if (confirmed) return;
@@ -50,7 +50,6 @@ export default function SelectionPage() {
     setConfirming(true);
 
     try {
-      // Update variant as selected
       await supabase
         .from("variants")
         .update({ selected: false })
@@ -61,7 +60,6 @@ export default function SelectionPage() {
         .update({ selected: true })
         .eq("id", selectedId);
 
-      // Update project
       await supabase
         .from("projects")
         .update({
@@ -72,44 +70,33 @@ export default function SelectionPage() {
         .eq("id", projectId);
 
       setConfirmed(true);
-      // Redirect to build page
       router.push(`/website-maker/${projectId}/build`);
     } catch {
-      // Handle error silently
+      // silent
     }
     setConfirming(false);
   };
 
-  if (loading) {
+  if (loading || confirmed) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="w-8 h-8 text-primary animate-spin" />
-      </div>
-    );
-  }
-
-  if (confirmed) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="animate-fade-in max-w-5xl mx-auto">
+    <div className="animate-fade-in mx-auto max-w-5xl">
       <Stepper currentStep={3} />
 
-      <div className="text-center mb-8">
-        <h2 className="text-xl font-bold text-foreground">
-          Choose Your Design
-        </h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Select the website design that best represents the business
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Selection"
+        title="Pick one direction"
+        description="The mockup you choose becomes the reference for the generated site."
+        className="mb-10"
+      />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 gap-6 border-t border-border pt-10 md:grid-cols-3">
         {variants.map((variant, index) => {
           const isSelected = selectedId === variant.id;
           const isOther = selectedId && !isSelected;
@@ -117,70 +104,63 @@ export default function SelectionPage() {
           return (
             <button
               key={variant.id}
+              type="button"
               onClick={() => handleSelect(variant.id)}
               className={cn(
-                "group relative rounded-2xl border-2 bg-card overflow-hidden transition-all duration-500 text-left",
+                "group relative overflow-hidden border bg-card text-left transition-colors",
                 isSelected
-                  ? "border-primary shadow-xl shadow-primary/20 scale-[1.03] z-10"
+                  ? "border-foreground"
                   : isOther
-                  ? "border-border opacity-50 scale-[0.97] hover:opacity-75"
-                  : "border-border hover:border-primary/40 hover:shadow-lg"
+                    ? "border-border opacity-45 hover:opacity-70"
+                    : "border-border hover:border-foreground/25"
               )}
             >
-              {/* Selected checkmark */}
               {isSelected && (
-                <div className="absolute top-3 right-3 z-20 flex items-center justify-center w-8 h-8 rounded-full bg-primary text-primary-foreground shadow-lg animate-fade-in">
-                  <Check className="w-4 h-4" />
-                </div>
+                <span className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center border border-foreground bg-foreground text-primary-foreground">
+                  <Check className="h-3.5 w-3.5" strokeWidth={2} />
+                </span>
               )}
 
-              {/* Glow effect when selected */}
-              {isSelected && (
-                <div className="absolute inset-0 z-0 bg-gradient-to-t from-primary/10 to-transparent pointer-events-none" />
-              )}
-
-              <div className="aspect-[4/3] relative bg-secondary">
+              <div className="aspect-[4/3] bg-secondary">
                 {variant.image_url ? (
                   <img
                     src={variant.image_url}
                     alt={variant.theme_name}
                     className={cn(
-                      "w-full h-full object-cover transition-all duration-500",
-                      isSelected && "brightness-110"
+                      "h-full w-full object-cover",
+                      isSelected && "brightness-[1.02]"
                     )}
                   />
                 ) : (
-                  <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                     No image
                   </div>
                 )}
               </div>
 
-              <div className="p-4 relative z-10">
-                <div className="flex items-center gap-2 mb-2">
-                  <span
-                    className={cn(
-                      "text-xs font-semibold px-2 py-0.5 rounded-full transition-colors",
-                      isSelected
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-primary/10 text-primary"
-                    )}
-                  >
-                    Variant {index + 1}
+              <div className="border-t border-border p-4">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    {String(index + 1).padStart(2, "0")}
                   </span>
                   {variant.color_scheme && (
-                    <div className="flex gap-1 ml-auto">
-                      {Object.values(variant.color_scheme).map((color, ci) => (
-                        <div
-                          key={ci}
-                          className="w-4 h-4 rounded-full border border-border"
-                          style={{ backgroundColor: color }}
-                        />
-                      ))}
+                    <div className="ml-auto flex gap-1">
+                      {Object.values(variant.color_scheme)
+                        .filter(
+                          (c): c is string =>
+                            typeof c === "string" && c.startsWith("#")
+                        )
+                        .map((color, ci) => (
+                          <div
+                            key={ci}
+                            className="h-3 w-3 border border-border"
+                            style={{ backgroundColor: color }}
+                          />
+                        ))}
                     </div>
                   )}
                 </div>
-                <h3 className="font-semibold text-foreground text-sm">
+                <h3 className="text-sm font-medium text-foreground">
                   {variant.theme_name}
                 </h3>
               </div>
@@ -190,18 +170,19 @@ export default function SelectionPage() {
       </div>
 
       {selectedId && (
-        <div className="mt-8 text-center animate-fade-in">
+        <div className="mt-12 flex justify-center border-t border-border pt-10">
           <button
+            type="button"
             onClick={handleConfirm}
             disabled={confirming}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25 disabled:opacity-50"
+            className="btn-solid disabled:opacity-50"
           >
             {confirming ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Check className="w-4 h-4" />
+              <Check className="h-4 w-4" strokeWidth={1.5} />
             )}
-            Confirm Selection
+            Confirm
           </button>
         </div>
       )}

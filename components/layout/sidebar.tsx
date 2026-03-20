@@ -3,12 +3,12 @@
 import { useAuth } from "@/components/auth/auth-provider";
 import { NAV_ITEMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import {
   Globe,
   LayoutDashboard,
   LogOut,
   Search,
-  Sparkles,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -24,75 +24,69 @@ export function Sidebar() {
   const { user, signOut } = useAuth();
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-[260px] flex-col border-r border-border bg-card">
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
-        <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-primary/20">
-          <Sparkles className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-base font-bold text-foreground tracking-tight">
+    <aside
+      className="fixed left-0 top-0 z-40 flex h-screen w-[var(--sidebar-width)] flex-col border-r border-border bg-card"
+      style={{ width: "var(--sidebar-width)" }}
+    >
+      <div className="flex flex-col gap-1 border-b border-border px-6 py-8">
+        <Link href="/dashboard" className="group">
+          <span className="font-display text-lg font-medium tracking-tight text-foreground">
             Agence
-          </h1>
-          <p className="text-[11px] text-muted-foreground leading-none">
-            AI Website Builder
-          </p>
-        </div>
+          </span>
+        </Link>
+        <span className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
+          Studio
+        </span>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        <p className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Menu
-        </p>
-        {NAV_ITEMS.map((item) => {
-          const Icon = iconMap[item.icon];
-          const isActive =
-            pathname === item.href || pathname.startsWith(item.href + "/");
+      <nav className="flex-1 px-3 py-8">
+        <p className="label-eyebrow mb-4 px-3">Navigate</p>
+        <ul className="space-y-0">
+          {NAV_ITEMS.map((item) => {
+            const Icon = iconMap[item.icon];
+            const isActive =
+              pathname === item.href || pathname.startsWith(item.href + "/");
 
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
-                isActive
-                  ? "bg-primary/15 text-primary shadow-sm"
-                  : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-              )}
-            >
-              <Icon
-                className={cn(
-                  "h-[18px] w-[18px]",
-                  isActive ? "text-primary" : "text-muted-foreground"
-                )}
-              />
-              {item.label}
-              {isActive && (
-                <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
-              )}
-            </Link>
-          );
-        })}
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={cn(
+                    "relative flex items-center gap-3 border-l-2 border-transparent py-2.5 pr-3 pl-[calc(0.75rem-2px)] text-[13px] font-medium transition-colors",
+                    isActive
+                      ? "border-foreground text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.5} />
+                  {item.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       </nav>
 
-      {/* User section */}
-      <div className="border-t border-border p-4">
+      <div className="border-t border-border px-5 py-5">
+        <div className="mb-3 flex justify-end">
+          <ThemeToggle />
+        </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/20 text-xs font-bold text-primary uppercase">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-[10px] font-semibold tracking-wide text-foreground uppercase">
             {user?.email?.charAt(0) || "U"}
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-foreground truncate">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs text-foreground">
               {user?.email || "User"}
             </p>
           </div>
           <button
+            type="button"
             onClick={signOut}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            className="shrink-0 p-2 text-muted-foreground transition-colors hover:text-foreground"
             title="Sign out"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="h-4 w-4" strokeWidth={1.5} />
           </button>
         </div>
       </div>
