@@ -60,6 +60,22 @@ export function validateTwilioWebhook(
   return twilio.validateRequest(token, signature, fullUrl, body);
 }
 
+/**
+ * Caller ID affiché au destinataire.
+ * TWILIO_CALLER_ID = ton 06/07 vérifié (Verified Caller ID).
+ * Fallback sur TWILIO_PHONE_NUMBER (numéro Twilio acheté).
+ */
+export function getCallerId(): string {
+  return process.env.TWILIO_CALLER_ID || process.env.TWILIO_PHONE_NUMBER || "";
+}
+
+/**
+ * Numéro Twilio acheté — requis comme `from` dans les appels API.
+ */
+export function getTwilioNumber(): string {
+  return process.env.TWILIO_PHONE_NUMBER || "";
+}
+
 export function recordingCallbackUrl(): string {
   return `${getPublicAppUrl()}/api/telephony/webhooks/recording`;
 }

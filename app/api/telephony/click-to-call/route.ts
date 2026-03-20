@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getPublicAppUrl, telephonyEnvReady } from "@/lib/telephony/config";
 import { normalizeToE164 } from "@/lib/telephony/phone";
-import { getTwilioRestClient, statusCallbackUrl } from "@/lib/telephony/twilio-server";
+import { getTwilioNumber, getTwilioRestClient, statusCallbackUrl } from "@/lib/telephony/twilio-server";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +45,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const fromNum = process.env.TWILIO_PHONE_NUMBER!;
+  const fromNum = getTwilioNumber();
+  if (!fromNum) {
+    return NextResponse.json(
+      {
+        error:
+          "TWILIO_PHONE_NUMBER (numéro Twilio E.164) est requis pour lancer un appel.",
+      },
+      { status: 503 }
+    );
+  }
   const base = getPublicAppUrl();
   const connectUrl = new URL(
     `${base}/api/telephony/twiml/click-connect`
@@ -55,7 +64,7 @@ export async function POST(request: Request) {
 
   try {
     const client = getTwilioRestClient();
-    await client.calls.create({
+    const created = await client.calls.create({
       from: fromNum,
       to: agent.phone_e164,
       url: connectUrl.toString(),
@@ -64,6 +73,7 @@ export async function POST(request: Request) {
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       statusCallbackMethod: "POST",
     });
+    return NextResponse.json({ ok: true, callSid: created.sid });
   } catch (e) {
     console.error("[telephony/click-to-call]", e);
     return NextResponse.json(
@@ -71,6 +81,4 @@ export async function POST(request: Request) {
       { status: 502 }
     );
   }
-
-  return NextResponse.json({ ok: true });
 }

@@ -1,4 +1,5 @@
 import {
+  getCallerId,
   recordingCallbackUrl,
   validateTwilioWebhook,
 } from "@/lib/telephony/twilio-server";
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
   const To = body.To?.trim();
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
-  const callerId = process.env.TWILIO_PHONE_NUMBER;
+  const callerId = getCallerId();
 
   if (!callerId) {
     twiml.say(

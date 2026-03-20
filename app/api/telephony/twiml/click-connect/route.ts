@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import {
+  getCallerId,
   recordingCallbackUrl,
   validateTwilioWebhook,
 } from "@/lib/telephony/twilio-server";
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
-  const callerId = process.env.TWILIO_PHONE_NUMBER;
+  const callerId = getCallerId();
 
   if (!callerId || !to) {
     twiml.say(

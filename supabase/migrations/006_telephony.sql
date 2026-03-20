@@ -60,5 +60,9 @@ create policy "telephony_calls_select_authenticated"
 
 -- Insert / update via service role (webhooks) uniquement — pas de policy insert anon
 
+-- Grants
+GRANT ALL PRIVILEGES ON telephony_agents TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON telephony_calls TO anon, authenticated, service_role;
+
 comment on table public.telephony_agents is 'Numéro mobile/fixe pour click-to-call Twilio';
 comment on table public.telephony_calls is 'Historique des appels et enregistrements Twilio';

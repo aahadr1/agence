@@ -1,8 +1,14 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  saveTranscriptionForCallSid,
+  transcribeTwilioRecording,
+} from "@/lib/telephony/transcribe";
 import { validateTwilioWebhook } from "@/lib/telephony/twilio-server";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+/** Transcription Gemini peut être longue — laisse le temps au `after()` de finir */
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const text = await request.text();
@@ -49,6 +55,17 @@ export async function POST(request: Request) {
     }
   } catch (e) {
     console.error("[telephony/recording]", e);
+  }
+
+  if (recordingUrl && process.env.GEMINI_API_KEY) {
+    after(async () => {
+      try {
+        const transcript = await transcribeTwilioRecording(recordingUrl);
+        await saveTranscriptionForCallSid(callSid, transcript);
+      } catch (err) {
+        console.error("[telephony/recording] transcribe after()", err);
+      }
+    });
   }
 
   return NextResponse.json({ ok: true });
