@@ -20,6 +20,24 @@ export async function GET(request: Request) {
 
   const serviceClient = await createServiceClient();
 
+  // Prefer a deployed build with files — don't let stale generating builds hide it
+  const { data: deployedBuilds } = await serviceClient
+    .from("website_builds")
+    .select("*")
+    .eq("project_id", projectId)
+    .in("status", ["deployed", "deploying"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (deployedBuilds && deployedBuilds.length > 0) {
+    const b = deployedBuilds[0];
+    const hasFiles = Array.isArray(b.files) && b.files.length > 0;
+    if (hasFiles) {
+      return NextResponse.json({ build: b });
+    }
+  }
+
+  // Fallback: return latest build of any status
   const { data: builds } = await serviceClient
     .from("website_builds")
     .select("*")

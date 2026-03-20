@@ -71,11 +71,49 @@ export async function POST(request: Request) {
   const logo = images.find(
     (img: { type: string }) => img.type === "logo"
   );
-  const photos = images.filter(
+  const allPhotos = images.filter(
     (img: { type: string }) => img.type === "photo"
+  );
+  // Separate by source — same order as ideation so IMG-X numbering matches
+  const uploadedPhotos = allPhotos.filter(
+    (img: { analysis?: { source?: string } }) => img.analysis?.source !== "web"
+  );
+  const webPhotos = allPhotos.filter(
+    (img: { analysis?: { source?: string; quality?: string } }) =>
+      img.analysis?.source === "web" && img.analysis?.quality !== "low"
   );
   const businessInfo = project.business_info;
   const colorScheme = variant.color_scheme || {};
+
+  // Build the same IMG-X inventory as ideation used — so the variant's
+  // image_usage references (IMG-1, IMG-3, etc.) resolve to actual URLs
+  const imgMap: { tag: string; url: string; desc: string }[] = [];
+  let imgIdx = 1;
+
+  if (logo) {
+    imgMap.push({
+      tag: `IMG-${imgIdx}`,
+      url: logo.url,
+      desc: `LOGO — ${logo.analysis?.mood || "Business logo"}`,
+    });
+    imgIdx++;
+  }
+  for (const p of uploadedPhotos) {
+    imgMap.push({
+      tag: `IMG-${imgIdx}`,
+      url: p.url,
+      desc: `USER PHOTO — ${p.analysis?.description || "Business photo"} (best for: ${p.analysis?.suggestedPlacement || "gallery"})`,
+    });
+    imgIdx++;
+  }
+  for (const p of webPhotos) {
+    imgMap.push({
+      tag: `IMG-${imgIdx}`,
+      url: p.url,
+      desc: `WEB PHOTO — ${p.analysis?.description || "Found online"} (best for: ${p.analysis?.suggestedPlacement || "gallery"})`,
+    });
+    imgIdx++;
+  }
 
   // Clean up old failed/pending builds for this project
   await serviceClient
@@ -124,21 +162,29 @@ export async function POST(request: Request) {
   const pageType = isRestaurant ? "menu" : "services";
   const pageTypeLabel = isRestaurant ? "Menu / Carte" : "Services";
 
-  const photoLines = photos
-    .map(
-      (
-        p: { url: string; analysis?: { suggestedPlacement?: string } },
-        i: number
-      ) =>
-        `  Photo ${i + 1}: ${p.url} (suggested placement: ${p.analysis?.suggestedPlacement || "gallery"})`
-    )
+  // Build image inventory lines using the same IMG-X tags as ideation
+  const imageLines = imgMap
+    .map((img) => `  [${img.tag}] ${img.desc}\n    URL: ${img.url}`)
     .join("\n");
+
+  // Resolve the variant's image_usage plan — replace IMG-X references with actual URLs
+  const imageUsageRaw = colorScheme.image_usage || {};
+  const resolvedImageUsage: Record<string, string> = {};
+  for (const [key, val] of Object.entries(imageUsageRaw)) {
+    let resolved = String(val || "");
+    for (const img of imgMap) {
+      resolved = resolved.replace(
+        new RegExp(`\\[?${img.tag}\\]?`, "gi"),
+        `${img.url}`
+      );
+    }
+    resolvedImageUsage[key] = resolved;
+  }
 
   // Extract rich design metadata from the variant
   const designRationale = colorScheme.design_rationale || "";
   const typography = colorScheme.typography || "";
   const layoutConcept = colorScheme.layout_concept || "";
-  const imageUsage = colorScheme.image_usage || {};
 
   const prompt = `You are a world-class front-end developer and designer. Your specialty is building stunning, award-winning websites that are visually breathtaking and technically flawless.
 
@@ -187,14 +233,15 @@ Color palette:
   Accent: ${colorScheme.accent || "#e94560"}
   Business brand colors: ${businessInfo.colors?.join(", ") || "N/A"}
 
-Image usage plan:
-  Logo: ${imageUsage.logo || "Display in header"}
-  Hero: ${imageUsage.hero_image || "Use strongest photo as hero"}
-  Sections: ${JSON.stringify(imageUsage.section_images || [])}
+Image usage plan (from the selected design concept — follow this EXACTLY):
+  Logo: ${resolvedImageUsage.logo || (logo ? `Display ${logo.url} in header` : "Create a text logo with the business name")}
+  Hero image: ${resolvedImageUsage.hero_image || "Use the strongest available photo as a full-bleed hero"}
+  Section images: ${Array.isArray(resolvedImageUsage.section_images) ? JSON.stringify(resolvedImageUsage.section_images) : resolvedImageUsage.section_images || "Distribute remaining photos across sections"}
 
-=== AVAILABLE IMAGES ===
-Logo: ${logo?.url || "No logo — create a text logo with the business name using the primary color"}
-${photoLines || "No photos — use solid color sections, gradients, and SVG icons instead"}
+=== IMAGE INVENTORY (${imgMap.length} assets — use ALL of them) ===
+${imageLines || "No images available — use solid color sections, gradients, and SVG icons instead"}
+
+CRITICAL: Every image URL listed above is a REAL, working URL. You MUST use these exact URLs in <img> tags throughout the website. Do NOT invent placeholder URLs. The user selected this design specifically because of how these images looked in the mockup — the final website must use them in the same way.
 
 === PAGES TO BUILD ===
 

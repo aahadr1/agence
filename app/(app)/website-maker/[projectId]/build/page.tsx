@@ -157,6 +157,7 @@ export default function BuildPage() {
           `/api/generate-website/build-status?projectId=${projectId}`
         );
         if (!res.ok) {
+          console.warn("[build] Status check failed:", res.status);
           startBuild();
           return;
         }
@@ -166,7 +167,7 @@ export default function BuildPage() {
           setBuildId(build.id);
 
           const hasFiles =
-            build.files && (build.files as unknown[]).length > 0;
+            Array.isArray(build.files) && build.files.length > 0;
 
           if (
             (build.status === "deployed" || build.status === "deploying") &&
@@ -191,9 +192,22 @@ export default function BuildPage() {
             setError(build.error || "Previous build failed");
             return;
           }
+
+          // Build exists but is still generating — check if it's stale (>15 min)
+          const age = Date.now() - new Date(build.created_at).getTime();
+          if (age > 15 * 60 * 1000) {
+            console.log("[build] Stale generating build, starting fresh");
+            startBuild();
+            return;
+          }
+
+          // Recent generating build — don't start another one, just show generating state
+          console.log("[build] Build in progress:", build.status);
+          setPhase("generating");
+          return;
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        console.error("[build] checkExistingBuild error:", err);
       }
       startBuild();
     };
