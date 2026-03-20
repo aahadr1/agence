@@ -22,6 +22,44 @@ export async function screenshotToBase64(page: Page): Promise<string> {
   return buffer.toString("base64");
 }
 
+/**
+ * Extract JSON from a messy Gemini response.
+ * Handles: ```json blocks, preamble text, thinking tags, trailing text.
+ */
+function extractJson(raw: string): string {
+  let s = raw.trim();
+
+  // Strip thinking tags (<think>...</think>, <thinking>...</thinking>)
+  s = s.replace(/<\/?(?:think|thinking)(?:\s[^>]*)?>/gi, "");
+
+  // Strip markdown code fences
+  s = s.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?\s*```\s*$/m, "");
+
+  // Find the first { and last } (or [ and ])
+  const objStart = s.indexOf("{");
+  const arrStart = s.indexOf("[");
+  let start: number;
+  let end: number;
+
+  if (objStart === -1 && arrStart === -1) {
+    return s.trim(); // no JSON found, let it fail on parse
+  }
+
+  if (arrStart === -1 || (objStart !== -1 && objStart < arrStart)) {
+    start = objStart;
+    end = s.lastIndexOf("}");
+  } else {
+    start = arrStart;
+    end = s.lastIndexOf("]");
+  }
+
+  if (end <= start) return s.trim();
+
+  return s.slice(start, end + 1);
+}
+
+const MAX_RETRIES = 2;
+
 export async function askGemini<T>(prompt: string, imageBase64?: string): Promise<T> {
   const model = getGemini();
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
@@ -33,13 +71,33 @@ export async function askGemini<T>(prompt: string, imageBase64?: string): Promis
     });
   }
 
-  const result = await model.generateContent(parts);
-  const text = result.response.text().trim();
-  let jsonStr = text;
-  if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await model.generateContent(parts);
+      const text = result.response.text().trim();
+
+      if (!text) {
+        throw new Error("Gemini returned empty response");
+      }
+
+      const jsonStr = extractJson(text);
+      return JSON.parse(jsonStr) as T;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      // Only retry on parse errors or transient API errors, not auth/quota
+      const msg = lastError.message.toLowerCase();
+      if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission")) {
+        throw lastError;
+      }
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
   }
-  return JSON.parse(jsonStr) as T;
+
+  throw lastError!;
 }
 
 export async function askGeminiText(prompt: string): Promise<string> {

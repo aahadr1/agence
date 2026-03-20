@@ -65,7 +65,7 @@ export default function LeadGeneratorPage() {
           .select("*")
           .order("created_at", { ascending: false })
           .limit(20),
-        fetch("/api/lead-generator/lists").then((r) => r.json()).catch(() => ({ lists: [] })),
+        fetch("/api/lead-generator/lists").then((r) => r.json()),
       ]);
       setPastSearches(searchesRes.data || []);
       setLists(listsRes.lists || []);
@@ -88,25 +88,16 @@ export default function LeadGeneratorPage() {
   );
 
   const loadListItems = useCallback(async (listId: string) => {
-    try {
-      const res = await fetch(`/api/lead-generator/lists/${listId}`);
-      const data = await res.json();
-      setListItems(data.items || []);
-      setActiveListId(listId);
-    } catch {
-      setListItems([]);
-      setActiveListId(listId);
-    }
+    const res = await fetch(`/api/lead-generator/lists/${listId}`);
+    const data = await res.json();
+    setListItems(data.items || []);
+    setActiveListId(listId);
   }, []);
 
   const refreshLists = useCallback(async () => {
-    try {
-      const res = await fetch("/api/lead-generator/lists");
-      const data = await res.json();
-      setLists(data.lists || []);
-    } catch {
-      // keep existing lists on error
-    }
+    const res = await fetch("/api/lead-generator/lists");
+    const data = await res.json();
+    setLists(data.lists || []);
   }, []);
 
   // Search handler
@@ -129,19 +120,13 @@ export default function LeadGeneratorPage() {
         body: JSON.stringify({ niche: niche.trim(), location: location.trim() }),
       });
 
-      const searchText = await searchRes.text();
-      let searchData;
-      try {
-        searchData = JSON.parse(searchText);
-      } catch {
-        throw new Error(`Server error (${searchRes.status}): ${searchText.slice(0, 200)}`);
-      }
-
       if (!searchRes.ok) {
-        throw new Error(searchData.error || "Search failed");
+        const err = await searchRes.json();
+        throw new Error(err.error || "Search failed");
       }
 
-      const { searchId, leadsCount, withoutWebsite, badWebsite } = searchData;
+      const { searchId, leadsCount, withoutWebsite, badWebsite } =
+        await searchRes.json();
 
       setPhase("completed");
       setPhaseMessage(
@@ -240,13 +225,7 @@ export default function LeadGeneratorPage() {
         }),
       });
 
-      const expandText = await res.text();
-      let data;
-      try {
-        data = JSON.parse(expandText);
-      } catch {
-        throw new Error(`Server error (${res.status}): ${expandText.slice(0, 200)}`);
-      }
+      const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Expand failed");
 
       setPhase("completed");
@@ -305,14 +284,10 @@ export default function LeadGeneratorPage() {
       <PageHeader
         eyebrow="Prospecting"
         title="Lead generator"
-        description="Type a trade and a city. The agent searches Google Maps, local directories, and business listings — then checks every website it finds and scores the opportunity."
+        description="Niche plus location. The agent maps the market, then enriches each row."
       />
 
       <Panel padding="md" className="mb-8 rounded-sm">
-        <p className="mb-5 text-[13px] leading-relaxed text-muted-foreground">
-          Be specific with the niche (e.g. <em>Italian restaurant</em>, <em>independent plumber</em>) and use a city or
-          district for the location. A single search typically surfaces 15–40 businesses with full contact and website data.
-        </p>
         <div className="mb-6 grid grid-cols-1 gap-5 md:grid-cols-2">
           <div>
             <label className="label-eyebrow mb-2 block">Niche</label>
@@ -436,7 +411,7 @@ export default function LeadGeneratorPage() {
             <Panel padding="sm" className="rounded-sm">
               <h3 className="label-eyebrow mb-4">Past runs</h3>
               {pastSearches.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No searches yet. Run one above and it will appear here so you can reload results without waiting.</p>
+                <p className="text-xs text-muted-foreground">None yet.</p>
               ) : (
                 <div className="divide-y divide-border border border-border">
                   {pastSearches.map((s) => (
@@ -555,32 +530,16 @@ export default function LeadGeneratorPage() {
               </div>
             </>
           ) : phase === "idle" ? (
-            <Panel padding="lg" className="rounded-sm">
-              <div className="flex flex-col items-center py-6 text-center">
-                <Search className="mb-5 h-8 w-8 text-muted-foreground" strokeWidth={1} />
-                <p className="label-eyebrow mb-3">Ready</p>
-                <h2 className="font-display mb-3 text-xl font-medium text-foreground md:text-2xl">
-                  Run a search to get started
-                </h2>
-                <p className="mx-auto max-w-md text-[14px] leading-relaxed text-muted-foreground">
-                  Results land here as cards. Each one shows the business name, address,
-                  rating, and a website quality score. Use the filters above the list to
-                  surface only the best opportunities, then select rows and generate
-                  personalised outreach in one click.
-                </p>
-                <div className="mt-8 grid w-full max-w-sm grid-cols-3 gap-px border border-border bg-border text-left">
-                  {[
-                    { label: "Discover", detail: "Maps, search & directories" },
-                    { label: "Score", detail: "Website quality check" },
-                    { label: "Outreach", detail: "AI email, ready to send" },
-                  ].map((s) => (
-                    <div key={s.label} className="bg-card px-3 py-4">
-                      <p className="text-xs font-medium text-foreground">{s.label}</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{s.detail}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
+            <Panel padding="lg" className="rounded-sm text-center">
+              <Search className="mx-auto mb-5 h-8 w-8 text-muted-foreground" strokeWidth={1} />
+              <p className="label-eyebrow mb-2">Start</p>
+              <h2 className="font-display text-xl font-medium text-foreground md:text-2xl">
+                Run a search
+              </h2>
+              <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">
+                Maps-first discovery, then enrichment across search and directories.
+                Results appear in the list on the right.
+              </p>
             </Panel>
           ) : null}
         </div>
