@@ -3,7 +3,6 @@
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Stepper } from "@/components/website-maker/stepper";
-import { createClient } from "@/lib/supabase/client";
 import {
   ArrowRight,
   Building2,
@@ -11,10 +10,8 @@ import {
   Check,
   ImagePlus,
   Loader2,
-  MapPin,
   MessageSquare,
   Palette,
-  Plus,
   Sparkles,
   Trash2,
   Upload,
@@ -34,7 +31,6 @@ const PRESET_COLORS = [
 
 export default function NewProjectPage() {
   const router = useRouter();
-  const supabase = createClient();
   const logoInputRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
 

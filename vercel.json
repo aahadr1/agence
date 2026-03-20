@@ -1,5 +1,11 @@
 {
   "framework": "nextjs",
+  "installCommand": "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install",
+  "build": {
+    "env": {
+      "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1"
+    }
+  },
   "functions": {
     "app/api/research/search/route.ts": { "maxDuration": 60 },
     "app/api/research/analyze/route.ts": { "maxDuration": 60 },
