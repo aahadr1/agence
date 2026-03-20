@@ -102,45 +102,24 @@ function UserRow({ onSignOut }: { onSignOut: () => void }) {
 }
 
 // ─── logo block (reused) ────────────────────────────────────────────────────
-// Two images — CSS dark: variant swaps them instantly (no JS, no flash).
-// Light logo has a white bg so it's wrapped; dark logo is transparent, no wrapper.
+// Single transparent-bg logo used for both themes.
 function LogoBlock({
-  displayWidth = 130,
   onClick,
+  className = "",
 }: {
-  displayWidth?: number;
   onClick?: () => void;
+  className?: string;
 }) {
   return (
-    <Link href="/dashboard" onClick={onClick} className="block">
-      {/* Light mode */}
-      <div
-        className="overflow-hidden rounded-sm bg-white p-2 dark:hidden"
-        style={{ width: displayWidth }}
-      >
-        <Image
-          src="/logo.png"
-          alt="LàHaut Agency"
-          width={400}
-          height={200}
-          className="h-auto w-full object-contain"
-          priority
-        />
-      </div>
-      {/* Dark mode — transparent bg, no wrapper needed */}
-      <div
-        className="hidden dark:block"
-        style={{ width: displayWidth }}
-      >
-        <Image
-          src="/logo-dark.png"
-          alt="LàHaut Agency"
-          width={400}
-          height={200}
-          className="h-auto w-full object-contain"
-          priority
-        />
-      </div>
+    <Link href="/dashboard" onClick={onClick} className={`block ${className}`}>
+      <Image
+        src="/logo-dark.png"
+        alt="LàHaut Agency"
+        width={400}
+        height={200}
+        className="h-auto w-full object-contain"
+        priority
+      />
     </Link>
   );
 }
@@ -181,16 +160,7 @@ export function Sidebar() {
           <Menu className="h-5 w-5" strokeWidth={1.5} />
         </button>
 
-        <Link href="/dashboard" className="absolute left-1/2 -translate-x-1/2">
-          {/* Light */}
-          <div className="overflow-hidden rounded-sm bg-white px-2 py-1 dark:hidden" style={{ width: 90 }}>
-            <Image src="/logo.png" alt="LàHaut Agency" width={400} height={200} className="h-auto w-full object-contain" priority />
-          </div>
-          {/* Dark */}
-          <div className="hidden dark:block" style={{ width: 90 }}>
-            <Image src="/logo-dark.png" alt="LàHaut Agency" width={400} height={200} className="h-auto w-full object-contain" priority />
-          </div>
-        </Link>
+        <LogoBlock className="absolute left-1/2 w-20 -translate-x-1/2" />
 
         <ThemeToggle />
       </header>
@@ -215,7 +185,7 @@ export function Sidebar() {
         )}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
-          <LogoBlock displayWidth={110} onClick={() => setMobileOpen(false)} />
+          <LogoBlock onClick={() => setMobileOpen(false)} className="w-28" />
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
@@ -231,8 +201,8 @@ export function Sidebar() {
 
       {/* ── Desktop sidebar ────────────────────────────────────────────── */}
       <aside className="fixed left-0 top-0 z-40 hidden h-screen w-[var(--sidebar-width)] flex-col border-r border-border bg-card lg:flex">
-        <div className="border-b border-border px-4 py-4">
-          <LogoBlock displayWidth={90} />
+        <div className="border-b border-border px-4 py-5">
+          <LogoBlock />
         </div>
         <NavList pathname={pathname} />
         <UserRow onSignOut={signOut} />

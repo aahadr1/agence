@@ -68,9 +68,9 @@
   --control-border: rgba(255, 255, 255, 0.12);
   --control-border-hover: rgba(255, 255, 255, 0.22);
   --control-bg-hover: rgba(255, 255, 255, 0.06);
-  /* Accent — pastel baby blue (slightly more vivid on dark) */
-  --blue: #7ec6df;
-  --blue-subtle: rgba(126, 198, 223, 0.18);
+  /* Accent — same pastel baby blue as light mode */
+  --blue: #a8cfe0;
+  --blue-subtle: rgba(168, 207, 224, 0.18);
 }
 
 @theme inline {
