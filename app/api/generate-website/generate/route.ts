@@ -4,6 +4,82 @@ import { NextResponse } from "next/server";
 
 export const maxDuration = 60;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Img = { url: string; type: string; analysis?: any };
+
+function buildImageTable(images: Img[]) {
+  const logo = images.find((i) => i.type === "logo");
+  const allPhotos = images.filter((i) => i.type === "photo");
+  const uploaded = allPhotos.filter((i) => i.analysis?.source !== "web");
+  const web = allPhotos.filter(
+    (i) => i.analysis?.source === "web" && i.analysis?.quality !== "low"
+  );
+
+  const map: { alias: string; url: string; desc: string; kind: string }[] = [];
+  let idx = 1;
+
+  if (logo) {
+    map.push({
+      alias: `@@IMG${idx}@@`,
+      url: logo.url,
+      desc: logo.analysis?.mood || "Business logo",
+      kind: "LOGO",
+    });
+    idx++;
+  }
+  for (const p of uploaded) {
+    map.push({
+      alias: `@@IMG${idx}@@`,
+      url: p.url,
+      desc: p.analysis?.description || "Business photo",
+      kind: "PHOTO",
+    });
+    idx++;
+  }
+  for (const p of web) {
+    map.push({
+      alias: `@@IMG${idx}@@`,
+      url: p.url,
+      desc: p.analysis?.description || "Web photo",
+      kind: "PHOTO",
+    });
+    idx++;
+  }
+
+  return map;
+}
+
+/** Replace @@IMGN@@ aliases with real URLs in generated HTML */
+function resolveAliases(
+  files: { path: string; content: string }[],
+  imgMap: { alias: string; url: string }[]
+): { path: string; content: string }[] {
+  return files.map((f) => {
+    let content = f.content;
+    for (const img of imgMap) {
+      content = content.replaceAll(img.alias, img.url);
+    }
+    return { path: f.path, content };
+  });
+}
+
+/** Detect language from address */
+function detectLanguage(address: string): string {
+  const lower = (address || "").toLowerCase();
+  if (
+    /france|paris|lyon|marseille|toulouse|nice|bordeaux|lille|strasbourg|nantes|montpellier|rennes|grenoble/i.test(
+      lower
+    )
+  )
+    return "French";
+  if (/españa|spain|madrid|barcelona/i.test(lower)) return "Spanish";
+  if (/italia|italy|roma|milano/i.test(lower)) return "Italian";
+  if (/deutschland|germany|berlin|münchen/i.test(lower)) return "German";
+  if (/nederland|netherlands|amsterdam/i.test(lower)) return "Dutch";
+  if (/portugal|lisboa/i.test(lower)) return "Portuguese";
+  return "English";
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const {
@@ -68,54 +144,12 @@ export async function POST(request: Request) {
   }
 
   const images = imagesRes.data || [];
-  const logo = images.find(
-    (img: { type: string }) => img.type === "logo"
-  );
-  const allPhotos = images.filter(
-    (img: { type: string }) => img.type === "photo"
-  );
-  // Separate by source — same order as ideation so IMG-X numbering matches
-  const uploadedPhotos = allPhotos.filter(
-    (img: { analysis?: { source?: string } }) => img.analysis?.source !== "web"
-  );
-  const webPhotos = allPhotos.filter(
-    (img: { analysis?: { source?: string; quality?: string } }) =>
-      img.analysis?.source === "web" && img.analysis?.quality !== "low"
-  );
   const businessInfo = project.business_info;
   const colorScheme = variant.color_scheme || {};
+  const imgMap = buildImageTable(images);
+  const lang = detectLanguage(businessInfo.address || "");
 
-  // Build the same IMG-X inventory as ideation used — so the variant's
-  // image_usage references (IMG-1, IMG-3, etc.) resolve to actual URLs
-  const imgMap: { tag: string; url: string; desc: string }[] = [];
-  let imgIdx = 1;
-
-  if (logo) {
-    imgMap.push({
-      tag: `IMG-${imgIdx}`,
-      url: logo.url,
-      desc: `LOGO — ${logo.analysis?.mood || "Business logo"}`,
-    });
-    imgIdx++;
-  }
-  for (const p of uploadedPhotos) {
-    imgMap.push({
-      tag: `IMG-${imgIdx}`,
-      url: p.url,
-      desc: `USER PHOTO — ${p.analysis?.description || "Business photo"} (best for: ${p.analysis?.suggestedPlacement || "gallery"})`,
-    });
-    imgIdx++;
-  }
-  for (const p of webPhotos) {
-    imgMap.push({
-      tag: `IMG-${imgIdx}`,
-      url: p.url,
-      desc: `WEB PHOTO — ${p.analysis?.description || "Found online"} (best for: ${p.analysis?.suggestedPlacement || "gallery"})`,
-    });
-    imgIdx++;
-  }
-
-  // Clean up old failed/pending builds for this project
+  // Clean up old builds
   await serviceClient
     .from("website_builds")
     .delete()
@@ -144,262 +178,156 @@ export async function POST(request: Request) {
     );
   }
 
-  // Update project status (non-blocking)
   serviceClient
     .from("projects")
     .update({ status: "building", updated_at: new Date().toISOString() })
     .eq("id", projectId)
     .then(() => {});
 
-  const isRestaurant = !!(
-    businessInfo.cuisine
-      ?.toLowerCase()
-      ?.match(
-        /restaurant|cafe|café|bistrot|brasserie|pizza|sushi|burger|trattoria|ramen|bar|pub|grill/
-      ) || businessInfo.menu
-  );
-
-  const pageType = isRestaurant ? "menu" : "services";
-  const pageTypeLabel = isRestaurant ? "Menu / Carte" : "Services";
-
-  // Build image inventory lines using the same IMG-X tags as ideation
-  const imageLines = imgMap
-    .map((img) => `  [${img.tag}] ${img.desc}\n    URL: ${img.url}`)
+  // ── Build the image alias table (placed FIRST so the AI sees it early) ──
+  const imageTable = imgMap
+    .map(
+      (img) =>
+        `  ${img.alias}  →  ${img.kind}: ${img.desc}`
+    )
     .join("\n");
 
-  // Resolve the variant's image_usage plan — replace IMG-X references with actual URLs
-  const imageUsageRaw = colorScheme.image_usage || {};
-  const resolvedImageUsage: Record<string, string> = {};
-  for (const [key, val] of Object.entries(imageUsageRaw)) {
-    let resolved = String(val || "");
-    for (const img of imgMap) {
-      resolved = resolved.replace(
-        new RegExp(`\\[?${img.tag}\\]?`, "gi"),
-        `${img.url}`
-      );
-    }
-    resolvedImageUsage[key] = resolved;
-  }
-
-  // Extract rich design metadata from the variant
+  // Design metadata
   const designRationale = colorScheme.design_rationale || "";
   const typography = colorScheme.typography || "";
   const layoutConcept = colorScheme.layout_concept || "";
 
-  const prompt = `You are a world-class front-end developer and designer. Your specialty is building stunning, award-winning websites that are visually breathtaking and technically flawless.
+  // Resolve image_usage from ideation
+  const imageUsageRaw = colorScheme.image_usage || {};
+  const resolvedUsage: string[] = [];
+  for (const [key, val] of Object.entries(imageUsageRaw)) {
+    let resolved = String(val || "");
+    // Replace IMG-X references with aliases
+    for (let i = 0; i < imgMap.length; i++) {
+      const pattern = new RegExp(`\\[?IMG-${i + 1}\\]?`, "gi");
+      resolved = resolved.replace(pattern, imgMap[i].alias);
+    }
+    resolvedUsage.push(`${key}: ${resolved}`);
+  }
 
-A client has chosen a specific design direction for their website. You must build it with absolute precision and creative excellence.
+  const prompt = `You are a senior front-end developer and creative director at the world's best digital agency. You build award-winning, production-ready websites.
 
-=== THE BUSINESS ===
+╔══════════════════════════════════════════════════════╗
+║  MANDATORY IMAGE ALIASES — USE THESE IN YOUR HTML   ║
+╠══════════════════════════════════════════════════════╣
+${imageTable || "  (No images — use solid colors, gradients, SVG icons)"}
+╚══════════════════════════════════════════════════════╝
+
+When you write <img> tags, use the alias as the src attribute.
+Example: <img src="@@IMG1@@" alt="..." class="...">
+We will automatically replace @@IMGN@@ with real URLs after generation.
+You MUST use EVERY image alias at least once across the website.
+${imgMap.length > 0 ? `You have ${imgMap.length} images. Distribute them across pages — hero sections, about sections, gallery grids, backgrounds, etc.` : ""}
+
+Image placement plan from the selected design concept:
+${resolvedUsage.length > 0 ? resolvedUsage.join("\n") : "Distribute images naturally across pages."}
+
+═══════════════════════════════════════════════════════
+THE BUSINESS
+═══════════════════════════════════════════════════════
 Name: "${businessInfo.name}"
-Address: "${businessInfo.address || ""}"
+Address: ${businessInfo.address || "N/A"}
 Phone: ${businessInfo.phone || "N/A"}
 Hours: ${businessInfo.hours || "N/A"}
 Type: ${businessInfo.cuisine || "Business"}
 Price range: ${businessInfo.priceRange || "N/A"}
 Rating: ${businessInfo.rating || "N/A"}
 
-Description:
-${businessInfo.description || "A local business."}
+${businessInfo.description || ""}
 
-Atmosphere:
-${businessInfo.vibe || "Professional and welcoming"}
+Atmosphere: ${businessInfo.vibe || "Professional"}
 
-What makes them unique:
+Unique selling points:
 ${businessInfo.uniqueSellingPoints?.join("\n") || "N/A"}
 
-Customer reviews:
-${businessInfo.customerSentiment || "N/A"}
+Customer sentiment: ${businessInfo.customerSentiment || "N/A"}
 
-Review highlights:
+Review quotes:
 ${businessInfo.reviewHighlights?.join("\n") || "N/A"}
 
-${isRestaurant ? `Menu:\n${businessInfo.menu || "Not available"}` : `Services: ${businessInfo.description || "Professional services"}`}
+${businessInfo.menu ? `Menu / Services:\n${businessInfo.menu}` : ""}
 
-Social media:
-  Instagram: ${businessInfo.socialMedia?.instagram || ""}
-  Facebook: ${businessInfo.socialMedia?.facebook || ""}
-  Website: ${businessInfo.socialMedia?.website || ""}
+Social: Instagram ${businessInfo.socialMedia?.instagram || "—"} | Facebook ${businessInfo.socialMedia?.facebook || "—"}
 
-=== SELECTED DESIGN DIRECTION ===
+═══════════════════════════════════════════════════════
+DESIGN DIRECTION (selected by the client)
+═══════════════════════════════════════════════════════
 Theme: "${variant.theme_name}"
-Design rationale: ${designRationale}
-Typography concept: ${typography}
-Layout architecture: ${layoutConcept}
+Rationale: ${designRationale}
+Typography: ${typography}
+Layout: ${layoutConcept}
+Colors: primary ${colorScheme.primary || "#6d28d9"} · secondary ${colorScheme.secondary || "#1a1a2e"} · accent ${colorScheme.accent || "#e94560"}
+${businessInfo.colors?.length ? `Brand colors: ${businessInfo.colors.join(", ")}` : ""}
 
-Color palette:
-  Primary: ${colorScheme.primary || "#6d28d9"}
-  Secondary: ${colorScheme.secondary || "#1a1a2e"}
-  Accent: ${colorScheme.accent || "#e94560"}
-  Business brand colors: ${businessInfo.colors?.join(", ") || "N/A"}
+═══════════════════════════════════════════════════════
+YOUR TASK
+═══════════════════════════════════════════════════════
+Build a COMPLETE, PRODUCTION-READY website for this business.
 
-Image usage plan (from the selected design concept — follow this EXACTLY):
-  Logo: ${resolvedImageUsage.logo || (logo ? `Display ${logo.url} in header` : "Create a text logo with the business name")}
-  Hero image: ${resolvedImageUsage.hero_image || "Use the strongest available photo as a full-bleed hero"}
-  Section images: ${Array.isArray(resolvedImageUsage.section_images) ? JSON.stringify(resolvedImageUsage.section_images) : resolvedImageUsage.section_images || "Distribute remaining photos across sections"}
+YOU decide what pages this business needs. Think about it:
+- What pages would a visitor expect?
+- What pages would help this specific business convert visitors?
+- What content is available from the research?
 
-=== IMAGE INVENTORY (${imgMap.length} assets — use ALL of them) ===
-${imageLines || "No images available — use solid color sections, gradients, and SVG icons instead"}
+Requirements:
+- Build AT LEAST 5 pages, up to 8-10 if the content supports it
+- One page MUST be index.html (homepage)
+- One page MUST be a contact page
+- Every other page is YOUR choice based on what makes sense
+- Examples: about, menu, services, gallery, team, testimonials, reservations, pricing, events, FAQ, blog, portfolio, locations...
 
-CRITICAL: Every image URL listed above is a REAL, working URL. You MUST use these exact URLs in <img> tags throughout the website. Do NOT invent placeholder URLs. The user selected this design specifically because of how these images looked in the mockup — the final website must use them in the same way.
+COPYWRITING:
+- Write ALL text in ${lang}. Professional, warm, specific to this business.
+- Never use generic filler text. Every sentence must feel written by a human who KNOWS this business.
+- Use the real business data (reviews, menu items, descriptions, selling points).
+- Write compelling headlines, not generic ones. Not "Welcome" but something that captures the essence.
+- Vary sentence length. Mix short punchy lines with flowing descriptions.
 
-=== PAGES TO BUILD ===
+═══════════════════════════════════════════════════════
+TECHNICAL STACK
+═══════════════════════════════════════════════════════
+Each HTML file: standalone, complete <!DOCTYPE html> document.
 
-1. **index.html** — Homepage
-   The homepage is the most important page. It must be visually stunning and immediately communicate who this business is.
-   - Hero section: dramatic, full-impact, with smooth CSS entrance animations (fade-in, slide-up for text, scale for images). The hero must convey the atmosphere of the business in an instant.
-   - Highlight sections showcasing what makes this business special (use their unique selling points and real customer quotes)
-   - Smooth scroll transitions between sections
-   - Clear call-to-action sections with hover animations
-   - Every section should feel intentional and designed, never like a template
+<head> must include:
+- <meta charset="UTF-8"> + viewport meta
+- <title>{Page} — ${businessInfo.name}</title>
+- <script src="https://cdn.tailwindcss.com"><\/script> with config:
+  tailwind.config = { theme: { extend: { colors: {
+    primary: '${colorScheme.primary || "#6d28d9"}',
+    'primary-light': '${colorScheme.primary || "#6d28d9"}20',
+    secondary: '${colorScheme.secondary || "#1a1a2e"}',
+    accent: '${colorScheme.accent || "#e94560"}'
+  }}}}
+- Google Fonts (pick fonts that match the typography concept)
+- Alpine.js CDN (for mobile menu, lightbox, tabs, accordions)
+- <style> block with CSS animations (fadeInUp, slideIn, scaleIn, stagger, parallax)
 
-2. **about.html** — About
-   - Tell the story of this business with genuine warmth and specificity
-   - Values, mission, what drives the team
-   - Use photos naturally within the narrative
-   - Parallax or scroll-triggered fade effects for visual interest
+Design rules:
+- Responsive: mobile-first (sm: md: lg: xl:)
+- Fixed header with backdrop-blur, mobile hamburger via Alpine.js
+- Generous whitespace, depth via shadows and subtle gradients
+- Smooth hover states on everything interactive
+- CSS entrance animations on scroll (IntersectionObserver or Alpine.js x-intersect)
+- Comprehensive footer (info, hours, nav, social, copyright)
+- Navigation links use relative paths (index.html, about.html, etc.)
+- Active page highlighted in nav
+- Google Maps embed: src="https://www.google.com/maps?q=${encodeURIComponent(businessInfo.address || businessInfo.name)}&output=embed"
+- NO emojis anywhere
+- NO placeholder images — only @@IMGN@@ aliases or solid-color/gradient/SVG fallbacks
 
-3. **${pageType}.html** — ${pageTypeLabel}
-   ${isRestaurant
-     ? `- Display the REAL menu with actual items and real prices
-   - Organize by categories (starters, mains, desserts, drinks, etc.)
-   - Elegant layout: category headers with decorative elements, prices right-aligned with dot leaders
-   - Subtle hover effects on menu items
-   - Use food photos if available, integrated naturally`
-     : `- Showcase all services with descriptions
-   - Professional layout with icons or images
-   - Pricing if available
-   - Clear calls to action for each service`}
-
-4. **gallery.html** — Gallery
-   - Responsive masonry-style grid: 1 col mobile, 2 cols tablet, 3-4 cols desktop
-   - Use ALL available real photos with their actual URLs
-   - Smooth hover effects (subtle scale + shadow + slight brightness)
-   - Lightbox overlay on click using Alpine.js (x-data, x-show, x-transition)
-   - Staggered entrance animations when scrolling into view
-   - If few photos, graceful messaging about social media
-
-5. **contact.html** — Contact
-   - Elegant contact form (name, email, phone, message) with focus animations on inputs
-   - Full address with embedded Google Maps iframe
-   - Clickable phone number (tel:) with hover effect
-   - Business hours in a clean, readable layout
-   - Social media links with icon hover animations
-
-=== TECHNICAL SPECIFICATIONS ===
-
-Each HTML file must be a complete standalone document:
-
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{Page Title} - ${businessInfo.name}</title>
-  <script src="https://cdn.tailwindcss.com"><\/script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            primary: '${colorScheme.primary || "#6d28d9"}',
-            'primary-light': '${colorScheme.primary || "#6d28d9"}20',
-            secondary: '${colorScheme.secondary || "#1a1a2e"}',
-            accent: '${colorScheme.accent || "#e94560"}',
-          }
-        }
-      }
-    }
-  <\/script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"><\/script>
-  <style>
-    [x-cloak] { display: none !important; }
-    html { scroll-behavior: smooth; }
-
-    /* Entrance animations */
-    @keyframes fadeInUp {
-      from { opacity: 0; transform: translateY(30px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    @keyframes slideInLeft {
-      from { opacity: 0; transform: translateX(-40px); }
-      to { opacity: 1; transform: translateX(0); }
-    }
-    @keyframes slideInRight {
-      from { opacity: 0; transform: translateX(40px); }
-      to { opacity: 1; transform: translateX(0); }
-    }
-    @keyframes scaleIn {
-      from { opacity: 0; transform: scale(0.9); }
-      to { opacity: 1; transform: scale(1); }
-    }
-    .animate-fade-in-up { animation: fadeInUp 0.8s ease-out forwards; }
-    .animate-fade-in { animation: fadeIn 0.6s ease-out forwards; }
-    .animate-slide-left { animation: slideInLeft 0.8s ease-out forwards; }
-    .animate-slide-right { animation: slideInRight 0.8s ease-out forwards; }
-    .animate-scale-in { animation: scaleIn 0.6s ease-out forwards; }
-
-    /* Stagger children */
-    .stagger > * { opacity: 0; animation: fadeInUp 0.6s ease-out forwards; }
-    .stagger > *:nth-child(1) { animation-delay: 0.1s; }
-    .stagger > *:nth-child(2) { animation-delay: 0.2s; }
-    .stagger > *:nth-child(3) { animation-delay: 0.3s; }
-    .stagger > *:nth-child(4) { animation-delay: 0.4s; }
-    .stagger > *:nth-child(5) { animation-delay: 0.5s; }
-    .stagger > *:nth-child(6) { animation-delay: 0.6s; }
-
-    /* Smooth transitions on interactive elements */
-    a, button { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-    img { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease; }
-  </style>
-</head>
-<body class="font-['Inter'] antialiased text-gray-800 bg-white overflow-x-hidden">
-  <!-- Header + navigation with Alpine.js mobile menu -->
-  <!-- Page content with animations -->
-  <!-- Footer -->
-</body>
-</html>
-
-=== DESIGN RULES ===
-
-DO:
-- Use the exact color palette from the selected design direction
-- Create smooth CSS animations: fade-in-up for sections as they appear, hover scale on images, color transitions on buttons and links
-- Use Playfair Display for headings (elegant serif) and Inter for body text (clean sans-serif) — or adapt the typography if the design concept specifies otherwise
-- Build with generous whitespace — let the design breathe
-- Use subtle gradients, shadows (shadow-lg, shadow-xl), and depth to create visual hierarchy
-- Make every hover state feel polished (scale, shadow, color shift, underline animation)
-- Use decorative elements sparingly: thin lines, dots, subtle patterns — NOT emojis
-- Every image must use a real URL from the available images list (never placeholders)
-- All text content must be the REAL business data — never Lorem ipsum
-- Responsive: mobile-first with sm: md: lg: xl: breakpoints
-- Header: fixed/sticky with backdrop blur, mobile hamburger menu via Alpine.js
-- Footer: comprehensive with business info, hours, navigation links, social icons, copyright
-- Navigation links: Accueil, A propos, ${pageTypeLabel}, Galerie, Contact — using relative paths (index.html, about.html, etc.)
-- Active page link visually highlighted
-- Google Maps: use src="https://www.google.com/maps?q=${encodeURIComponent(businessInfo.address || businessInfo.name)}&output=embed"
-- All text in French
-
-DO NOT:
-- Use any emojis anywhere in the website
-- Use generic placeholder text or stock photo URLs
-- Create a flat, template-looking design — this must feel custom-designed
-- Use inline JavaScript except for Alpine.js directives and Tailwind config
-- Over-complicate — elegance is simplicity done right
-
-=== OUTPUT FORMAT ===
-Return ONLY a valid JSON array. No markdown fences. No text before or after. Just parseable JSON:
+═══════════════════════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════════════════════
+Return ONLY a valid JSON array. No markdown. No explanation. No thinking.
 [
-  {"path": "index.html", "content": "<!DOCTYPE html>...complete page..."},
-  {"path": "about.html", "content": "<!DOCTYPE html>...complete page..."},
-  {"path": "${pageType}.html", "content": "<!DOCTYPE html>...complete page..."},
-  {"path": "gallery.html", "content": "<!DOCTYPE html>...complete page..."},
-  {"path": "contact.html", "content": "<!DOCTYPE html>...complete page..."}
+  {"path": "index.html", "content": "<!DOCTYPE html>..."},
+  {"path": "about.html", "content": "<!DOCTYPE html>..."},
+  ...
 ]`;
 
   try {
@@ -420,6 +348,7 @@ Return ONLY a valid JSON array. No markdown fences. No text before or after. Jus
     return NextResponse.json({
       buildId: build.id,
       predictionId: prediction.id,
+      imgMap: imgMap.map((i) => ({ alias: i.alias, url: i.url })),
     });
   } catch (error) {
     const msg =
@@ -438,3 +367,6 @@ Return ONLY a valid JSON array. No markdown fences. No text before or after. Jus
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
+
+// Export for use in review route
+export { buildImageTable, resolveAliases, detectLanguage };

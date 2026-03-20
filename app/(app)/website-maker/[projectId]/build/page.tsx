@@ -25,6 +25,7 @@ type BuildPhase =
   | "idle"
   | "generating"
   | "parsing"
+  | "improving"
   | "saving"
   | "preview"
   | "deploying"
@@ -36,8 +37,9 @@ const PHASE_INFO: Record<
   { label: string; description: string }
 > = {
   idle: { label: "Initializing...", description: "Checking for existing builds" },
-  generating: { label: "Generating your website", description: "AI is writing all 5 pages of your site" },
+  generating: { label: "Building your website", description: "AI is writing every page from scratch" },
   parsing: { label: "Processing output", description: "Extracting files from AI response" },
+  improving: { label: "Reviewing & improving", description: "AI is polishing, expanding, and adding pages" },
   saving: { label: "Saving files", description: "Storing your website for preview" },
   preview: { label: "Website ready!", description: "Your site is ready for preview" },
   deploying: { label: "Publishing...", description: "Deploying to production" },
@@ -51,6 +53,12 @@ const PROGRESS_STEPS = [
     label: "Generate",
     icon: Code2,
     activePhases: ["generating", "parsing"],
+  },
+  {
+    key: "improve",
+    label: "Improve",
+    icon: RefreshCw,
+    activePhases: ["improving"],
   },
   {
     key: "preview",
@@ -222,16 +230,38 @@ export default function BuildPage() {
     const labelMap: Record<string, string> = {
       "index.html": "Accueil",
       "about.html": "À propos",
-      "menu.html": "Menu",
+      "menu.html": "Menu / Carte",
+      "carte.html": "La Carte",
       "services.html": "Services",
       "gallery.html": "Galerie",
       "contact.html": "Contact",
+      "team.html": "Équipe",
+      "equipe.html": "Équipe",
+      "testimonials.html": "Témoignages",
+      "avis.html": "Avis",
+      "events.html": "Événements",
+      "evenements.html": "Événements",
+      "reservations.html": "Réservations",
+      "reservation.html": "Réservation",
+      "pricing.html": "Tarifs",
+      "tarifs.html": "Tarifs",
+      "faq.html": "FAQ",
+      "blog.html": "Blog",
+      "story.html": "Notre histoire",
+      "histoire.html": "Notre histoire",
+      "concept.html": "Le Concept",
+      "portfolio.html": "Portfolio",
     };
     return files
       .filter((f) => f.path.endsWith(".html"))
       .map((f) => ({
         path: f.path,
-        label: labelMap[f.path] || f.path.replace(".html", ""),
+        label:
+          labelMap[f.path] ||
+          f.path
+            .replace(".html", "")
+            .replace(/[-_]/g, " ")
+            .replace(/\b\w/g, (c) => c.toUpperCase()),
       }));
   };
 
@@ -277,6 +307,7 @@ export default function BuildPage() {
     setError(null);
 
     try {
+      // ── Phase 1: Generate core website ──
       const genRes = await fetch("/api/generate-website/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -288,16 +319,85 @@ export default function BuildPage() {
         throw new Error(err.error || "Failed to start generation");
       }
 
-      const { buildId: newBuildId, predictionId } = await safeJson(genRes);
+      const { buildId: newBuildId, predictionId, imgMap } = await safeJson(genRes);
       setBuildId(newBuildId);
 
       const rawOutput = await pollPrediction(predictionId);
 
       setPhase("parsing");
-      const files = parseFilesFromOutput(rawOutput);
+      let files = parseFilesFromOutput(rawOutput);
+
+      // Resolve @@IMGN@@ aliases to real URLs
+      if (imgMap && Array.isArray(imgMap)) {
+        files = files.map((f: { path: string; content: string }) => {
+          let content = f.content;
+          for (const img of imgMap) {
+            content = content.replaceAll(img.alias, img.url);
+          }
+          return { path: f.path, content };
+        });
+      }
+
       setFilesCount(files.length);
       setPages(filesToPages(files));
 
+      // ── Phase 2: Review + Improve + Expand ──
+      setPhase("improving");
+
+      // Fetch project context for the review endpoint
+      let reviewContext: { businessInfo?: Record<string, unknown>; colorScheme?: Record<string, unknown> } = {};
+      try {
+        const ctxRes = await fetch(`/api/generate-website/build-status?projectId=${projectId}`);
+        if (ctxRes.ok) {
+          // We just need basic context, not the full build
+        }
+      } catch {}
+
+      const reviewRes = await fetch("/api/generate-website/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          buildId: newBuildId,
+          files,
+          businessInfo: reviewContext.businessInfo || {},
+          colorScheme: reviewContext.colorScheme || {},
+          imgAliases: imgMap || [],
+          lang: "French",
+        }),
+      });
+
+      if (reviewRes.ok) {
+        const { predictionId: reviewPredId } = await safeJson(reviewRes);
+
+        try {
+          const improvedOutput = await pollPrediction(reviewPredId);
+          let improvedFiles = parseFilesFromOutput(improvedOutput);
+
+          // Resolve aliases again
+          if (imgMap && Array.isArray(imgMap)) {
+            improvedFiles = improvedFiles.map((f: { path: string; content: string }) => {
+              let content = f.content;
+              for (const img of imgMap) {
+                content = content.replaceAll(img.alias, img.url);
+              }
+              return { path: f.path, content };
+            });
+          }
+
+          // Only use improved version if it has at least as many pages
+          if (improvedFiles.length >= files.length) {
+            files = improvedFiles;
+            setFilesCount(files.length);
+            setPages(filesToPages(files));
+          }
+        } catch (e) {
+          console.warn("Improvement phase failed, using v1:", e);
+        }
+      } else {
+        console.warn("Review request failed, using v1");
+      }
+
+      // ── Phase 3: Save ──
       setPhase("saving");
       const saveRes = await fetch("/api/generate-website/build-status", {
         method: "POST",

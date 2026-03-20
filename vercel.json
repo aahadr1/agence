@@ -21,6 +21,7 @@
     "app/api/generate-website/pages/route.ts": { "maxDuration": 30 },
     "app/api/generate-website/deploy/route.ts": { "maxDuration": 30 },
     "app/api/generate-website/deploy-status/route.ts": { "maxDuration": 10 },
-    "app/api/generate-website/generate/route.ts": { "maxDuration": 60 }
+    "app/api/generate-website/generate/route.ts": { "maxDuration": 60 },
+    "app/api/generate-website/review/route.ts": { "maxDuration": 60 }
   }
 }
