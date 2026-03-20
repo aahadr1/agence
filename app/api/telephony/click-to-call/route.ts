@@ -45,8 +45,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const fromNum = getTwilioNumber();
-  if (!fromNum) {
+  const rawTwilioFrom = getTwilioNumber().trim();
+  if (!rawTwilioFrom) {
     return NextResponse.json(
       {
         error:
@@ -55,6 +55,19 @@ export async function POST(request: Request) {
       { status: 503 }
     );
   }
+  const fromNum = normalizeToE164(rawTwilioFrom);
+
+  const agentPhone = normalizeToE164(agent.phone_e164.trim());
+  if (fromNum === agentPhone) {
+    return NextResponse.json(
+      {
+        error:
+          "TWILIO_PHONE_NUMBER est identique à ton numéro mobile enregistré : Twilio ne peut pas appeler un numéro depuis lui-même (statut « Busy »). Mets dans TWILIO_PHONE_NUMBER un numéro acheté chez Twilio (Voice), et garde ton portable uniquement dans « Ton numéro » ci-dessus (et éventuellement TWILIO_CALLER_ID pour l’affichage).",
+      },
+      { status: 400 }
+    );
+  }
+
   const base = getPublicAppUrl();
   const connectUrl = new URL(
     `${base}/api/telephony/twiml/click-connect`
@@ -66,7 +79,7 @@ export async function POST(request: Request) {
     const client = getTwilioRestClient();
     const created = await client.calls.create({
       from: fromNum,
-      to: agent.phone_e164,
+      to: agentPhone,
       url: connectUrl.toString(),
       method: "POST",
       statusCallback: statusCallbackUrl(),

@@ -67,6 +67,13 @@ En production, les URLs absolues viennent de `NEXT_PUBLIC_APP_URL` ou `VERCEL_UR
 
 **Important :** `TWILIO_PHONE_NUMBER` doit être un **numéro Twilio**. Tu ne peux pas mettre ton 06 personnel comme `from` sur les appels API ; utilise `TWILIO_CALLER_ID` pour afficher un numéro vérifié au destinataire.
 
+### Dépannage : « Busy », 0 s, le mobile ne sonne pas
+
+Si dans les logs Twilio **From** et **To** sont **le même numéro**, Twilio tente d’appeler un numéro depuis lui-même → statut **Busy**. Il faut deux numéros distincts :
+
+- **`TWILIO_PHONE_NUMBER`** = numéro **acheté chez Twilio** (identité technique de l’appel sortant).
+- **Ton portable** = uniquement dans l’app (section « Ton numéro ») pour recevoir le click-to-call — **pas** la même valeur que `TWILIO_PHONE_NUMBER`.
+
 ## Légal (France / UE)
 
 Informer les parties et respecter le RGPD pour les enregistrements et transcriptions ; documenter en interne.
