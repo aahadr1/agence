@@ -21,8 +21,8 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Agence - AI Website Builder",
-  description: "Create stunning websites for your business with AI",
+  title: "LàHaut Agency",
+  description: "AI-powered website builder and lead generator by LàHaut Agency",
 };
 
 export default function RootLayout({

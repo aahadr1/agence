@@ -10,6 +10,7 @@ import {
   LogOut,
   Search,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -28,15 +29,19 @@ export function Sidebar() {
       className="fixed left-0 top-0 z-40 flex h-screen w-[var(--sidebar-width)] flex-col border-r border-border bg-card"
       style={{ width: "var(--sidebar-width)" }}
     >
-      <div className="flex flex-col gap-1 border-b border-border px-6 py-8">
-        <Link href="/dashboard" className="group">
-          <span className="font-display text-lg font-medium tracking-tight text-foreground">
-            Agence
-          </span>
+      <div className="border-b border-border px-5 py-5">
+        <Link href="/dashboard" className="block">
+          <div className="overflow-hidden rounded-sm bg-white p-2">
+            <Image
+              src="/logo.png"
+              alt="LàHaut Agency"
+              width={160}
+              height={80}
+              className="h-auto w-full object-contain"
+              priority
+            />
+          </div>
         </Link>
-        <span className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-          Studio
-        </span>
       </div>
 
       <nav className="flex-1 px-3 py-8">
