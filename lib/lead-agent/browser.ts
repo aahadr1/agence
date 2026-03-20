@@ -1,5 +1,8 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import chromiumBinary from "@sparticuz/chromium";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const IS_SERVERLESS = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 
@@ -70,14 +73,29 @@ export interface BrowserSession {
 }
 
 export async function launchBrowser(): Promise<BrowserSession> {
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled",
-    ],
-  });
+  const launchArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+  ];
+
+  let browser: Browser;
+
+  if (IS_SERVERLESS) {
+    // On Vercel/Lambda: use @sparticuz/chromium's bundled binary
+    const executablePath = await chromiumBinary.executablePath();
+    browser = await chromium.launch({
+      headless: true,
+      executablePath,
+      args: [...chromiumBinary.args, ...launchArgs],
+    });
+  } else {
+    // Local dev: use Playwright's own Chromium
+    browser = await chromium.launch({
+      headless: true,
+      args: launchArgs,
+    });
+  }
 
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
