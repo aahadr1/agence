@@ -74,6 +74,13 @@ Si dans les logs Twilio **From** et **To** sont **le même numéro**, Twilio ten
 - **`TWILIO_PHONE_NUMBER`** = numéro **acheté chez Twilio** (identité technique de l’appel sortant).
 - **Ton portable** = uniquement dans l’app (section « Ton numéro ») pour recevoir le click-to-call — **pas** la même valeur que `TWILIO_PHONE_NUMBER`.
 
+### Dépannage : « An application error has occurred. Goodbye » au décroché
+
+Souvent dû à un **échec de validation de la signature** sur l’URL TwiML (`403`) : l’URL utilisée par Twilio pour signer doit être la **même** que celle construite côté app (`NEXT_PUBLIC_APP_URL` / `TWILIO_WEBHOOK_BASE_URL`). Vérifie :
+
+- **`NEXT_PUBLIC_APP_URL`** sur Vercel = l’URL **exacte** utilisée dans l’API Twilio (ex. `https://tondomaine.com` sans slash final), alignée avec l’URL du webhook dans les appels.
+- Optionnel : **`TWILIO_WEBHOOK_BASE_URL`** si ton domaine public diffère de ce que voit le serveur.
+
 ## Légal (France / UE)
 
 Informer les parties et respecter le RGPD pour les enregistrements et transcriptions ; documenter en interne.
