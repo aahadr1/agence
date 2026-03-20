@@ -163,119 +163,50 @@ export default function NewProjectPage() {
 
       setProgress(20);
 
-      // Step 3: Web search (Tavily)
-      setCurrentStep("Searching the web for business info...");
+      // Step 3: Browser-based research (Google Maps + website + images)
+      setCurrentStep("Researching business online...");
       setProgress(25);
 
-      const searchRes = await fetch("/api/research/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessName, businessAddress }),
-      });
+      // Animate progress while the long-running browse request is active
+      const progressInterval = setInterval(() => {
+        setProgress((p) => Math.min(p + 1, 62));
+      }, 4000);
 
-      if (!searchRes.ok) {
-        const text = await searchRes.text();
-        let msg = "Web search failed";
-        try { msg = JSON.parse(text).error || msg; } catch {}
-        throw new Error(msg);
-      }
-
-      const { rawResearch, foundImages } = await searchRes.json();
-      setProgress(35);
-
-      // Step 4: Analyze found web images with AI vision
-      setCurrentStep("AI is analyzing found images...");
-      setProgress(40);
-
-      let imageAnalyses: { url: string; description: string; analysis: string }[] = [];
-      if (foundImages && foundImages.length > 0) {
-        const analyzeWebRes = await fetch("/api/research/analyze", {
+      let browseOk = false;
+      try {
+        const browseRes = await fetch("/api/research/browse", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ foundImages, businessName, businessAddress }),
+          body: JSON.stringify({
+            projectId: project.id,
+            businessName,
+            businessAddress,
+          }),
         });
 
-        if (analyzeWebRes.ok) {
-          const data = await analyzeWebRes.json();
-          imageAnalyses = data.imageAnalyses || [];
-        } else {
-          console.warn("Web image analysis failed, continuing...");
-        }
-      }
+        clearInterval(progressInterval);
 
-      setProgress(50);
-
-      // Step 5: Start AI synthesis (non-blocking)
-      setCurrentStep("AI is building your business profile...");
-      setProgress(52);
-
-      const synthesizeRes = await fetch("/api/research/synthesize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          businessName,
-          businessAddress,
-          rawResearch,
-          imageAnalyses,
-        }),
-      });
-
-      if (!synthesizeRes.ok) {
-        const text = await synthesizeRes.text();
-        let msg = "Synthesis failed";
-        try { msg = JSON.parse(text).error || msg; } catch {}
-        throw new Error(msg);
-      }
-
-      const { predictionId: synthPredictionId } = await synthesizeRes.json();
-
-      // Poll for synthesis completion
-      setCurrentStep("AI is deeply analyzing your business...");
-      let synthOutput = "";
-      for (let i = 0; i < 120; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const pollRes = await fetch(`/api/predictions/${synthPredictionId}`);
-        const pollData = await pollRes.json().catch(() => ({}));
-
-        if (pollData.status === "succeeded") {
-          synthOutput = pollData.rawOutput || "";
-          break;
-        } else if (pollData.status === "failed" || pollData.status === "canceled") {
-          throw new Error("AI synthesis failed. Please try again.");
+        if (!browseRes.ok) {
+          const text = await browseRes.text();
+          let msg = "Research failed";
+          try {
+            msg = JSON.parse(text).error || msg;
+          } catch {}
+          throw new Error(msg);
         }
 
-        // Update progress while waiting
-        setProgress(52 + Math.min(12, i));
+        browseOk = true;
+      } finally {
+        clearInterval(progressInterval);
       }
 
-      if (!synthOutput) {
-        throw new Error("Synthesis timed out");
-      }
-
-      // Save the parsed result
-      setCurrentStep("Saving business profile...");
-      setProgress(64);
-
-      const saveRes = await fetch("/api/research/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          rawOutput: synthOutput,
-        }),
-      });
-
-      if (!saveRes.ok) {
-        const text = await saveRes.text();
-        let msg = "Failed to save research";
-        try { msg = JSON.parse(text).error || msg; } catch {}
-        throw new Error(msg);
+      if (!browseOk) {
+        throw new Error("Research failed unexpectedly");
       }
 
       setProgress(65);
 
-      // Step 6: Analyze uploaded images with context
+      // Step 4: Analyze uploaded images with context
       setCurrentStep("Analyzing your uploaded images...");
       setProgress(68);
 
@@ -446,12 +377,11 @@ export default function NewProjectPage() {
               </p>
             </div>
 
-            <div className="mt-10 grid w-full max-w-2xl grid-cols-3 gap-px bg-black/[0.08] md:grid-cols-6">
+            <div className="mt-10 grid w-full max-w-2xl grid-cols-3 gap-px bg-black/[0.08] md:grid-cols-5">
               {[
                 { label: "Upload", threshold: 15 },
-                { label: "Search", threshold: 30 },
-                { label: "Vision", threshold: 45 },
-                { label: "Synthesis", threshold: 60 },
+                { label: "Research", threshold: 30 },
+                { label: "Analysis", threshold: 65 },
                 { label: "Concepts", threshold: 80 },
                 { label: "Mockups", threshold: 95 },
               ].map((step) => (
