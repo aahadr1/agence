@@ -14,6 +14,11 @@ export const NAV_ITEMS = [
     href: "/lead-generator",
     icon: "Search" as const,
   },
+  {
+    label: "Appels",
+    href: "/telephony",
+    icon: "Phone" as const,
+  },
 ] as const;
 
 export const STEPS = [

@@ -9,18 +9,20 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Phone,
   Search,
   X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, startTransition } from "react";
 
 const iconMap = {
   LayoutDashboard,
   Globe,
   Search,
+  Phone,
 } as const;
 
 // ─── shared nav list ───────────────────────────────────────────────────────
@@ -132,7 +134,7 @@ export function Sidebar() {
 
   // Close drawer on route change
   useEffect(() => {
-    setMobileOpen(false);
+    startTransition(() => setMobileOpen(false));
   }, [pathname]);
 
   // Prevent body scroll when drawer is open
