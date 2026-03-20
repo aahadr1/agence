@@ -18,8 +18,32 @@ export function getGemini() {
 }
 
 export async function screenshotToBase64(page: Page): Promise<string> {
-  const buffer = await page.screenshot({ type: "jpeg", quality: 70 });
+  const buffer = await page.screenshot({
+    type: "jpeg",
+    quality: IS_SERVERLESS ? 50 : 70,
+  });
   return buffer.toString("base64");
+}
+
+/** Check if a browser session is still alive */
+export function isBrowserAlive(session: BrowserSession): boolean {
+  try {
+    return session.browser.isConnected();
+  } catch {
+    return false;
+  }
+}
+
+/** Safely close a browser session (no-op if already dead) */
+export async function safeClose(session: BrowserSession | null) {
+  if (!session) return;
+  try {
+    if (session.browser.isConnected()) {
+      await session.browser.close();
+    }
+  } catch {
+    // already dead
+  }
 }
 
 /**
@@ -135,6 +159,10 @@ export async function launchBrowser(): Promise<BrowserSession> {
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--single-process",
+    "--no-zygote",
   ];
 
   let browser: Browser;
@@ -160,7 +188,7 @@ export async function launchBrowser(): Promise<BrowserSession> {
   }
 
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
+    viewport: IS_SERVERLESS ? { width: 1024, height: 768 } : { width: 1280, height: 900 },
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     locale: "en-US",
@@ -187,7 +215,7 @@ export async function launchBrowser(): Promise<BrowserSession> {
 }
 
 export async function closeBrowser(session: BrowserSession) {
-  await session.browser.close();
+  await safeClose(session);
 }
 
 export async function newPage(session: BrowserSession): Promise<Page> {

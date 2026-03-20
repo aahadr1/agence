@@ -1,7 +1,10 @@
+import type { Page } from "playwright-core";
 import {
   launchBrowser,
   closeBrowser,
   newPage,
+  isBrowserAlive,
+  safeClose,
   type BrowserSession,
 } from "./browser";
 import { expandQueries } from "./query-expander";
@@ -108,14 +111,31 @@ export async function runDiscovery(
     );
 
     for (const query of queries) {
-      const mapsLeads = await scrapeGoogleMaps(
-        session.page,
-        query,
-        seenNames,
-        log,
-        3,
-        20
-      );
+      // Ensure browser is alive before each query
+      if (!session || !isBrowserAlive(session)) {
+        log("[Browser] Relaunching for next query...");
+        await safeClose(session);
+        session = await launchBrowser();
+      }
+
+      let mapsLeads;
+      try {
+        mapsLeads = await scrapeGoogleMaps(
+          session.page,
+          query,
+          seenNames,
+          log,
+          3,
+          20
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`[Maps] ✗ Query failed: ${msg}`);
+        if (msg.includes("closed") || msg.includes("Protocol error")) {
+          session = null; // force relaunch on next iteration
+        }
+        continue;
+      }
 
       for (const ml of mapsLeads) {
         allLeads.push({
@@ -148,7 +168,7 @@ export async function runDiscovery(
 
     return { leads: dedupedLeads, keywords };
   } finally {
-    if (session) await closeBrowser(session);
+    await safeClose(session);
   }
 }
 
@@ -171,6 +191,43 @@ export async function runEnrichment(
   log: (msg: string) => void = console.log
 ): Promise<LeadResult[]> {
   let session: BrowserSession | null = null;
+
+  /** Ensure we have a living browser; relaunch if dead */
+  async function ensureBrowser(): Promise<BrowserSession> {
+    if (session && isBrowserAlive(session)) return session;
+    log("[Browser] Relaunching browser...");
+    await safeClose(session);
+    session = await launchBrowser();
+    return session;
+  }
+
+  /** Run a single enrichment step with its own error handling.
+   *  If the browser dies mid-step, returns null instead of crashing. */
+  async function runStep<T>(
+    label: string,
+    fn: () => Promise<T | null>
+  ): Promise<T | null> {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Detect browser-died errors
+      if (
+        msg.includes("has been closed") ||
+        msg.includes("Target closed") ||
+        msg.includes("Session closed") ||
+        msg.includes("Connection closed") ||
+        msg.includes("Protocol error")
+      ) {
+        log(`[${label}] ✗ Browser crashed — will relaunch for next lead`);
+        // Mark session as dead so ensureBrowser relaunches
+        session = null;
+        return null;
+      }
+      log(`[${label}] ✗ ${msg}`);
+      return null;
+    }
+  }
 
   try {
     log(`Enriching ${leads.length} leads across 7 sources...`);
@@ -207,18 +264,23 @@ export async function runEnrichment(
         description: lead.description,
       };
 
-      const searchPage = await newPage(session);
+      // Ensure browser is alive before starting this lead
+      const liveSession = await ensureBrowser();
+      let searchPage: Page;
+      try {
+        searchPage = await newPage(liveSession);
+      } catch {
+        log(`[${i + 1}] ✗ Could not create page — relaunching`);
+        session = null;
+        const fresh = await ensureBrowser();
+        searchPage = await newPage(fresh);
+      }
 
       try {
         // ── Step 1: Google Search (multi-query) ──
         log(`[${i + 1}] Step 1/7: Google Search...`);
-        const googleResult = await searchGoogle(
-          searchPage,
-          ctx.business_name,
-          location,
-          ctx.phone,
-          ctx.address,
-          log
+        const googleResult = await runStep("Google", () =>
+          searchGoogle(searchPage, ctx.business_name, location, ctx.phone, ctx.address, log)
         );
         if (googleResult) {
           if (googleResult.has_real_website && googleResult.website_url) {
@@ -235,14 +297,13 @@ export async function runEnrichment(
           ctx.description = ctx.description || googleResult.extra_description;
         }
 
+        // If browser died in step 1, skip to next lead
+        if (!session) { writeCtxToLead(lead, ctx); continue; }
+
         // ── Step 2: PagesJaunes (multi-query) ──
         log(`[${i + 1}] Step 2/7: PagesJaunes...`);
-        const pjResult = await searchPagesJaunes(
-          searchPage,
-          ctx.business_name,
-          location,
-          ctx.phone, // pass known phone for reverse lookup
-          log
+        const pjResult = await runStep("PagesJaunes", () =>
+          searchPagesJaunes(searchPage, ctx.business_name, location, ctx.phone, log)
         );
         if (pjResult) {
           ctx.phone = ctx.phone || pjResult.phone;
@@ -255,14 +316,12 @@ export async function runEnrichment(
           }
         }
 
-        // ── Step 3: Facebook (multi-query, uses owner name if available) ──
+        if (!session) { writeCtxToLead(lead, ctx); continue; }
+
+        // ── Step 3: Facebook (multi-query) ──
         log(`[${i + 1}] Step 3/7: Facebook...`);
-        const fbResult = await searchFacebook(
-          searchPage,
-          ctx.business_name,
-          location,
-          ctx.owner_name, // pass accumulated owner name
-          log
+        const fbResult = await runStep("Facebook", () =>
+          searchFacebook(searchPage, ctx.business_name, location, ctx.owner_name, log)
         );
         if (fbResult) {
           ctx.facebook_url = ctx.facebook_url || fbResult.facebook_url;
@@ -279,14 +338,12 @@ export async function runEnrichment(
           }
         }
 
-        // ── Step 4: Societe.com / Pappers (owner name, SIREN, legal info) ──
+        if (!session) { writeCtxToLead(lead, ctx); continue; }
+
+        // ── Step 4: Societe.com / Pappers ──
         log(`[${i + 1}] Step 4/7: Societe.com...`);
-        const societeResult = await searchSocieteCom(
-          searchPage,
-          ctx.business_name,
-          location,
-          ctx.address, // pass address for better matching
-          log
+        const societeResult = await runStep("Societe.com", () =>
+          searchSocieteCom(searchPage, ctx.business_name, location, ctx.address, log)
         );
         if (societeResult) {
           ctx.owner_name = ctx.owner_name || societeResult.owner_name;
@@ -304,53 +361,27 @@ export async function runEnrichment(
           }
         }
 
-        // ── Step 5: LinkedIn (uses owner name from step 4) ──
-        if (ctx.owner_name) {
-          log(`[${i + 1}] Step 5/7: LinkedIn (owner: ${ctx.owner_name})...`);
-          const linkedInResult = await searchLinkedIn(
-            searchPage,
-            ctx.business_name,
-            location,
-            ctx.owner_name,
-            log
-          );
-          if (linkedInResult) {
-            ctx.linkedin_url = linkedInResult.linkedin_url;
-            // LinkedIn can confirm/improve owner name
-            if (linkedInResult.owner_name && !ctx.owner_name) {
-              ctx.owner_name = linkedInResult.owner_name;
-            }
-            ctx.owner_email = ctx.owner_email || linkedInResult.email;
-            ctx.phone = ctx.phone || linkedInResult.phone;
-          }
-        } else {
-          log(`[${i + 1}] Step 5/7: LinkedIn — skipped (no owner name yet)`);
-          // Still try a business-only LinkedIn search
-          const linkedInResult = await searchLinkedIn(
-            searchPage,
-            ctx.business_name,
-            location,
-            null,
-            log
-          );
-          if (linkedInResult) {
-            ctx.linkedin_url = linkedInResult.linkedin_url;
-            ctx.owner_name = ctx.owner_name || linkedInResult.owner_name;
-            ctx.owner_email = ctx.owner_email || linkedInResult.email;
-          }
+        if (!session) { writeCtxToLead(lead, ctx); continue; }
+
+        // ── Step 5: LinkedIn ──
+        log(`[${i + 1}] Step 5/7: LinkedIn${ctx.owner_name ? ` (${ctx.owner_name})` : ""}...`);
+        const linkedInResult = await runStep("LinkedIn", () =>
+          searchLinkedIn(searchPage, ctx.business_name, location, ctx.owner_name, log)
+        );
+        if (linkedInResult) {
+          ctx.linkedin_url = linkedInResult.linkedin_url;
+          ctx.owner_name = ctx.owner_name || linkedInResult.owner_name;
+          ctx.owner_email = ctx.owner_email || linkedInResult.email;
+          ctx.phone = ctx.phone || linkedInResult.phone;
         }
 
-        // ── Step 6: Owner phone search (uses owner name from steps 4/5) ──
+        if (!session) { writeCtxToLead(lead, ctx); continue; }
+
+        // ── Step 6: Owner phone search ──
         if (ctx.owner_name) {
-          log(
-            `[${i + 1}] Step 6/7: Owner phone search (${ctx.owner_name})...`
-          );
-          const ownerResult = await searchOwnerPhone(
-            searchPage,
-            ctx.owner_name,
-            ctx.business_name,
-            location,
-            log
+          log(`[${i + 1}] Step 6/7: Owner phone (${ctx.owner_name})...`);
+          const ownerResult = await runStep("OwnerPhone", () =>
+            searchOwnerPhone(searchPage, ctx.owner_name!, ctx.business_name, location, log)
           );
           if (ownerResult) {
             ctx.owner_phone = ownerResult.owner_phone;
@@ -360,14 +391,13 @@ export async function runEnrichment(
           log(`[${i + 1}] Step 6/7: Owner phone — skipped (no owner name)`);
         }
 
+        if (!session) { writeCtxToLead(lead, ctx); continue; }
+
         // ── Step 7: Website quality check ──
         if (ctx.has_website && ctx.website_url) {
           log(`[${i + 1}] Step 7/7: Website quality check...`);
-          const webResult = await checkWebsite(
-            searchPage,
-            ctx.website_url,
-            ctx.business_name,
-            log
+          const webResult = await runStep("WebCheck", () =>
+            checkWebsite(searchPage, ctx.website_url!, ctx.business_name, log)
           );
           if (webResult) {
             lead.website_quality = webResult.quality;
@@ -384,36 +414,7 @@ export async function runEnrichment(
         }
 
         // ── Write context back to lead ──
-        lead.phone = ctx.phone;
-        lead.email = ctx.email;
-        lead.address = ctx.address;
-        lead.description = ctx.description;
-        lead.has_website = ctx.has_website;
-        lead.website_url = ctx.website_url;
-        lead.facebook_url = ctx.facebook_url;
-        lead.instagram_url = ctx.instagram_url;
-        lead.owner_name = ctx.owner_name;
-        lead.owner_phone = ctx.owner_phone;
-        lead.owner_email = ctx.owner_email;
-        lead.owner_role = ctx.owner_role;
-        lead.linkedin_url = ctx.linkedin_url;
-        lead.siren = ctx.siren;
-        lead.company_type = ctx.company_type;
-        lead.creation_date = ctx.creation_date;
-        lead.revenue_bracket = ctx.revenue_bracket;
-        lead.employee_count = ctx.employee_count;
-        lead.follower_count = ctx.follower_count;
-
-        // Store raw enrichment data for debugging
-        lead.enrichment_data = {
-          google: !!googleResult,
-          pagesjaunes: !!pjResult,
-          facebook: !!fbResult,
-          societe_com: !!societeResult,
-          linkedin: !!ctx.linkedin_url,
-          owner_phone_search: !!ctx.owner_phone,
-          website_check: !!(lead.website_quality && lead.website_quality !== "none"),
-        };
+        writeCtxToLead(lead, ctx);
 
         // Log summary
         const found = [
@@ -438,14 +439,42 @@ export async function runEnrichment(
         log(
           `[${i + 1}/${leads.length}] ✗ Enrichment failed for ${lead.business_name}: ${e}`
         );
+        writeCtxToLead(lead, ctx);
       } finally {
-        await searchPage.close();
+        try { await searchPage.close(); } catch { /* page may already be dead */ }
       }
     }
 
     return leads;
   } finally {
-    if (session) await closeBrowser(session);
+    await safeClose(session);
+  }
+}
+
+/** Write enrichment context back to lead result */
+function writeCtxToLead(lead: LeadResult, ctx: EnrichmentContext) {
+  lead.phone = ctx.phone;
+  lead.email = ctx.email;
+  lead.address = ctx.address;
+  lead.description = ctx.description;
+  lead.has_website = ctx.has_website;
+  lead.website_url = ctx.website_url;
+  lead.facebook_url = ctx.facebook_url;
+  lead.instagram_url = ctx.instagram_url;
+  lead.owner_name = ctx.owner_name;
+  lead.owner_phone = ctx.owner_phone;
+  lead.owner_email = ctx.owner_email;
+  lead.owner_role = ctx.owner_role;
+  lead.linkedin_url = ctx.linkedin_url;
+  lead.siren = ctx.siren;
+  lead.company_type = ctx.company_type;
+  lead.creation_date = ctx.creation_date;
+  lead.revenue_bracket = ctx.revenue_bracket;
+  lead.employee_count = ctx.employee_count;
+  lead.follower_count = ctx.follower_count;
+  if (!lead.website_quality) {
+    lead.website_quality = ctx.has_website ? null : "none";
+    lead.website_score = ctx.has_website ? null : 0;
   }
 }
 
