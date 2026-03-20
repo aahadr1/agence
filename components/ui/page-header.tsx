@@ -27,7 +27,7 @@ export function PageHeader({
         {eyebrow ? (
           <p className="label-eyebrow">{eyebrow}</p>
         ) : null}
-        <h1 className="font-display text-3xl font-medium tracking-tight text-foreground md:text-4xl">
+        <h1 className="font-display text-3xl font-medium tracking-tight md:text-4xl" style={{ color: "var(--blue)" }}>
           {title}
         </h1>
         {description != null && description !== "" ? (
