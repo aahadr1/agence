@@ -214,7 +214,7 @@ export function Sidebar() {
       {/* ── Desktop sidebar ────────────────────────────────────────────── */}
       <aside className="fixed left-0 top-0 z-40 hidden h-screen w-[var(--sidebar-width)] flex-col border-r border-border bg-card lg:flex">
         <div className="border-b border-border px-4 py-4">
-          <LogoBlock width={130} />
+          <LogoBlock width={90} />
         </div>
         <NavList pathname={pathname} />
         <UserRow onSignOut={signOut} />
