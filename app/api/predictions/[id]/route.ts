@@ -2,6 +2,88 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getReplicate } from "@/lib/replicate";
 import { NextResponse } from "next/server";
 
+function serializeOutput(output: unknown): string {
+  if (typeof output === "string") {
+    return output;
+  }
+  if (output === null || typeof output === "undefined") {
+    return "";
+  }
+  try {
+    return JSON.stringify(output);
+  } catch {
+    return String(output);
+  }
+}
+
+function parseJsonIfPossible(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function extractImageUrl(output: unknown): string | null {
+  const queue: unknown[] = [output];
+  const visited = new Set<object>();
+  const candidates: string[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+
+    if (typeof current === "string") {
+      const trimmed = current.trim();
+      if (!trimmed) continue;
+      candidates.push(trimmed);
+      const parsed = parseJsonIfPossible(trimmed);
+      if (parsed && typeof parsed === "object") {
+        queue.push(parsed);
+      }
+      continue;
+    }
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        queue.push(item);
+      }
+      continue;
+    }
+
+    if (typeof current === "object") {
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const value of Object.values(current)) {
+        queue.push(value);
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    const withoutThinking = candidate
+      .replace(/<think>[\s\S]*?<\/think>/g, "")
+      .trim();
+    if (!withoutThinking) continue;
+    if (
+      withoutThinking.startsWith("http://") ||
+      withoutThinking.startsWith("https://") ||
+      withoutThinking.startsWith("data:image/")
+    ) {
+      return withoutThinking;
+    }
+  }
+
+  for (const candidate of candidates) {
+    const match = candidate.match(/https?:\/\/[^\s"'<>]+/);
+    if (match?.[0]) {
+      return match[0];
+    }
+  }
+
+  return null;
+}
+
 async function persistImage(
   imageUrl: string,
   predictionId: string
@@ -68,43 +150,22 @@ export async function GET(
     const prediction = await replicate.predictions.get(id);
 
     if (prediction.status === "succeeded") {
-      // Determine output type: image URL or text (Claude/Kimi)
-      let imageUrl: string | null = null;
-      let rawOutput: string | null = null;
+      const outputStr = serializeOutput(prediction.output);
+      let imageUrl: string | null = extractImageUrl(prediction.output);
+      let rawOutput: string | null = imageUrl ? null : outputStr;
 
-      // Normalize output to a single string
-      let outputStr = "";
-      if (Array.isArray(prediction.output)) {
-        outputStr = prediction.output.join("");
-      } else if (typeof prediction.output === "string") {
-        outputStr = prediction.output;
-      } else if (prediction.output && typeof prediction.output === "object") {
-        // Some models return an object — stringify it
-        outputStr = JSON.stringify(prediction.output);
-      }
-
-      console.log(`[predictions/${id}] output type: ${typeof prediction.output}, isArray: ${Array.isArray(prediction.output)}, length: ${outputStr.length}, first 150 chars: ${outputStr.slice(0, 150)}`);
-
-      // Strip thinking tags for classification (Kimi K2 Thinking wraps output in <think>)
-      const withoutThinking = outputStr.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-
-      // Check if it's a plain image URL (no JSON, no HTML, no text content)
-      if (
-        withoutThinking.startsWith("http") &&
-        !withoutThinking.includes("{") &&
-        !withoutThinking.includes("[") &&
-        !withoutThinking.includes("<")
-      ) {
-        imageUrl = withoutThinking;
-      } else {
-        rawOutput = outputStr;
-      }
+      console.log(
+        `[predictions/${id}] output type: ${typeof prediction.output}, isArray: ${Array.isArray(prediction.output)}, extractedImage=${Boolean(imageUrl)}, length: ${outputStr.length}`
+      );
 
       // If it's an image, persist it to Supabase Storage so the URL never expires
       if (imageUrl) {
         const permanentUrl = await persistImage(imageUrl, id);
         if (permanentUrl) {
           imageUrl = permanentUrl;
+          rawOutput = null;
+        } else if (!rawOutput) {
+          rawOutput = outputStr;
         }
       }
 

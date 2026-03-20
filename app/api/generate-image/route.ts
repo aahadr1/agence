@@ -4,6 +4,42 @@ import { NextResponse } from "next/server";
 
 export const maxDuration = 60;
 
+type ModelAttempt = {
+  model: string;
+  label: string;
+  input: Record<string, unknown>;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function createPredictionWithRetry(
+  replicate: ReturnType<typeof getReplicate>,
+  attempt: ModelAttempt,
+  maxAttempts = 2
+) {
+  let lastError: unknown = null;
+
+  for (let currentAttempt = 1; currentAttempt <= maxAttempts; currentAttempt++) {
+    try {
+      return await replicate.predictions.create({
+        model: attempt.model,
+        input: attempt.input,
+      });
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[generate-image] ${attempt.label} attempt ${currentAttempt}/${maxAttempts} failed: ${message}`
+      );
+      if (currentAttempt < maxAttempts) {
+        await sleep(700 * currentAttempt);
+      }
+    }
+  }
+
+  throw lastError ?? new Error(`${attempt.label} failed`);
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const {
@@ -82,55 +118,74 @@ The website must look like a real, live, professional website screenshot at 4K r
       .update({ prompt: finalPrompt })
       .eq("id", variantId);
 
-    // Try GPT Image 1.5 first, fallback to Nano Banana 2
-    let prediction;
-    try {
-      const gptInput: Record<string, unknown> = {
-        prompt: finalPrompt,
-        quality: "high",
-        aspect_ratio: "4:3",
-        output_format: "webp",
-        output_compression: 90,
-        number_of_images: 1,
-        moderation: "auto",
-        background: "auto",
-      };
-      if (imageInputs.length > 0) {
-        gptInput.input_images = imageInputs;
-        gptInput.input_fidelity = "high";
-      }
+    const gptInput: Record<string, unknown> = {
+      prompt: finalPrompt,
+      quality: "high",
+      aspect_ratio: "4:3",
+      output_format: "webp",
+      output_compression: 90,
+      number_of_images: 1,
+      moderation: "auto",
+      background: "auto",
+    };
+    if (imageInputs.length > 0) {
+      gptInput.input_images = imageInputs;
+      gptInput.input_fidelity = "high";
+    }
 
-      prediction = await replicate.predictions.create({
-        model: "openai/gpt-image-1.5",
+    const nanoBananaInput: Record<string, unknown> = {
+      prompt: finalPrompt,
+      aspect_ratio: "4:3",
+      output_format: "jpg",
+    };
+    if (imageInputs.length > 0) {
+      nanoBananaInput.image_input = imageInputs;
+    }
+
+    const configuredPrimary =
+      process.env.REPLICATE_IMAGE_PRIMARY_MODEL?.trim() || "openai/gpt-image-1.5";
+    const configuredSecondary =
+      process.env.REPLICATE_IMAGE_SECONDARY_MODEL?.trim() || "openai/gpt-image-1";
+    const configuredFallback =
+      process.env.REPLICATE_IMAGE_FALLBACK_MODEL?.trim() || "google/nano-banana-2";
+
+    const modelAttempts: ModelAttempt[] = [
+      {
+        model: configuredPrimary,
+        label: "Primary image model",
         input: gptInput,
-      });
-
-      // Wait briefly to check if it fails immediately
-      await new Promise((r) => setTimeout(r, 3000));
-      const check = await replicate.predictions.get(prediction.id);
-
-      if (check.status === "failed") {
-        throw new Error((check.error as string) || "GPT Image 1.5 failed");
-      }
-    } catch (gptError) {
-      console.warn(
-        "[generate-image] GPT Image 1.5 failed, falling back to Nano Banana 2:",
-        gptError instanceof Error ? gptError.message : gptError
-      );
-
-      const nanoBananaInput: Record<string, unknown> = {
-        prompt: finalPrompt,
-        aspect_ratio: "4:3",
-        output_format: "jpg",
-      };
-      if (imageInputs.length > 0) {
-        nanoBananaInput.image_input = imageInputs;
-      }
-
-      prediction = await replicate.predictions.create({
-        model: "google/nano-banana-2",
+      },
+      {
+        model: configuredSecondary,
+        label: "Secondary image model",
+        input: gptInput,
+      },
+      {
+        model: configuredFallback,
+        label: "Fallback image model",
         input: nanoBananaInput,
-      });
+      },
+    ];
+
+    let prediction = null;
+    let lastError: unknown = null;
+
+    for (const attempt of modelAttempts) {
+      try {
+        prediction = await createPredictionWithRetry(replicate, attempt, 2);
+        console.log(
+          `[generate-image] using ${attempt.label}: ${attempt.model} (prediction ${prediction.id})`
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!prediction) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("All image generation models failed");
     }
 
     return NextResponse.json({ predictionId: prediction.id });
