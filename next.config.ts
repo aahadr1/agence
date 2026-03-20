@@ -17,6 +17,11 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // Include @sparticuz/chromium binary files in serverless function bundle
+  outputFileTracingIncludes: {
+    "/api/lead-generator/*": ["./node_modules/@sparticuz/chromium/bin/**/*"],
+  },
+  serverExternalPackages: ["@sparticuz/chromium", "playwright-core"],
 };
 
 export default nextConfig;

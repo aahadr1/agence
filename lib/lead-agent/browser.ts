@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import chromiumBinary from "@sparticuz/chromium";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
@@ -83,10 +83,14 @@ export async function launchBrowser(): Promise<BrowserSession> {
 
   if (IS_SERVERLESS) {
     // On Vercel/Lambda: use @sparticuz/chromium's bundled binary
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cb = chromiumBinary as any;
+    cb.setHeadlessMode = true;
+    cb.setGraphicsMode = false;
     const executablePath = await chromiumBinary.executablePath();
     browser = await chromium.launch({
-      headless: true,
       executablePath,
+      headless: cb.headless ?? true,
       args: [...chromiumBinary.args, ...launchArgs],
     });
   } else {

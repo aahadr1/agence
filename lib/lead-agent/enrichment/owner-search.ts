@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Page } from "playwright-core";
 import { screenshotToBase64, askGemini } from "../browser";
 
 export interface OwnerPhoneResult {
