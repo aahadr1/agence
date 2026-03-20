@@ -102,21 +102,26 @@ function UserRow({ onSignOut }: { onSignOut: () => void }) {
 }
 
 // ─── logo block (reused) ────────────────────────────────────────────────────
+// `displayWidth` controls the CSS display size only.
+// The Image is always served at 400 px so it stays crisp on Retina/2× screens.
 function LogoBlock({
-  width = 130,
+  displayWidth = 130,
   onClick,
 }: {
-  width?: number;
+  displayWidth?: number;
   onClick?: () => void;
 }) {
   return (
     <Link href="/dashboard" onClick={onClick} className="block">
-      <div className="overflow-hidden rounded-sm bg-white p-2">
+      <div
+        className="overflow-hidden rounded-sm bg-white p-2"
+        style={{ width: displayWidth }}
+      >
         <Image
           src="/logo.png"
           alt="LàHaut Agency"
-          width={width}
-          height={width / 2}
+          width={400}
+          height={200}
           className="h-auto w-full object-contain"
           priority
         />
@@ -162,13 +167,13 @@ export function Sidebar() {
         </button>
 
         <Link href="/dashboard" className="absolute left-1/2 -translate-x-1/2">
-          <div className="overflow-hidden rounded-sm bg-white px-2 py-1">
+          <div className="overflow-hidden rounded-sm bg-white px-2 py-1" style={{ width: 90 }}>
             <Image
               src="/logo.png"
               alt="LàHaut Agency"
-              width={90}
-              height={45}
-              className="h-auto w-auto object-contain"
+              width={400}
+              height={200}
+              className="h-auto w-full object-contain"
               priority
             />
           </div>
@@ -197,7 +202,7 @@ export function Sidebar() {
         )}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
-          <LogoBlock width={110} onClick={() => setMobileOpen(false)} />
+          <LogoBlock displayWidth={110} onClick={() => setMobileOpen(false)} />
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
@@ -214,7 +219,7 @@ export function Sidebar() {
       {/* ── Desktop sidebar ────────────────────────────────────────────── */}
       <aside className="fixed left-0 top-0 z-40 hidden h-screen w-[var(--sidebar-width)] flex-col border-r border-border bg-card lg:flex">
         <div className="border-b border-border px-4 py-4">
-          <LogoBlock width={90} />
+          <LogoBlock displayWidth={90} />
         </div>
         <NavList pathname={pathname} />
         <UserRow onSignOut={signOut} />
