@@ -102,8 +102,8 @@ function UserRow({ onSignOut }: { onSignOut: () => void }) {
 }
 
 // ─── logo block (reused) ────────────────────────────────────────────────────
-// `displayWidth` controls the CSS display size only.
-// The Image is always served at 400 px so it stays crisp on Retina/2× screens.
+// Two images — CSS dark: variant swaps them instantly (no JS, no flash).
+// Light logo has a white bg so it's wrapped; dark logo is transparent, no wrapper.
 function LogoBlock({
   displayWidth = 130,
   onClick,
@@ -113,12 +113,27 @@ function LogoBlock({
 }) {
   return (
     <Link href="/dashboard" onClick={onClick} className="block">
+      {/* Light mode */}
       <div
-        className="overflow-hidden rounded-sm bg-white p-2"
+        className="overflow-hidden rounded-sm bg-white p-2 dark:hidden"
         style={{ width: displayWidth }}
       >
         <Image
           src="/logo.png"
+          alt="LàHaut Agency"
+          width={400}
+          height={200}
+          className="h-auto w-full object-contain"
+          priority
+        />
+      </div>
+      {/* Dark mode — transparent bg, no wrapper needed */}
+      <div
+        className="hidden dark:block"
+        style={{ width: displayWidth }}
+      >
+        <Image
+          src="/logo-dark.png"
           alt="LàHaut Agency"
           width={400}
           height={200}
@@ -167,15 +182,13 @@ export function Sidebar() {
         </button>
 
         <Link href="/dashboard" className="absolute left-1/2 -translate-x-1/2">
-          <div className="overflow-hidden rounded-sm bg-white px-2 py-1" style={{ width: 90 }}>
-            <Image
-              src="/logo.png"
-              alt="LàHaut Agency"
-              width={400}
-              height={200}
-              className="h-auto w-full object-contain"
-              priority
-            />
+          {/* Light */}
+          <div className="overflow-hidden rounded-sm bg-white px-2 py-1 dark:hidden" style={{ width: 90 }}>
+            <Image src="/logo.png" alt="LàHaut Agency" width={400} height={200} className="h-auto w-full object-contain" priority />
+          </div>
+          {/* Dark */}
+          <div className="hidden dark:block" style={{ width: 90 }}>
+            <Image src="/logo-dark.png" alt="LàHaut Agency" width={400} height={200} className="h-auto w-full object-contain" priority />
           </div>
         </Link>
 
