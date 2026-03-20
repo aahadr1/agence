@@ -38,12 +38,13 @@ export default function SignupPage() {
   return (
     <div className="animate-fade-in w-full">
       <header className="mb-10 border-b border-border pb-8">
-        <p className="label-eyebrow mb-3">Onboarding</p>
+        <p className="label-eyebrow mb-3">Get started</p>
         <h1 className="font-display text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          Create account
+          Create your account
         </h1>
         <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
-          One account for Website Maker and Lead Generator.
+          One account unlocks both tools — build AI-generated websites for any business,
+          or prospect for clients who need one.
         </p>
       </header>
 

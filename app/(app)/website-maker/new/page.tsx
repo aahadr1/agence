@@ -437,7 +437,7 @@ export default function NewProjectPage() {
       <PageHeader
         eyebrow="Step one"
         title="Business & assets"
-        description="Name, address, logo, and optional photos. We research the rest on the web."
+        description="The AI uses your business name and address to research online — Google reviews, competitors, brand signals — then generates three design directions. The more you add here, the sharper the result."
         className="mb-10"
       />
 
@@ -474,10 +474,13 @@ export default function NewProjectPage() {
         </Panel>
 
         <Panel padding="md" className="rounded-sm">
-          <h3 className="label-eyebrow mb-6 flex items-center gap-2">
+          <h3 className="label-eyebrow mb-1 flex items-center gap-2">
             <Upload className="h-3.5 w-3.5" strokeWidth={1.25} />
-            Logo (required)
+            Logo
           </h3>
+          <p className="mb-6 text-[13px] text-muted-foreground">
+            Used on the site and analysed for colour palette. SVG or high-res PNG preferred.
+          </p>
           <input
             ref={logoInputRef}
             type="file"
@@ -538,8 +541,8 @@ export default function NewProjectPage() {
               optional
             </span>
           </h3>
-          <p className="mb-5 text-xs text-muted-foreground">
-            Interior, food, team, exterior — more context helps the mockups.
+          <p className="mb-5 text-[13px] text-muted-foreground">
+            Interior, food, team shots, exterior — each image gives the AI more material to produce an accurate mockup. You can always add more after build.
           </p>
           <input
             ref={photosInputRef}
@@ -585,38 +588,41 @@ export default function NewProjectPage() {
 
         {/* Color picker */}
         <Panel padding="md" className="rounded-sm">
-          <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
-            <Palette className="w-4 h-4 text-primary" />
-            Brand Colors
+          <h3 className="label-eyebrow mb-1 flex items-center gap-2">
+            <Palette className="h-3.5 w-3.5" strokeWidth={1.25} />
+            Brand colours
           </h3>
+          <p className="mb-5 text-[13px] text-muted-foreground">
+            Leave on auto and the AI infers a palette from your logo and research. Override manually for exact brand guidelines.
+          </p>
 
           {/* Auto / Manual toggle */}
-          <div className="flex rounded-xl bg-secondary p-1 mb-5 max-w-xs">
+          <div className="mb-5 flex max-w-xs border border-border">
             <button
               type="button"
               onClick={() => setColorMode("auto")}
               className={cn(
-                "flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all",
+                "flex flex-1 items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium uppercase tracking-[0.08em] transition-colors",
                 colorMode === "auto"
-                  ? "bg-primary text-primary-foreground shadow-md"
+                  ? "bg-foreground text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              <Sparkles className="w-3 h-3 inline mr-1" />
-              Auto (AI picks)
+              <Sparkles className="h-3 w-3" strokeWidth={1.25} />
+              Auto
             </button>
             <button
               type="button"
               onClick={() => setColorMode("manual")}
               className={cn(
-                "flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all",
+                "flex flex-1 items-center justify-center gap-1.5 border-l border-border py-2 px-3 text-xs font-medium uppercase tracking-[0.08em] transition-colors",
                 colorMode === "manual"
-                  ? "bg-primary text-primary-foreground shadow-md"
+                  ? "bg-foreground text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              <Palette className="w-3 h-3 inline mr-1" />
-              Choose manually
+              <Palette className="h-3 w-3" strokeWidth={1.25} />
+              Manual
             </button>
           </div>
 

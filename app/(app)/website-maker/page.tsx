@@ -40,7 +40,7 @@ export default function WebsiteMakerPage() {
       <PageHeader
         eyebrow="Website maker"
         title="Projects"
-        description="Each row is a business profile, concepts, and build. Open one to continue where you left off."
+        description="One project per client — profile, mockups, and generated site all in one place. Open a row to pick up where you left off, or start fresh below."
       >
         <Link href="/website-maker/new" className="btn-solid">
           <Plus className="h-4 w-4" strokeWidth={1.5} />
@@ -65,14 +65,28 @@ export default function WebsiteMakerPage() {
                 className="mb-5 h-8 w-8 text-muted-foreground"
                 strokeWidth={1}
               />
-              <p className="label-eyebrow mb-3">Empty</p>
+              <p className="label-eyebrow mb-4">How it works</p>
               <h2 className="font-display text-xl font-medium text-foreground md:text-2xl">
                 No projects yet
               </h2>
-              <p className="mt-2 max-w-md text-[15px] leading-relaxed text-muted-foreground">
-                Add a business name, address, and logo. Research and mockups
-                follow automatically.
+              <p className="mt-3 max-w-md text-[14px] leading-relaxed text-muted-foreground">
+                Enter a business name and address. The AI searches the web for brand signals,
+                generates three design concepts, then writes a complete multi-page site —
+                ready to preview and publish in minutes.
               </p>
+              <div className="mt-8 grid w-full max-w-md grid-cols-3 gap-px border border-border bg-border text-left">
+                {[
+                  { step: "01", label: "Profile", detail: "Name, logo & address" },
+                  { step: "02", label: "Concepts", detail: "3 AI-generated mockups" },
+                  { step: "03", label: "Build", detail: "Full site, deploy-ready" },
+                ].map((s) => (
+                  <div key={s.step} className="bg-card px-4 py-4">
+                    <p className="label-eyebrow mb-1">{s.step}</p>
+                    <p className="text-xs font-medium text-foreground">{s.label}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{s.detail}</p>
+                  </div>
+                ))}
+              </div>
               <Link href="/website-maker/new" className="btn-solid mt-8">
                 <Plus className="h-4 w-4" strokeWidth={1.5} />
                 Start first project
