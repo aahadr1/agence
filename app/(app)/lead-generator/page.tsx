@@ -298,7 +298,8 @@ export default function LeadGeneratorPage() {
                 value={niche}
                 onChange={(e) => setNiche(e.target.value)}
                 placeholder="Restaurant, plumber, salon…"
-                className="input-minimal pl-10"
+                className="input-minimal"
+                style={{ paddingLeft: "2.5rem" }}
                 disabled={phase === "analyzing"}
               />
             </div>
@@ -312,7 +313,8 @@ export default function LeadGeneratorPage() {
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 placeholder="City, arrondissement, region…"
-                className="input-minimal pl-10"
+                className="input-minimal"
+                style={{ paddingLeft: "2.5rem" }}
                 disabled={phase === "analyzing"}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
