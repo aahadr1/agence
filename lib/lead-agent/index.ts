@@ -90,6 +90,8 @@ export async function runDiscovery(
   log: (msg: string) => void = console.log
 ): Promise<{ leads: LeadResult[]; keywords: string[] }> {
   let session: BrowserSession | null = null;
+  // Hard time budget: 240s — leaves 60s buffer for saving to DB
+  const deadline = Date.now() + 240_000;
 
   try {
     log("Generating search variations with AI...");
@@ -98,8 +100,10 @@ export async function runDiscovery(
       location,
       excludeNames
     );
+    // Limit to 3 queries max to stay within time budget
+    const cappedQueries = queries.slice(0, 3);
     log(
-      `Generated ${queries.length} query variations: ${queries.join(" | ")}`
+      `Generated ${queries.length} variations, running ${cappedQueries.length}: ${cappedQueries.join(" | ")}`
     );
 
     log("Launching browser...");
@@ -110,7 +114,13 @@ export async function runDiscovery(
       excludeNames.map((n) => n.toLowerCase())
     );
 
-    for (const query of queries) {
+    for (const query of cappedQueries) {
+      // Check time budget before each query
+      if (Date.now() >= deadline) {
+        log("[Discovery] ⏱ Time budget reached — returning results so far");
+        break;
+      }
+
       // Ensure browser is alive before each query
       if (!session || !isBrowserAlive(session)) {
         log("[Browser] Relaunching for next query...");
@@ -125,8 +135,9 @@ export async function runDiscovery(
           query,
           seenNames,
           log,
-          3,
-          20
+          2,
+          15,
+          deadline
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

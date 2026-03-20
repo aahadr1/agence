@@ -44,7 +44,8 @@ export async function scrapeGoogleMaps(
   seenNames: Set<string>,
   log: (msg: string) => void,
   maxScrolls: number = 4,
-  maxLeads: number = 25
+  maxLeads: number = 25,
+  deadline: number = Infinity
 ): Promise<MapsLead[]> {
   const leads: MapsLead[] = [];
 
@@ -69,12 +70,14 @@ export async function scrapeGoogleMaps(
   await waitForMapsResults(page);
 
   for (let scroll = 0; scroll < maxScrolls && leads.length < maxLeads; scroll++) {
+    if (Date.now() >= deadline) { log("[Maps] ⏱ Time budget reached"); break; }
     const placeLinks = await page.locator('a[href*="/maps/place/"]').all();
     if (placeLinks.length === 0) break;
 
     log(`[Maps] Page ${scroll + 1}: ${placeLinks.length} links`);
 
     for (let i = 0; i < placeLinks.length && leads.length < maxLeads; i++) {
+      if (Date.now() >= deadline) { log("[Maps] ⏱ Time budget reached"); break; }
       const link = placeLinks[i];
       let ariaLabel = "";
       try {
