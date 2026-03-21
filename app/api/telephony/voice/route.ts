@@ -19,47 +19,59 @@ function twimlResponse(vr: InstanceType<typeof twilio.twiml.VoiceResponse>) {
  * Console Twilio → TwiML App → Voice URL = POST https://…/api/telephony/voice
  */
 export async function POST(request: Request) {
-  const text = await request.text();
-  const params = new URLSearchParams(text);
-  const body: Record<string, string> = {};
-  params.forEach((v, k) => {
-    body[k] = v;
-  });
-
-  if (!validateTwilioWebhook(request, body)) {
-    return new NextResponse("Forbidden", { status: 403 });
-  }
-
-  const To = body.To?.trim();
   const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
-  const callerId = getCallerId();
 
-  if (!callerId) {
+  try {
+    const text = await request.text();
+    const params = new URLSearchParams(text);
+    const body: Record<string, string> = {};
+    params.forEach((v, k) => {
+      body[k] = v;
+    });
+
+    if (!validateTwilioWebhook(request, body)) {
+      console.error("[telephony/voice] webhook validation failed");
+      return new NextResponse("Forbidden", { status: 403 });
+    }
+
+    const To = body.To?.trim();
+    const twiml = new VoiceResponse();
+    const callerId = getCallerId();
+
+    if (!callerId) {
+      twiml.say(
+        { voice: "Polly.Celine", language: "fr-FR" },
+        "Configuration téléphonie incomplète."
+      );
+      return twimlResponse(twiml);
+    }
+
+    if (!To) {
+      twiml.say(
+        { voice: "Polly.Celine", language: "fr-FR" },
+        "Numéro de destination manquant."
+      );
+      return twimlResponse(twiml);
+    }
+
+    const dial = twiml.dial({
+      callerId,
+      answerOnBridge: true,
+      timeout: 60,
+      record: "record-from-answer",
+      recordingStatusCallback: recordingCallbackUrl(),
+      recordingStatusCallbackEvent: ["completed"],
+    });
+    dial.number(To);
+
+    return twimlResponse(twiml);
+  } catch (e) {
+    console.error("[telephony/voice] unhandled error", e);
+    const twiml = new VoiceResponse();
     twiml.say(
       { voice: "Polly.Celine", language: "fr-FR" },
-      "Configuration téléphonie incomplète."
+      "Erreur serveur. Veuillez réessayer."
     );
     return twimlResponse(twiml);
   }
-
-  if (!To) {
-    twiml.say(
-      { voice: "Polly.Celine", language: "fr-FR" },
-      "Numéro de destination manquant."
-    );
-    return twimlResponse(twiml);
-  }
-
-  const dial = twiml.dial({
-    callerId,
-    answerOnBridge: true,
-    timeout: 60,
-    record: "record-from-answer",
-    recordingStatusCallback: recordingCallbackUrl(),
-    recordingStatusCallbackEvent: ["completed"],
-  });
-  dial.number(To);
-
-  return twimlResponse(twiml);
 }

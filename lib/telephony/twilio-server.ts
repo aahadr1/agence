@@ -42,25 +42,22 @@ export function validateTwilioWebhook(
   request: Request,
   body: Record<string, string>
 ): boolean {
-  if (
-    process.env.NODE_ENV === "development" &&
-    process.env.SKIP_TWILIO_SIGNATURE_VALIDATION === "true"
-  ) {
+  if (process.env.SKIP_TWILIO_SIGNATURE_VALIDATION === "true") {
     return true;
   }
   const token = process.env.TWILIO_AUTH_TOKEN;
-  if (!token) return false;
+  if (!token) {
+    console.error("[twilio-webhook] TWILIO_AUTH_TOKEN missing");
+    return false;
+  }
   const signature = request.headers.get("x-twilio-signature");
-  if (!signature) return false;
+  if (!signature) {
+    console.error("[twilio-webhook] x-twilio-signature header missing");
+    return false;
+  }
   const urlObj = new URL(request.url);
   const pathname = urlObj.pathname;
   const search = urlObj.search;
-  /**
-   * Twilio signe l’URL exacte du webhook (celle passée à `calls.create` / TwiML App).
-   * Elle doit donc utiliser la même base que `getPublicAppUrl()` dans le code, pas
-   * seulement `request.url` (sinon mismatch Vercel: vercel.app vs NEXT_PUBLIC_APP_URL).
-   * On tente aussi l’origin de la requête entrante pour les proxys / domaines multiples.
-   */
   const canonicalBase =
     process.env.TWILIO_WEBHOOK_BASE_URL?.replace(/\/$/, "") ||
     getPublicAppUrl();
@@ -69,9 +66,16 @@ export function validateTwilioWebhook(
     `${urlObj.origin}${pathname}${search}`,
   ];
   const uniqueUrls = [...new Set(candidateUrls)];
-  return uniqueUrls.some((fullUrl) =>
+  const valid = uniqueUrls.some((fullUrl) =>
     twilio.validateRequest(token, signature, fullUrl, body)
   );
+  if (!valid) {
+    console.error("[twilio-webhook] signature mismatch", {
+      tried: uniqueUrls,
+      origin: urlObj.origin,
+    });
+  }
+  return valid;
 }
 
 /**

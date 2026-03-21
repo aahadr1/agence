@@ -571,7 +571,7 @@ export function TelephonyClient() {
                         <audio
                           controls
                           className="h-8 w-full max-w-[min(100%,280px)]"
-                          src={r.recording_url}
+                          src={`/api/telephony/recording-proxy?url=${encodeURIComponent(r.recording_url)}`}
                           preload="metadata"
                         >
                           <track kind="captions" />
