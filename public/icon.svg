@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="108" fill="#ebe6dc"/>
+  <text
+    x="256"
+    y="318"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="132"
+    font-weight="600"
+    fill="#1a1816"
+    letter-spacing="-0.04em"
+  >LàHaut</text>
+  <circle cx="248" cy="168" r="15" fill="#b8944d"/>
+</svg>

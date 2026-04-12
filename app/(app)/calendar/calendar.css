@@ -1,0 +1,63 @@
+/* FullCalendar theme tokens — match app editorial minimal palette */
+.fc {
+  --fc-border-color: var(--hairline);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: var(--muted);
+  --fc-list-event-hover-bg-color: var(--control-bg-hover);
+  --fc-today-bg-color: rgba(168, 207, 224, 0.12);
+  --fc-now-indicator-color: var(--blue);
+  --fc-event-border-color: transparent;
+  --fc-button-bg-color: var(--card);
+  --fc-button-border-color: var(--control-border);
+  --fc-button-text-color: var(--foreground);
+  --fc-button-hover-bg-color: var(--control-bg-hover);
+  --fc-button-hover-border-color: var(--control-border-hover);
+  --fc-button-active-bg-color: var(--muted);
+  --fc-button-active-border-color: var(--control-border-hover);
+}
+
+.fc .fc-toolbar-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-size: 1.25rem;
+}
+
+.fc .fc-col-header-cell-cushion,
+.fc .fc-daygrid-day-number {
+  color: var(--foreground);
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+.fc .fc-timegrid-slot-label {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+
+.fc .fc-scrollgrid {
+  border-color: var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.fc .fc-scrollgrid-section > td {
+  border-color: var(--hairline);
+}
+
+.fc .fc-list-event-title a {
+  color: inherit;
+}
+
+.fc .fc-button {
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.fc .fc-event {
+  border-radius: calc(var(--radius) - 4px);
+}
+
+.calendar-shell .fc-theme-standard td,
+.calendar-shell .fc-theme-standard th {
+  border-color: var(--hairline);
+}

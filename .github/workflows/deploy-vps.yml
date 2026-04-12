@@ -1,0 +1,81 @@
+# Deploy to your Hetzner VPS on every push to `main`.
+#
+# Required GitHub secrets (repo → Settings → Secrets and variables → Actions):
+#   VPS_HOST             — IPv4 or hostname (e.g. 77.x.x.x)
+#   VPS_USER             — SSH login (e.g. deploy)
+#   VPS_SSH_PRIVATE_KEY  — Full private key (including -----BEGIN ... END-----)
+#                          whose PUBLIC key is in ~/.ssh/authorized_keys on the VPS for VPS_USER
+#
+# Optional secrets:
+#   VPS_DEPLOY_PATH      — Remote app directory (default: /home/deploy/agence)
+#   VPS_PM2_NAME         — PM2 process name (default: app-agence)
+#
+# VPS must have Node.js >= 20.9 and npm >= 10 (Next.js 16). Install via nvm/fnm or NodeSource.
+# If `npm ci` or `npm run build` fails, SSH in and run: node -v && npm -v
+#
+# One-time: create a key only for Actions (on your Mac):
+#   ssh-keygen -t ed25519 -f ./gh-vps-deploy -N "" -C "github-actions-deploy"
+#   ssh-copy-id -i ./gh-vps-deploy.pub deploy@YOUR_SERVER_IP
+#   Copy contents of ./gh-vps-deploy into secret VPS_SSH_PRIVATE_KEY, then delete the local key files.
+
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync repo to VPS (rsync)
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_DEPLOY_PATH: ${{ secrets.VPS_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          DEPLOY_PATH="${VPS_DEPLOY_PATH:-/home/deploy/agence}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy_key
+          chmod 600 ~/.ssh/vps_deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          rsync -avz --delete \
+            --exclude node_modules \
+            --exclude .next \
+            --exclude .git \
+            --exclude '.env.production' \
+            --exclude '.env.local' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/vps_deploy_key -o IdentitiesOnly=yes" \
+            ./ "${VPS_USER}@${VPS_HOST}:${DEPLOY_PATH}/"
+
+      # Step 2 must prepare SSH again (same runner, but keeps the job robust if steps are reordered).
+      - name: Install, build, restart PM2
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_DEPLOY_PATH: ${{ secrets.VPS_DEPLOY_PATH }}
+          VPS_PM2_NAME: ${{ secrets.VPS_PM2_NAME }}
+        run: |
+          set -euo pipefail
+          DEPLOY_PATH="${VPS_DEPLOY_PATH:-/home/deploy/agence}"
+          PM2_NAME="${VPS_PM2_NAME:-app-agence}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy_key
+          chmod 600 ~/.ssh/vps_deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          # bash -lc loads login profile (nvm/fnm/node from your VPS user)
+          # NODE_OPTIONS reduces OOM on small VPS during Next.js build
+          ssh -i ~/.ssh/vps_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "${VPS_USER}@${VPS_HOST}" \
+            "bash -lc 'set -euo pipefail; cd \"${DEPLOY_PATH}\" && echo \"=== node ===\" && node -v && echo \"=== npm ===\" && npm -v && export NODE_OPTIONS=\"--max-old-space-size=8192\" && NODE_ENV=development npm ci && npm run build && (pm2 restart \"${PM2_NAME}\" || pm2 start npm --name \"${PM2_NAME}\" -- start)'"

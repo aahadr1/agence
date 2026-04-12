@@ -1,0 +1,127 @@
+import { createClient } from "@/lib/supabase/server";
+import { getPublicAppUrl, telephonyEnvReady } from "@/lib/telephony/config";
+import { normalizeToE164 } from "@/lib/telephony/phone";
+import { getTwilioNumber, getTwilioRestClient, statusCallbackUrl } from "@/lib/telephony/twilio-server";
+import { NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  if (!telephonyEnvReady()) {
+    return NextResponse.json(
+      { error: "Twilio n’est pas configuré." },
+      { status: 503 }
+    );
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { to, dealId, opportunityId } = (await request.json()) as {
+    to?: string;
+    dealId?: string | null;
+    opportunityId?: string | null;
+  };
+  if (!to || typeof to !== "string") {
+    return NextResponse.json({ error: "Numéro destination requis" }, { status: 400 });
+  }
+
+  let linkedDealId = dealId || null;
+  let linkedOpportunityId = opportunityId || null;
+
+  if (linkedOpportunityId) {
+    const { data: opportunity, error: opportunityError } = await supabase
+      .from("crm_opportunities")
+      .select("id,legacy_deal_id")
+      .eq("id", linkedOpportunityId)
+      .limit(1)
+      .maybeSingle();
+
+    if (opportunityError) {
+      return NextResponse.json({ error: opportunityError.message }, { status: 500 });
+    }
+    if (!opportunity) {
+      return NextResponse.json({ error: "Opportunity not found" }, { status: 404 });
+    }
+    linkedDealId = linkedDealId || opportunity.legacy_deal_id || null;
+  }
+
+  const destination = normalizeToE164(to.trim());
+
+  const { data: agent } = await supabase
+    .from("telephony_agents")
+    .select("phone_e164")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!agent?.phone_e164) {
+    return NextResponse.json(
+      {
+        error:
+          "Enregistrez d’abord votre numéro mobile (section « Votre numéro ») pour le click-to-call.",
+      },
+      { status: 400 }
+    );
+  }
+
+  const rawTwilioFrom = getTwilioNumber().trim();
+  if (!rawTwilioFrom) {
+    return NextResponse.json(
+      {
+        error:
+          "TWILIO_PHONE_NUMBER (numéro Twilio E.164) est requis pour lancer un appel.",
+      },
+      { status: 503 }
+    );
+  }
+  const fromNum = normalizeToE164(rawTwilioFrom);
+
+  const agentPhone = normalizeToE164(agent.phone_e164.trim());
+  if (fromNum === agentPhone) {
+    return NextResponse.json(
+      {
+        error:
+          "TWILIO_PHONE_NUMBER est identique à ton numéro mobile enregistré : Twilio ne peut pas appeler un numéro depuis lui-même (statut « Busy »). Mets dans TWILIO_PHONE_NUMBER un numéro acheté chez Twilio (Voice), et garde ton portable uniquement dans « Ton numéro » ci-dessus (et éventuellement TWILIO_CALLER_ID pour l’affichage).",
+      },
+      { status: 400 }
+    );
+  }
+
+  const base = getPublicAppUrl();
+  const connectUrl = new URL(
+    `${base}/api/telephony/twiml/click-connect`
+  );
+  connectUrl.searchParams.set("To", destination);
+  connectUrl.searchParams.set("UserId", user.id);
+  if (linkedDealId) {
+    connectUrl.searchParams.set("DealId", linkedDealId);
+  }
+  if (linkedOpportunityId) {
+    connectUrl.searchParams.set("OpportunityId", linkedOpportunityId);
+  }
+
+  try {
+    const client = getTwilioRestClient();
+    const created = await client.calls.create({
+      from: fromNum,
+      to: agentPhone,
+      url: connectUrl.toString(),
+      method: "POST",
+      statusCallback: statusCallbackUrl(),
+      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      statusCallbackMethod: "POST",
+    });
+    return NextResponse.json({ ok: true, callSid: created.sid });
+  } catch (e) {
+    console.error("[telephony/click-to-call]", e);
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Twilio error" },
+      { status: 502 }
+    );
+  }
+}
