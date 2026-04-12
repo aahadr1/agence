@@ -1,10 +1,9 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import {
-  runEnrichmentPhaseA,
-  runEnrichmentPhaseB,
+  runSixStepEnrichment,
   type LeadResult,
+  type OnStepComplete,
 } from "@/lib/lead-agent";
-import { computeLeadScore, generateSalesBrief } from "@/lib/lead-agent/enrichment/lead-scorer";
 import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
 import { NextResponse } from "next/server";
 
@@ -29,10 +28,7 @@ export async function POST(request: Request) {
 
     const { leadId } = await request.json();
     if (!leadId) {
-      return NextResponse.json(
-        { error: "leadId is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "leadId is required" }, { status: 400 });
     }
 
     const serviceClient = await createServiceClient();
@@ -59,10 +55,10 @@ export async function POST(request: Request) {
 
     await serviceClient
       .from("leads")
-      .update({ enrichment_status: "enriching" })
+      .update({ enrichment_status: "enriching", enrichment_step: "starting" })
       .eq("id", leadId);
 
-    const leadInput: LeadResult = {
+    const lead: LeadResult = {
       business_name: dbLead.business_name,
       description: dbLead.description,
       address: dbLead.address,
@@ -96,94 +92,91 @@ export async function POST(request: Request) {
       meta_ads_count: dbLead.meta_ads_count ?? null,
       potential_score: dbLead.potential_score ?? null,
       source: dbLead.source || "Google Maps",
-      enrichment_data: dbLead.enrichment_data || {},
+      enrichment_data: {},
+      niche: dbLead.niche ?? null,
     };
 
-    leadInput.enrichment_data = { research_steps: {} };
-    log(`[Enrich] Starting: ${dbLead.business_name} (${dbLead.location || "no location"})`);
+    log(`[Enrich] Starting 6-step pipeline: ${dbLead.business_name} (${dbLead.location || "no location"})`);
 
-    // ── Phase A: structured APIs, no browser (~5-15 s) ──────────────────────
-    log(`[Enrich] Phase A: APIs...`);
-    const partial = await runEnrichmentPhaseA(
-      leadInput,
+    // Persist partial results after each step
+    const onStepComplete: OnStepComplete = async (stepName, partial) => {
+      const update: Record<string, unknown> = {
+        enrichment_step: stepName,
+        updated_at: new Date().toISOString(),
+      };
+
+      const fields = [
+        "has_website", "website_url", "website_quality", "website_score",
+        "has_https", "has_booking", "has_chatbot",
+        "owner_name", "owner_role", "owner_phone", "owner_email",
+        "linkedin_url", "siren", "company_type", "creation_date",
+        "employee_count", "revenue_bracket", "address",
+        "phone", "email", "facebook_url", "instagram_url",
+        "follower_count", "has_meta_ads", "meta_ads_count", "description",
+        "potential_score", "prospect_analysis", "targeted_offer",
+        "identified_need", "priority_score", "enrichment_data",
+      ] as const;
+
+      for (const f of fields) {
+        if (f in partial && (partial as Record<string, unknown>)[f] !== undefined) {
+          update[f] = (partial as Record<string, unknown>)[f];
+        }
+      }
+
+      await serviceClient.from("leads").update(update).eq("id", leadId);
+      log(`[Enrich] ✓ Step saved: ${stepName}`);
+    };
+
+    const enriched = await runSixStepEnrichment(
+      lead,
       dbLead.location || "",
-      log
+      log,
+      onStepComplete
     );
 
-    // Save Phase A data immediately so the employee sees owner/legal info
-    // even if Phase B is still running or eventually fails.
+    // Final write
     await serviceClient
       .from("leads")
       .update({
-        owner_name: partial.owner_name,
-        owner_role: partial.owner_role,
-        siren: partial.siren,
-        company_type: partial.company_type,
-        creation_date: partial.creation_date,
-        employee_count: partial.employee_count,
-        address: partial.address,
-        has_https: partial.has_https,
-        website_score: partial.website_score,
-        enrichment_data: partial.enrichment_data || {},
-      })
-      .eq("id", leadId);
-
-    log(`[Enrich] Phase A saved. Owner: ${partial.owner_name || "—"} | SIREN: ${partial.siren || "—"}`);
-
-    // ── Phase B: Playwright waves (~60-90 s) ─────────────────────────────────
-    log(`[Enrich] Phase B: browser waves...`);
-    const full = await runEnrichmentPhaseB(partial, dbLead.location || "", log);
-
-    // ── Scoring + sales brief ────────────────────────────────────────────────
-    log(`[Enrich] Computing score + sales brief...`);
-    const score = computeLeadScore(full);
-    const brief = await generateSalesBrief(full, log).catch(() => null);
-
-    full.potential_score = score;
-    full.enrichment_data = {
-      ...(full.enrichment_data || {}),
-      sales_brief: brief,
-    };
-
-    log(`[Enrich] Score: ${score}/100`);
-
-    // ── Final DB write ────────────────────────────────────────────────────────
-    await serviceClient
-      .from("leads")
-      .update({
-        phone: full.phone,
-        email: full.email,
-        address: full.address,
-        description: full.description,
-        has_website: full.has_website,
-        website_url: full.website_url,
-        website_quality: full.website_quality,
-        website_score: full.website_score,
-        facebook_url: full.facebook_url,
-        instagram_url: full.instagram_url,
-        owner_name: full.owner_name,
-        owner_phone: full.owner_phone,
-        owner_email: full.owner_email,
-        owner_role: full.owner_role,
-        linkedin_url: full.linkedin_url,
-        siren: full.siren,
-        company_type: full.company_type,
-        creation_date: full.creation_date,
-        revenue_bracket: full.revenue_bracket,
-        employee_count: full.employee_count,
-        follower_count: full.follower_count,
-        has_https: full.has_https,
-        has_booking: full.has_booking,
-        has_chatbot: full.has_chatbot,
-        has_meta_ads: full.has_meta_ads,
-        meta_ads_count: full.meta_ads_count,
-        potential_score: full.potential_score,
+        phone: enriched.phone,
+        email: enriched.email,
+        address: enriched.address,
+        description: enriched.description,
+        has_website: enriched.has_website,
+        website_url: enriched.website_url,
+        website_quality: enriched.website_quality,
+        website_score: enriched.website_score,
+        facebook_url: enriched.facebook_url,
+        instagram_url: enriched.instagram_url,
+        owner_name: enriched.owner_name,
+        owner_phone: enriched.owner_phone,
+        owner_email: enriched.owner_email,
+        owner_role: enriched.owner_role,
+        linkedin_url: enriched.linkedin_url,
+        siren: enriched.siren,
+        company_type: enriched.company_type,
+        creation_date: enriched.creation_date,
+        revenue_bracket: enriched.revenue_bracket,
+        employee_count: enriched.employee_count,
+        follower_count: enriched.follower_count,
+        has_https: enriched.has_https,
+        has_booking: enriched.has_booking,
+        has_chatbot: enriched.has_chatbot,
+        has_meta_ads: enriched.has_meta_ads,
+        meta_ads_count: enriched.meta_ads_count,
+        potential_score: enriched.potential_score,
+        prospect_analysis: enriched.prospect_analysis ?? null,
+        targeted_offer: enriched.targeted_offer ?? null,
+        identified_need: enriched.identified_need ?? null,
+        priority_score: enriched.priority_score ?? "cold",
         enrichment_status: "completed",
-        enrichment_data: full.enrichment_data || {},
+        enrichment_step: "done",
+        enrichment_data: enriched.enrichment_data || {},
+        updated_at: new Date().toISOString(),
       })
       .eq("id", leadId);
 
-    log(`[Enrich] Completed: ${dbLead.business_name}`);
+    log(`[Enrich] ✓ Completed: ${dbLead.business_name} | score=${enriched.potential_score}/100`);
 
     const { data: updatedLead } = await serviceClient
       .from("leads")
@@ -205,6 +198,7 @@ export async function POST(request: Request) {
           .from("leads")
           .update({
             enrichment_status: "failed",
+            enrichment_step: "failed",
             enrichment_data: { error: msg, logs },
           })
           .eq("id", leadId);

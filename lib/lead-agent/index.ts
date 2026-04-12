@@ -14,7 +14,6 @@ import { searchGoogle } from "./sources/google-search";
 import { searchPagesJaunes } from "./sources/pages-jaunes";
 import { searchFacebook } from "./sources/facebook";
 import { searchLinkedIn } from "./sources/linkedin";
-import { searchOwnerPhone } from "./enrichment/owner-search";
 import {
   deepCheckWebsite,
   fetchPageSpeedScore,
@@ -25,6 +24,10 @@ import { quickHttpCheck } from "./enrichment/quick-http-check";
 import { computeLeadScore, generateSalesBrief } from "./enrichment/lead-scorer";
 import { scrapContactPage } from "./enrichment/contact-page-scraper";
 import { deduplicateLeads } from "./deduplicator";
+import { findWebsite } from "./enrichment/website-finder";
+import { researchDirigeant } from "./enrichment/dirigeant-researcher";
+import { analyzeProspect } from "./enrichment/prospect-analyzer";
+import { searchSocieteCom } from "./sources/societe-com";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +68,13 @@ export interface LeadResult {
   potential_score: number | null;
   source: string;
   enrichment_data: Record<string, unknown>;
+  // New pipeline fields
+  niche?: string | null;
+  prospect_analysis?: string | null;
+  targeted_offer?: string | null;
+  identified_need?: string | null;
+  priority_score?: string | null;
+  enrichment_step?: string | null;
 }
 
 export interface DiscoveryRunDetails {
@@ -82,6 +92,15 @@ export interface DiscoveryOptions {
   targetMinLeads?: number;
   log?: (msg: string) => void;
 }
+
+/**
+ * Callback invoked after each enrichment step completes.
+ * Used by the worker/route to persist intermediate results to the database.
+ */
+export type OnStepComplete = (
+  stepName: string,
+  partial: Partial<LeadResult> & { enrichment_step: string }
+) => Promise<void>;
 
 // ---------------------------------------------------------------------------
 // Enrichment context — accumulated data passed between steps
@@ -274,6 +293,352 @@ export async function runDiscovery(
         target_min_new_leads: targetMinLeads,
       },
     };
+  } finally {
+    await safeClose(session);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// NEW 6-Step enrichment pipeline (worker-friendly with intermediate saves)
+// ---------------------------------------------------------------------------
+
+const STEP_TIMEOUT_LONG = 120_000; // 2 min per step for deep research
+
+/**
+ * Structured 6-step lead enrichment pipeline.
+ *
+ * Steps:
+ *   1. website_finder    — find/validate website via click-through
+ *   2. website_analysis  — quality, HTTPS, booking, chatbot
+ *   3. legal_data        — Pappers API + Societe.com (owner name, SIREN, legal form)
+ *   4. dirigeant         — deep owner research (5-10 searches, 10 link navigations, LinkedIn)
+ *   5. social_contacts   — Facebook, LinkedIn page, contact page, Ad Library
+ *   6. analysis          — Gemini prospect analysis + scoring + sales brief
+ *
+ * After each step, `onStepComplete` is called so the worker/route can persist
+ * partial results to the database immediately (no data lost on timeout/crash).
+ */
+export async function runSixStepEnrichment(
+  lead: LeadResult,
+  location: string,
+  log: (msg: string) => void = console.log,
+  onStepComplete?: OnStepComplete
+): Promise<LeadResult> {
+  log(`\n═══ 6-Step Enrichment: ${lead.business_name} (${location}) ═══`);
+
+  lead.enrichment_data = { ...(lead.enrichment_data || {}), research_steps: {} };
+
+  let session: BrowserSession | null = null;
+  let _launchPromise: Promise<BrowserSession> | null = null;
+
+  async function browser(): Promise<BrowserSession> {
+    if (session && isBrowserAlive(session)) return session;
+    if (_launchPromise) return _launchPromise;
+    log("[Browser] Launching...");
+    const dying = session;
+    session = null;
+    _launchPromise = (async () => {
+      await safeClose(dying);
+      const s = await launchBrowser();
+      session = s;
+      return s;
+    })().finally(() => { _launchPromise = null; });
+    return _launchPromise;
+  }
+
+  async function getPage(): Promise<Page> {
+    const s = await browser();
+    try { return await newPage(s); }
+    catch {
+      log("[Browser] Page creation failed — relaunching");
+      session = null;
+      return await newPage(await browser());
+    }
+  }
+
+  async function closePage(p: Page) {
+    try { await p.close(); } catch { /* may be dead */ }
+  }
+
+  async function runStep<T>(
+    stepName: string,
+    timeoutMs: number,
+    fn: (page: Page) => Promise<T | null>
+  ): Promise<T | null> {
+    const page = await getPage();
+    try {
+      return await Promise.race([
+        fn(page),
+        new Promise<null>((resolve) =>
+          setTimeout(() => {
+            log(`[${stepName}] ⏱ timeout (${timeoutMs / 1000}s)`);
+            resolve(null);
+          }, timeoutMs)
+        ),
+      ]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`[${stepName}] ✗ ${msg.slice(0, 100)}`);
+      if (msg.includes("closed") || msg.includes("Target closed") || msg.includes("Protocol error")) {
+        session = null;
+      }
+      return null;
+    } finally {
+      await closePage(page);
+    }
+  }
+
+  async function save(stepName: string, partial: Partial<LeadResult>) {
+    const update = { ...partial, enrichment_step: stepName };
+    // Merge into lead
+    Object.assign(lead, partial);
+    lead.enrichment_step = stepName;
+    record(lead, stepName, partial);
+    if (onStepComplete) {
+      try { await onStepComplete(stepName, update as Partial<LeadResult> & { enrichment_step: string }); }
+      catch (e) { log(`[Save] ✗ ${e instanceof Error ? e.message : e}`); }
+    }
+  }
+
+  try {
+    // ── STEP 1: Website Finder ─────────────────────────────────────────────
+    log(`\n[Step 1/6] Website Finder...`);
+    const websiteResult = await runStep("website_finder", STEP_TIMEOUT_LONG, (page) =>
+      findWebsite(page, lead.business_name, location, lead.website_url, log)
+    );
+
+    if (websiteResult) {
+      await save("website_finder", {
+        has_website: websiteResult.has_website,
+        website_url: websiteResult.website_url,
+      });
+    } else {
+      await save("website_finder", { has_website: lead.has_website, website_url: lead.website_url });
+    }
+
+    // ── STEP 2: Website Analysis ──────────────────────────────────────────
+    log(`\n[Step 2/6] Website Analysis...`);
+    if (lead.has_website && lead.website_url) {
+      // HTTP check (fast, no browser)
+      const httpResult = await quickHttpCheck(lead.website_url, log);
+      if (httpResult) {
+        lead.has_https = httpResult.has_https;
+        if (!httpResult.is_alive) lead.website_quality = "dead";
+      }
+
+      const webResult = await runStep("website_analysis", STEP_TIMEOUT_LONG, (page) =>
+        deepCheckWebsite(page, lead.website_url!, lead.business_name, log)
+      );
+
+      if (webResult) {
+        await save("website_analysis", {
+          website_quality: webResult.quality,
+          website_score: webResult.score,
+          has_https: webResult.has_https,
+          has_booking: webResult.has_booking,
+          has_chatbot: webResult.has_chatbot,
+        });
+      }
+
+      // PageSpeed (async, no browser)
+      const ps = await fetchPageSpeedScore(lead.website_url, log).catch(() => null);
+      if (ps !== null && lead.website_score != null) {
+        lead.website_score = Math.round(lead.website_score * 0.6 + ps * 0.4);
+      }
+    } else {
+      lead.website_quality = "none";
+      lead.website_score = 0;
+      lead.has_https = false;
+      lead.has_booking = false;
+      lead.has_chatbot = false;
+      await save("website_analysis", {
+        website_quality: "none",
+        website_score: 0,
+        has_https: false,
+        has_booking: false,
+        has_chatbot: false,
+      });
+    }
+
+    // ── STEP 3: Legal Data (Pappers API + Societe.com) ─────────────────────
+    log(`\n[Step 3/6] Legal Data (Pappers + Societe.com)...`);
+
+    // Pappers API (no browser, fast)
+    const pappers = await searchPappersApi(lead.business_name, location, log);
+    if (pappers) {
+      lead.owner_name = lead.owner_name || pappers.owner_name;
+      lead.owner_role = lead.owner_role || pappers.owner_role;
+      lead.siren = lead.siren || pappers.siren;
+      lead.company_type = lead.company_type || pappers.company_type;
+      lead.creation_date = lead.creation_date || pappers.creation_date;
+      lead.employee_count = lead.employee_count || pappers.employee_count;
+      lead.address = lead.address || pappers.address;
+      lead.revenue_bracket = lead.revenue_bracket || pappers.revenue_bracket;
+    }
+
+    // Societe.com browser scrape (more detailed, has dirigeant info)
+    if (!lead.owner_name || !lead.siren) {
+      const societe = await runStep("legal_data", STEP_TIMEOUT_LONG, (page) =>
+        searchSocieteCom(page, lead.business_name, location, lead.address, log)
+      );
+      if (societe) {
+        lead.owner_name = lead.owner_name || societe.owner_name;
+        lead.owner_role = lead.owner_role || societe.owner_role;
+        lead.siren = lead.siren || societe.siren;
+        lead.company_type = lead.company_type || societe.company_type;
+        lead.creation_date = lead.creation_date || societe.creation_date;
+        lead.employee_count = lead.employee_count || societe.employee_count;
+        lead.address = lead.address || societe.address;
+        lead.revenue_bracket = lead.revenue_bracket || societe.revenue_bracket;
+        if (societe.website_url && !lead.website_url) {
+          lead.website_url = societe.website_url;
+          lead.has_website = true;
+        }
+      }
+    }
+
+    await save("legal_data", {
+      owner_name: lead.owner_name,
+      owner_role: lead.owner_role,
+      siren: lead.siren,
+      company_type: lead.company_type,
+      creation_date: lead.creation_date,
+      employee_count: lead.employee_count,
+      address: lead.address,
+      revenue_bracket: lead.revenue_bracket,
+    });
+
+    // ── STEP 4: Dirigeant Research ────────────────────────────────────────
+    log(`\n[Step 4/6] Dirigeant Research${lead.owner_name ? ` (${lead.owner_name})` : ""}...`);
+    const dirigeant = await runStep("dirigeant", STEP_TIMEOUT_LONG, (page) =>
+      researchDirigeant(
+        page,
+        lead.owner_name,
+        lead.business_name,
+        location,
+        lead.niche || null,
+        log
+      )
+    );
+
+    if (dirigeant) {
+      await save("dirigeant", {
+        owner_name: dirigeant.owner_name || lead.owner_name,
+        owner_phone: dirigeant.owner_phone,
+        owner_email: dirigeant.owner_email,
+        owner_role: dirigeant.owner_role || lead.owner_role,
+        linkedin_url: dirigeant.linkedin_url,
+        enrichment_data: {
+          ...lead.enrichment_data,
+          linkedin_summary: dirigeant.linkedin_summary,
+        },
+      });
+    }
+
+    // ── STEP 5: Social Presence + Contact Page + Ad Library ───────────────
+    log(`\n[Step 5/6] Social Presence + Ad Library...`);
+
+    const [google, pj] = await Promise.all([
+      runStep("google_search", 45_000, (page) =>
+        searchGoogle(page, lead.business_name, location, lead.phone, lead.address, log)
+      ),
+      runStep("pages_jaunes", 45_000, (page) =>
+        searchPagesJaunes(page, lead.business_name, location, lead.phone, log)
+      ),
+    ]);
+
+    if (google) {
+      lead.phone = lead.phone || google.phone;
+      lead.email = lead.email || google.email;
+      lead.owner_name = lead.owner_name || google.owner_name;
+      lead.facebook_url = lead.facebook_url || google.facebook_url;
+      lead.instagram_url = lead.instagram_url || google.instagram_url;
+      lead.description = lead.description || google.extra_description;
+      if (google.has_real_website && google.website_url && !lead.website_url) {
+        lead.has_website = true;
+        lead.website_url = google.website_url;
+      }
+    }
+    if (pj) {
+      lead.phone = lead.phone || pj.phone;
+      lead.email = lead.email || pj.email;
+      lead.address = lead.address || pj.address;
+      lead.owner_name = lead.owner_name || pj.owner_name;
+      if (pj.website_url && !lead.website_url) {
+        lead.has_website = true;
+        lead.website_url = pj.website_url;
+      }
+    }
+
+    const [fb, ads, contactPage] = await Promise.all([
+      runStep("facebook", 45_000, (page) =>
+        searchFacebook(page, lead.business_name, location, lead.owner_name, log)
+      ),
+      runStep("ad_library", 45_000, (page) =>
+        checkFbAdLibrary(page, lead.business_name, location, lead.facebook_url, log)
+      ),
+      lead.has_website && lead.website_url
+        ? runStep("contact_page", 45_000, (page) =>
+            scrapContactPage(page, lead.website_url!, lead.business_name, log)
+          )
+        : Promise.resolve(null),
+    ]);
+
+    if (fb) {
+      lead.facebook_url = lead.facebook_url || fb.facebook_url;
+      lead.phone = lead.phone || fb.phone;
+      lead.email = lead.email || fb.email;
+      lead.instagram_url = lead.instagram_url || fb.instagram_url;
+      lead.follower_count = lead.follower_count || fb.follower_count;
+    }
+    if (ads) {
+      lead.has_meta_ads = ads.has_ads;
+      lead.meta_ads_count = ads.ad_count;
+    } else {
+      lead.has_meta_ads = lead.has_meta_ads ?? false;
+      lead.meta_ads_count = lead.meta_ads_count ?? 0;
+    }
+    if (contactPage) {
+      lead.email = lead.email || contactPage.email;
+      lead.phone = lead.phone || contactPage.phone;
+    }
+
+    await save("social_contacts", {
+      phone: lead.phone,
+      email: lead.email,
+      facebook_url: lead.facebook_url,
+      instagram_url: lead.instagram_url,
+      follower_count: lead.follower_count,
+      has_meta_ads: lead.has_meta_ads,
+      meta_ads_count: lead.meta_ads_count,
+      description: lead.description,
+    });
+
+    // ── STEP 6: Prospect Analysis + Scoring ───────────────────────────────
+    log(`\n[Step 6/6] Prospect Analysis + Scoring...`);
+    const score = computeLeadScore(lead);
+    lead.potential_score = score;
+
+    const analysis = await analyzeProspect(lead, location, log);
+    const salesBrief = await generateSalesBrief(lead, log).catch(() => null);
+
+    await save("analysis", {
+      potential_score: score,
+      prospect_analysis: analysis.prospect_analysis,
+      targeted_offer: analysis.targeted_offer,
+      identified_need: analysis.identified_need,
+      priority_score: analysis.priority_score,
+      enrichment_data: {
+        ...lead.enrichment_data,
+        sales_brief: salesBrief,
+      },
+    });
+
+    updateChecklist(lead);
+
+    log(`\n✓ ${lead.business_name} — 6 steps complete | score: ${score}/100 | priority: ${analysis.priority_score}`);
+
+    return lead;
   } finally {
     await safeClose(session);
   }

@@ -129,6 +129,26 @@ export interface Lead {
   recommended_offers: RecommendedOffer[] | null;
   enrichment_data: Record<string, unknown>;
   enrichment_status: EnrichmentStatus;
+  enrichment_step: string | null;
+  // Pipeline / qualification fields (migration 018)
+  prospect_analysis: string | null;
+  targeted_offer: string | null;
+  identified_need: string | null;
+  priority_score: "hot" | "warm" | "cold" | null;
+  pipeline_status: string | null;
+  first_contact_date: string | null;
+  last_contact_date: string | null;
+  next_action: string | null;
+  next_action_date: string | null;
+  contact_channel: string | null;
+  contact_attempts: number;
+  notes: string | null;
+  demo_site_created: boolean;
+  demo_site_url: string | null;
+  quote_sent: boolean;
+  quote_amount: string | null;
+  decision_maker_confirmed: boolean;
+  estimated_budget: string | null;
   updated_at: string;
   created_at: string;
 }

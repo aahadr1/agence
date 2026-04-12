@@ -1,43 +1,45 @@
 "use client";
 
-import { PageHeader } from "@/components/ui/page-header";
-import { Panel } from "@/components/ui/panel";
-import { createSearchContext } from "@/lib/lead-agent/search-context";
-import {
-  Lead,
-  LeadList,
-  LeadListItem,
-  LeadListSearchContext,
-  LeadSearch,
-} from "@/lib/types";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Search,
   MapPin,
   Loader2,
-  Building2,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
+  Play,
+  Terminal,
+  RefreshCw,
+  Filter,
+  Download,
   LayoutList,
   History,
+  Plus,
+  X,
+  Flame,
+  Thermometer,
+  Snowflake,
+  CheckCircle2,
+  AlertCircle,
+  ChevronDown,
 } from "lucide-react";
-import { useState, useEffect, useCallback, useRef } from "react";
-import { LeadCard } from "./components/lead-card";
+import type { Lead, LeadSearch, LeadList, LeadListItem, LeadListSearchContext } from "@/lib/types";
+import { LeadsTable } from "./components/leads-table";
 import { LeadDrawer } from "./components/lead-drawer";
 import { ListPanel } from "./components/list-panel";
 import { SelectBar } from "./components/select-bar";
 import { OutreachModal } from "./components/outreach-modal";
+import { createSearchContext } from "@/lib/lead-agent/search-context";
+import { cn } from "@/lib/utils";
 
 type SearchPhase = "idle" | "searching" | "analyzing" | "completed" | "failed";
 type ViewTab = "search" | "lists";
-type SortBy = "score" | "date" | "name";
+type SortBy = "score" | "date" | "name" | "priority";
+type FilterPriority = "all" | "hot" | "warm" | "cold";
+type FilterStatus = "all" | "pending" | "enriching" | "completed" | "failed";
 
-/** Safely parse a fetch response — handles non-JSON (HTML error pages, plain text) */
 async function safeJson(res: Response): Promise<Record<string, unknown>> {
   const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
+  try { return JSON.parse(text); }
+  catch {
     throw new Error(
       res.ok
         ? `Invalid response: ${text.slice(0, 150)}`
@@ -61,40 +63,39 @@ export default function LeadGeneratorPage() {
   const [activeListId, setActiveListId] = useState<string | null>(null);
   const [listItems, setListItems] = useState<LeadListItem[]>([]);
   const [viewTab, setViewTab] = useState<ViewTab>("search");
-  const [latestSearchContext, setLatestSearchContext] =
-    useState<LeadListSearchContext | null>(null);
+  const [latestSearchContext, setLatestSearchContext] = useState<LeadListSearchContext | null>(null);
 
   // Selection
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
 
-  // V2 multi-offer filters + sort
-  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  // Filters
+  const [filterPriority, setFilterPriority] = useState<FilterPriority>("all");
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [sortBy, setSortBy] = useState<SortBy>("score");
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Lead detail drawer
+  // Drawer
   const [drawerLead, setDrawerLead] = useState<Lead | null>(null);
 
   // Enrichment
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ done: number; total: number } | null>(null);
-  const enrichAbortRef = useRef(false);
+  const enrichAbortRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const enrichRunningRef = useRef(false);
 
   // Outreach
-  const [outreachModal, setOutreachModal] = useState<{
-    businessName: string;
-    template: string;
-  } | null>(null);
+  const [outreachModal, setOutreachModal] = useState<{ businessName: string; template: string } | null>(null);
   const [generatingOutreachId, setGeneratingOutreachId] = useState<string | null>(null);
 
-  // Load data on mount
+  // CRM
+  const [pipelineLeadId, setPipelineLeadId] = useState<string | null>(null);
+  const [crmFeedback, setCrmFeedback] = useState<string | null>(null);
+
+  // Load on mount
   useEffect(() => {
     const fetchData = async () => {
       const [searchesRes, listsRes] = await Promise.all([
-        fetch("/api/lead-generator/searches")
-          .then((r) => safeJson(r))
-          .catch(() => ({ searches: [] })),
-        fetch("/api/lead-generator/lists")
-          .then((r) => safeJson(r))
-          .catch(() => ({ lists: [] })),
+        fetch("/api/lead-generator/searches").then(safeJson).catch(() => ({ searches: [] })),
+        fetch("/api/lead-generator/lists").then(safeJson).catch(() => ({ lists: [] })),
       ]);
       setPastSearches((searchesRes.searches as LeadSearch[]) || []);
       setLists((listsRes.lists as LeadList[]) || []);
@@ -102,29 +103,47 @@ export default function LeadGeneratorPage() {
     fetchData();
   }, []);
 
-  const loadLeads = useCallback(
-    async (searchId: string) => {
+  // Poll for enrichment progress when leads are pending/enriching
+  useEffect(() => {
+    if (!selectedSearchId) return;
+    const hasPending = leads.some(
+      (l) => l.enrichment_status === "pending" || l.enrichment_status === "enriching"
+    );
+    if (!hasPending) return;
+
+    const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/lead-generator/searches/${searchId}/leads`);
+        const res = await fetch(`/api/lead-generator/searches/${selectedSearchId}/leads`);
         const data = await safeJson(res);
-        setLeads((data.leads as Lead[]) || []);
-      } catch {
-        setLeads([]);
-      }
-      setSelectedSearchId(searchId);
-      setSelectedLeadIds(new Set());
-    },
-    []
-  );
+        const updated = (data.leads as Lead[]) || [];
+        setLeads((prev) =>
+          prev.map((l) => {
+            const fresh = updated.find((u) => u.id === l.id);
+            return fresh || l;
+          })
+        );
+      } catch { /* ignore */ }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [selectedSearchId, leads]);
+
+  const loadLeads = useCallback(async (searchId: string) => {
+    try {
+      const res = await fetch(`/api/lead-generator/searches/${searchId}/leads`);
+      const data = await safeJson(res);
+      setLeads((data.leads as Lead[]) || []);
+    } catch { setLeads([]); }
+    setSelectedSearchId(searchId);
+    setSelectedLeadIds(new Set());
+  }, []);
 
   const loadListItems = useCallback(async (listId: string) => {
     try {
       const res = await fetch(`/api/lead-generator/lists/${listId}`);
       const data = await safeJson(res);
       setListItems((data.items as LeadListItem[]) || []);
-    } catch {
-      setListItems([]);
-    }
+    } catch { setListItems([]); }
     setActiveListId(listId);
   }, []);
 
@@ -133,29 +152,16 @@ export default function LeadGeneratorPage() {
       const res = await fetch("/api/lead-generator/lists");
       const data = await safeJson(res);
       setLists((data.lists as LeadList[]) || []);
-    } catch {
-      // keep existing lists on error
-    }
+    } catch { /* keep existing */ }
   }, []);
 
   const buildCurrentSearchContext = useCallback((): LeadListSearchContext => {
     const fallbackLead = leads[0];
     return createSearchContext({
       niche: latestSearchContext?.niche || niche.trim() || fallbackLead?.niche || null,
-      location:
-        latestSearchContext?.location ||
-        location.trim() ||
-        fallbackLead?.location ||
-        null,
+      location: latestSearchContext?.location || location.trim() || fallbackLead?.location || null,
       attempted_queries: latestSearchContext?.attempted_queries || [],
-      attempted_keywords:
-        latestSearchContext?.attempted_keywords ||
-        [
-          niche.trim(),
-          location.trim(),
-          fallbackLead?.niche || null,
-          fallbackLead?.location || null,
-        ].filter((value): value is string => Boolean(value)),
+      attempted_keywords: latestSearchContext?.attempted_keywords || [niche.trim(), location.trim()].filter(Boolean),
       successful_queries: latestSearchContext?.successful_queries || [],
       last_generated_queries: latestSearchContext?.last_generated_queries || [],
       target_min_new_leads: latestSearchContext?.target_min_new_leads || 12,
@@ -165,28 +171,23 @@ export default function LeadGeneratorPage() {
     });
   }, [latestSearchContext, leads, niche, location]);
 
-  /** Enrich leads one by one — call after discovery loads leads into state */
   const enrichLeads = useCallback(async (leadsToEnrich: Lead[]) => {
     const pending = leadsToEnrich.filter((l) => l.enrichment_status === "pending");
     if (pending.length === 0) return;
 
-    enrichAbortRef.current = false;
+    enrichRunningRef.current = true;
     setEnrichmentProgress({ done: 0, total: pending.length });
 
-    // Concurrency-3 pool: fire up to 3 /enrich requests at a time so the
-    // batch finishes ~3x faster without overwhelming the serverless quota.
-    const CONCURRENCY = 3;
+    const CONCURRENCY = 2;
     let done = 0;
     const queue = [...pending];
     const inFlight = new Set<Promise<void>>();
 
     const processLead = async (lead: Lead) => {
-      if (enrichAbortRef.current) return;
+      if (!enrichRunningRef.current) return;
 
       setLeads((prev) =>
-        prev.map((l) =>
-          l.id === lead.id ? { ...l, enrichment_status: "enriching" as const } : l
-        )
+        prev.map((l) => l.id === lead.id ? { ...l, enrichment_status: "enriching" as const } : l)
       );
 
       try {
@@ -198,20 +199,11 @@ export default function LeadGeneratorPage() {
         const data = await safeJson(res);
         if (data.lead) {
           const enrichedLead = data.lead as Lead;
-          setLeads((prev) =>
-            prev.map((l) => (l.id === lead.id ? enrichedLead : l))
-          );
-          setListItems((prev) =>
-            prev.map((item) =>
-              item.lead_id === lead.id ? { ...item, lead: enrichedLead } : item
-            )
-          );
+          setLeads((prev) => prev.map((l) => l.id === lead.id ? enrichedLead : l));
         }
       } catch {
         setLeads((prev) =>
-          prev.map((l) =>
-            l.id === lead.id ? { ...l, enrichment_status: "failed" as const } : l
-          )
+          prev.map((l) => l.id === lead.id ? { ...l, enrichment_status: "failed" as const } : l)
         );
       } finally {
         done += 1;
@@ -220,39 +212,33 @@ export default function LeadGeneratorPage() {
     };
 
     while (queue.length > 0 || inFlight.size > 0) {
-      if (enrichAbortRef.current) break;
-
-      while (!enrichAbortRef.current && inFlight.size < CONCURRENCY && queue.length > 0) {
+      if (!enrichRunningRef.current) break;
+      while (enrichRunningRef.current && inFlight.size < CONCURRENCY && queue.length > 0) {
         const lead = queue.shift()!;
         const p: Promise<void> = processLead(lead).finally(() => inFlight.delete(p));
         inFlight.add(p);
       }
-
       if (inFlight.size > 0) await Promise.race(inFlight);
     }
 
+    enrichRunningRef.current = false;
     setEnrichmentProgress(null);
   }, []);
 
-  // Search handler
   const handleSearch = async () => {
     if (!niche.trim() || !location.trim()) return;
 
-    // Abort any running enrichment
-    enrichAbortRef.current = true;
+    enrichRunningRef.current = false;
     setEnrichmentProgress(null);
-
     setPhase("analyzing");
-    setPhaseMessage(
-      "AI agent browsing Google Maps with multiple search variations..."
-    );
+    setPhaseMessage("Agent AI en train de scraper Google Maps...");
     setError(null);
     setLeads([]);
     setSelectedSearchId(null);
     setSelectedLeadIds(new Set());
 
     try {
-      const repeatedSearchContext =
+      const repeatedContext =
         latestSearchContext &&
         latestSearchContext.niche?.toLowerCase() === niche.trim().toLowerCase() &&
         latestSearchContext.location?.toLowerCase() === location.trim().toLowerCase()
@@ -265,39 +251,32 @@ export default function LeadGeneratorPage() {
         body: JSON.stringify({
           niche: niche.trim(),
           location: location.trim(),
-          attemptedQueries: repeatedSearchContext?.attempted_queries || [],
-          attemptedKeywords: repeatedSearchContext?.attempted_keywords || [],
+          attemptedQueries: repeatedContext?.attempted_queries || [],
+          attemptedKeywords: repeatedContext?.attempted_keywords || [],
         }),
       });
 
       const searchData = await safeJson(searchRes);
-      if (!searchRes.ok) {
-        throw new Error((searchData.error as string) || "Search failed");
-      }
+      if (!searchRes.ok) throw new Error((searchData.error as string) || "Search failed");
 
       const searchId = searchData.searchId as string;
       const leadsCount = searchData.leadsCount as number;
       const discovery = (searchData.discovery || {}) as Record<string, unknown>;
-      setLatestSearchContext(
-        createSearchContext({
-          niche: niche.trim(),
-          location: location.trim(),
-          attempted_queries: (discovery.used_queries as string[]) || [],
-          attempted_keywords: (discovery.attempted_keywords as string[]) || [],
-          successful_queries: (discovery.successful_queries as string[]) || [],
-          last_generated_queries: (discovery.generated_queries as string[]) || [],
-          target_min_new_leads:
-            (discovery.target_min_new_leads as number) || 12,
-          last_run_added: leadsCount,
-        })
-      );
+
+      setLatestSearchContext(createSearchContext({
+        niche: niche.trim(),
+        location: location.trim(),
+        attempted_queries: (discovery.used_queries as string[]) || [],
+        attempted_keywords: (discovery.attempted_keywords as string[]) || [],
+        successful_queries: (discovery.successful_queries as string[]) || [],
+        last_generated_queries: (discovery.generated_queries as string[]) || [],
+        target_min_new_leads: (discovery.target_min_new_leads as number) || 12,
+        last_run_added: leadsCount,
+      }));
 
       setPhase("completed");
-      setPhaseMessage(
-        `Found ${leadsCount} businesses — now enriching each lead with detailed info...`
-      );
+      setPhaseMessage(`${leadsCount} entreprises trouvées — enrichissement en cours...`);
 
-      // Load leads from DB and display immediately
       const leadsRes = await fetch(`/api/lead-generator/searches/${searchId}/leads`);
       const leadsData = await safeJson(leadsRes);
       const loadedLeads = (leadsData.leads as Lead[]) || [];
@@ -309,7 +288,6 @@ export default function LeadGeneratorPage() {
       const searchesData = await safeJson(searchesRes);
       setPastSearches((searchesData.searches as LeadSearch[]) || []);
 
-      // Start enrichment in background (non-blocking)
       enrichLeads(loadedLeads);
     } catch (err) {
       setPhase("failed");
@@ -318,61 +296,47 @@ export default function LeadGeneratorPage() {
     }
   };
 
-  // Selection
-  const toggleSelect = (id: string) => {
-    setSelectedLeadIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  const handleLeadUpdate = useCallback(async (leadId: string, updates: Partial<Lead>) => {
+    // Optimistic update
+    setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, ...updates } : l));
+    // Persist
+    try {
+      await fetch(`/api/lead-generator/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+    } catch { /* revert on error would go here */ }
+  }, []);
 
-  // List actions
   const handleCreateList = async (name: string) => {
-    const searchContext = buildCurrentSearchContext();
+    const ctx = buildCurrentSearchContext();
     const res = await fetch("/api/lead-generator/lists", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        keywords: searchContext.attempted_keywords,
-        searchContext,
-      }),
+      body: JSON.stringify({ name, keywords: ctx.attempted_keywords, searchContext: ctx }),
     });
     if (res.ok) await refreshLists();
   };
 
   const handleCreateListWithSelected = async (name: string) => {
     const leadIds = Array.from(selectedLeadIds);
-    const searchContext = buildCurrentSearchContext();
+    const ctx = buildCurrentSearchContext();
     const res = await fetch("/api/lead-generator/lists", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        leadIds,
-        keywords: searchContext.attempted_keywords,
-        searchContext,
-      }),
+      body: JSON.stringify({ name, leadIds, keywords: ctx.attempted_keywords, searchContext: ctx }),
     });
-    if (res.ok) {
-      await refreshLists();
-      setSelectedLeadIds(new Set());
-    }
+    if (res.ok) { await refreshLists(); setSelectedLeadIds(new Set()); }
   };
 
   const handleAddToList = async (listId: string) => {
     const leadIds = Array.from(selectedLeadIds);
-    const searchContext = buildCurrentSearchContext();
+    const ctx = buildCurrentSearchContext();
     await fetch(`/api/lead-generator/lists/${listId}/items`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        leadIds,
-        keywords: searchContext.attempted_keywords,
-        searchContext,
-      }),
+      body: JSON.stringify({ leadIds, keywords: ctx.attempted_keywords, searchContext: ctx }),
     });
     setSelectedLeadIds(new Set());
     if (activeListId === listId) await loadListItems(listId);
@@ -381,10 +345,7 @@ export default function LeadGeneratorPage() {
 
   const handleDeleteList = async (listId: string) => {
     await fetch(`/api/lead-generator/lists/${listId}`, { method: "DELETE" });
-    if (activeListId === listId) {
-      setActiveListId(null);
-      setListItems([]);
-    }
+    if (activeListId === listId) { setActiveListId(null); setListItems([]); }
     await refreshLists();
   };
 
@@ -396,12 +357,10 @@ export default function LeadGeneratorPage() {
     const list = lists.find((l) => l.id === listId);
     if (!list) return;
 
-    // Abort any running enrichment
-    enrichAbortRef.current = true;
+    enrichRunningRef.current = false;
     setEnrichmentProgress(null);
-
     setPhase("analyzing");
-    setPhaseMessage(`AI expanding list "${list.name}" — finding new businesses not already in the list...`);
+    setPhaseMessage(`Expansion de la liste "${list.name}"...`);
     setError(null);
     setViewTab("lists");
     setActiveListId(listId);
@@ -415,37 +374,21 @@ export default function LeadGeneratorPage() {
           location: list.search_context?.location || location,
         }),
       });
-
       const data = await safeJson(res);
       if (!res.ok) throw new Error((data.error as string) || "Expand failed");
 
       setPhase("completed");
-      setPhaseMessage(
-        ((data.message as string) ||
-          `Added ${data.added} new leads to "${list.name}"`) +
-          ((data.added as number) > 0 ? " — enriching..." : "")
-      );
+      setPhaseMessage(((data.message as string) || `${data.added} nouveaux leads ajoutés`) + ((data.added as number) > 0 ? " — enrichissement..." : ""));
 
-      // Reload list items and start enrichment
       const listRes = await fetch(`/api/lead-generator/lists/${listId}`);
       const listData = await safeJson(listRes);
       const items = (listData.items as LeadListItem[]) || [];
       setListItems(items);
       await refreshLists();
 
-      // Enrich only the newly added (pending) leads
-      const addedLeadIds = new Set(((data.leadIds as string[]) || []).filter(Boolean));
-      const newLeads = items
-        .map((i) => i.lead!)
-        .filter(
-          (l) =>
-            l &&
-            l.enrichment_status === "pending" &&
-            addedLeadIds.has(l.id)
-        );
-      if (newLeads.length > 0) {
-        enrichLeads(newLeads);
-      }
+      const addedIds = new Set(((data.leadIds as string[]) || []).filter(Boolean));
+      const newLeads = items.map((i) => i.lead!).filter((l) => l && l.enrichment_status === "pending" && addedIds.has(l.id));
+      if (newLeads.length > 0) enrichLeads(newLeads);
     } catch (err) {
       setPhase("failed");
       setError(err instanceof Error ? err.message : "Expand failed");
@@ -453,7 +396,6 @@ export default function LeadGeneratorPage() {
     }
   };
 
-  // Outreach
   const handleGenerateOutreach = async (leadId: string) => {
     setGeneratingOutreachId(leadId);
     try {
@@ -464,21 +406,12 @@ export default function LeadGeneratorPage() {
       });
       const data = await safeJson(res);
       if (data.template) {
-        const lead = leads.find((l) => l.id === leadId) ||
-          listItems.find((i) => i.lead_id === leadId)?.lead;
-        setOutreachModal({
-          businessName: lead?.business_name || "Business",
-          template: data.template as string,
-        });
+        const lead = leads.find((l) => l.id === leadId) || listItems.find((i) => i.lead_id === leadId)?.lead;
+        setOutreachModal({ businessName: lead?.business_name || "Business", template: data.template as string });
       }
-    } catch {
-      // Silently fail
-    }
+    } catch { /* silent */ }
     setGeneratingOutreachId(null);
   };
-
-  const [pipelineLeadId, setPipelineLeadId] = useState<string | null>(null);
-  const [crmFeedback, setCrmFeedback] = useState<string | null>(null);
 
   const handleAddToPipeline = async (leadId: string) => {
     setPipelineLeadId(leadId);
@@ -490,415 +423,355 @@ export default function LeadGeneratorPage() {
         body: JSON.stringify({ leadId }),
       });
       const data = await safeJson(res);
-      if (!res.ok) {
-        throw new Error((data.error as string) || "CRM error");
-      }
+      if (!res.ok) throw new Error((data.error as string) || "CRM error");
       if (data.existing) {
-        setCrmFeedback("Prospect already exists in CRM. Open CRM to continue follow-up.");
+        setCrmFeedback("Prospect déjà dans le CRM.");
       } else {
-        setCrmFeedback("Prospect added to CRM successfully.");
+        setCrmFeedback(`✓ Prospect ajouté au CRM.`);
+        setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, pipeline_status: "to_contact" } as Lead : l));
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Pipeline error");
-    } finally {
-      setPipelineLeadId(null);
+    } catch (err) {
+      setCrmFeedback(`Erreur : ${err instanceof Error ? err.message : "CRM error"}`);
     }
+    setPipelineLeadId(null);
   };
 
-  // Filter logic
-  const displayLeads = viewTab === "lists" && activeListId
-    ? listItems.map((i) => i.lead!).filter(Boolean)
-    : leads;
+  // Filter + sort active leads
+  const activeLeads = leads.filter((l) => {
+    const ext = l as Record<string, unknown>;
+    if (filterPriority !== "all" && ext.priority_score !== filterPriority) return false;
+    if (filterStatus !== "all" && l.enrichment_status !== filterStatus) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return (
+        l.business_name.toLowerCase().includes(q) ||
+        (l.niche || "").toLowerCase().includes(q) ||
+        (l.location || "").toLowerCase().includes(q) ||
+        (l.owner_name || "").toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
 
-  // V2 filter logic — each filter targets a specific digital gap → offer
-  const filterDefs = [
-    {
-      id: "hot",
-      label: "Score 60+",
-      offer: "Priorité",
-      test: (l: Lead) => (l.potential_score ?? 0) >= 60,
-    },
-    {
-      id: "no_site",
-      label: "Pas de site",
-      offer: "Site Web",
-      test: (l: Lead) => !l.has_website,
-    },
-    {
-      id: "bad_site",
-      label: "Site obsolète",
-      offer: "Refonte",
-      test: (l: Lead) =>
-        l.has_website === true &&
-        (l.website_quality === "dead" ||
-          l.website_quality === "outdated" ||
-          l.website_quality === "poor" ||
-          (l.website_score != null && l.website_score < 50)),
-    },
-    {
-      id: "has_owner",
-      label: "Dirigeant ID",
-      offer: "Appel direct",
-      test: (l: Lead) => !!l.owner_name,
-    },
-    {
-      id: "no_booking",
-      label: "Pas de résa",
-      offer: "Chatbot/RDV",
-      test: (l: Lead) => l.has_booking === false,
-    },
-    {
-      id: "no_ads",
-      label: "Pas de pub",
-      offer: "Ads Meta",
-      test: (l: Lead) => l.has_meta_ads === false,
-    },
-    {
-      id: "no_chatbot",
-      label: "Pas de chatbot",
-      offer: "Chatbot IA",
-      test: (l: Lead) => l.has_chatbot === false,
-    },
-  ];
+  // Stats
+  const stats = {
+    total: leads.length,
+    enriched: leads.filter((l) => l.enrichment_status === "completed").length,
+    hot: leads.filter((l) => (l as Record<string, unknown>).priority_score === "hot").length,
+    noWebsite: leads.filter((l) => !l.has_website).length,
+  };
 
-  const filterCounts = filterDefs.map((f) => ({
-    ...f,
-    count: displayLeads.filter(f.test).length,
-  }));
-
-  const filteredLeads = (() => {
-    const base = activeFilter
-      ? displayLeads.filter(
-          filterDefs.find((f) => f.id === activeFilter)?.test || (() => true)
-        )
-      : displayLeads;
-
-    return [...base].sort((a, b) => {
-      if (sortBy === "score") {
-        return (b.potential_score ?? -1) - (a.potential_score ?? -1);
-      }
-      if (sortBy === "name") {
-        return a.business_name.localeCompare(b.business_name, "fr");
-      }
-      // "date" — keep original order (insertion order = discovery order)
-      return 0;
-    });
-  })();
+  const isSearching = phase === "analyzing" || phase === "searching";
 
   return (
     <div className="animate-fade-in">
-      <PageHeader
-        eyebrow="Prospecting"
-        title="Lead generator"
-        description="Niche plus location. The agent maps the market, then enriches each row."
-      />
-
-      <Panel padding="md" className="mb-8 rounded-sm">
-        <div className="mb-6 grid grid-cols-1 gap-5 md:grid-cols-2">
-          <div>
-            <label className="label-eyebrow mb-2 block">Niche</label>
-            <div className="relative">
-              <Building2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.25} />
-              <input
-                type="text"
-                value={niche}
-                onChange={(e) => setNiche(e.target.value)}
-                placeholder="Restaurant, plumber, salon…"
-                className="input-minimal"
-                style={{ paddingLeft: "2.5rem" }}
-                disabled={phase === "analyzing"}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="label-eyebrow mb-2 block">Location</label>
-            <div className="relative">
-              <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.25} />
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="City, arrondissement, region…"
-                className="input-minimal"
-                style={{ paddingLeft: "2.5rem" }}
-                disabled={phase === "analyzing"}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              />
-            </div>
-          </div>
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="label-eyebrow">Lead Generator</p>
+          <h1 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">
+            Prospection
+          </h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Découvrez des entreprises locales, enrichissez les données, gérez votre pipeline.
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={handleSearch}
-          disabled={!niche.trim() || !location.trim() || phase === "analyzing"}
-          className="btn-solid disabled:cursor-not-allowed"
-        >
-          {phase === "analyzing" ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Researching
-            </>
-          ) : (
-            <>
-              <Search className="h-4 w-4" strokeWidth={1.25} />
-              Run search
-            </>
-          )}
-        </button>
 
-        {phase !== "idle" && phaseMessage ? (
-          <div className="mt-6 flex gap-3 border-t border-border pt-6">
-            {phase === "analyzing" || enrichmentProgress ? (
-              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-            ) : phase === "completed" ? (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" strokeWidth={1.25} />
-            ) : (
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" strokeWidth={1.25} />
-            )}
-            <div>
-              <p className="text-sm leading-relaxed text-foreground">{phaseMessage}</p>
-              {phase === "analyzing" ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {["Query expansion", "Maps discovery"].map((s) => (
-                    <span
-                      key={s}
-                      className="border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-                    >
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              {enrichmentProgress ? (
-                <div className="mt-3">
-                  <div className="flex items-center gap-3">
-                    <div className="h-1 flex-1 bg-border">
-                      <div
-                        className="h-1 bg-foreground transition-all duration-500"
-                        style={{ width: `${((enrichmentProgress.done + 1) / enrichmentProgress.total) * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
-                      {enrichmentProgress.done + 1}/{enrichmentProgress.total}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {["Pappers API", "HTTP check", "PageSpeed", "Google", "PagesJaunes", "Facebook", "LinkedIn", "Owner", "Website", "Ad Library", "Score IA"].map((s) => (
-                      <span
-                        key={s}
-                        className="border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-                      >
-                        {s}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {error ? (
-          <div className="mt-4 flex items-center gap-2 border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            <XCircle className="h-4 w-4 shrink-0" strokeWidth={1.25} />
-            {error}
-          </div>
-        ) : null}
-        {crmFeedback ? (
-          <div className="mt-4 border border-foreground/20 bg-secondary/40 px-3 py-2 text-sm text-foreground">
-            {crmFeedback}
-          </div>
-        ) : null}
-      </Panel>
-
-      <div className="grid grid-cols-1 gap-8 border-t border-border pt-10 lg:grid-cols-4">
-        <div className="space-y-4 lg:col-span-1">
-          <div className="flex border border-border">
-            <button
-              type="button"
-              onClick={() => setViewTab("search")}
-              className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[10px] font-medium uppercase tracking-[0.1em] transition-colors ${
-                viewTab === "search"
-                  ? "-mb-px border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <History className="h-3 w-3" strokeWidth={1.25} /> History
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewTab("lists")}
-              className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[10px] font-medium uppercase tracking-[0.1em] transition-colors ${
-                viewTab === "lists"
-                  ? "-mb-px border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <LayoutList className="h-3 w-3" strokeWidth={1.25} /> Lists
-            </button>
-          </div>
-
-          {viewTab === "search" ? (
-            <Panel padding="sm" className="rounded-sm">
-              <h3 className="label-eyebrow mb-4">Past runs</h3>
-              {pastSearches.length === 0 ? (
-                <p className="text-xs text-muted-foreground">None yet.</p>
-              ) : (
-                <div className="divide-y divide-border border border-border">
-                  {pastSearches.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => {
-                        loadLeads(s.id);
-                        setViewTab("search");
-                      }}
-                      className={`w-full px-3 py-3 text-left text-sm transition-colors hover:bg-secondary/40 ${
-                        selectedSearchId === s.id ? "bg-secondary/50" : ""
-                      }`}
-                    >
-                      <p className="truncate font-medium text-foreground">{s.niche}</p>
-                      <p className="truncate text-xs text-muted-foreground">{s.location}</p>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="font-mono text-[10px] text-muted-foreground">
-                          {new Date(s.created_at).toLocaleDateString()}
-                        </span>
-                        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                          {s.status === "completed"
-                            ? `${s.leads_count} leads`
-                            : s.status === "failed"
-                              ? "Failed"
-                              : s.status}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Panel>
-          ) : (
-            <ListPanel
-              lists={lists}
-              activeListId={activeListId}
-              onSelectList={(id) => { loadListItems(id); }}
-              onCreateList={handleCreateList}
-              onDeleteList={handleDeleteList}
-              onExportList={handleExportList}
-              onExpandList={handleExpandList}
+        {/* Search bar */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm">
+            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              type="text"
+              value={niche}
+              onChange={(e) => setNiche(e.target.value)}
+              placeholder="Secteur (ex: restaurant, plombier...)"
+              className="w-40 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
             />
-          )}
-        </div>
-
-        <div className="lg:col-span-3">
-          {filteredLeads.length > 0 || displayLeads.length > 0 ? (
-            <>
-              <div className="mb-6 space-y-3 border-b border-border pb-4">
-                {/* Filter chips */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {filteredLeads.length} leads
-                  </span>
-                  {filterCounts.map((f) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      onClick={() => setActiveFilter(activeFilter === f.id ? null : f.id)}
-                      className={`border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em] transition-colors ${
-                        activeFilter === f.id
-                          ? "border-foreground bg-foreground text-primary-foreground"
-                          : "border-border text-muted-foreground hover:border-foreground/25"
-                      }`}
-                      title={`Offre: ${f.offer}`}
-                    >
-                      {f.label} ({f.count})
-                    </button>
-                  ))}
-                </div>
-
-                {/* Sort + select row */}
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-[0.08em] mr-1">
-                      Trier :
-                    </span>
-                    {(["score", "name", "date"] as SortBy[]).map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => setSortBy(s)}
-                        className={`border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] transition-colors ${
-                          sortBy === s
-                            ? "border-foreground bg-foreground text-primary-foreground"
-                            : "border-border text-muted-foreground hover:border-foreground/25"
-                        }`}
-                      >
-                        {s === "score" ? "Score" : s === "name" ? "Nom" : "Date"}
-                      </button>
-                    ))}
-                  </div>
-
-                  {displayLeads.length > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedLeadIds.size === filteredLeads.length) {
-                          setSelectedLeadIds(new Set());
-                        } else {
-                          setSelectedLeadIds(new Set(filteredLeads.map((l) => l.id)));
-                        }
-                      }}
-                      className="text-[11px] font-medium underline underline-offset-4 hover:no-underline"
-                    >
-                      {selectedLeadIds.size === filteredLeads.length
-                        ? "Tout déselectionner"
-                        : "Tout sélectionner"}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* Lead cards */}
-              <div className="space-y-3">
-                {filteredLeads.map((lead) => (
-                  <LeadCard
-                    key={lead.id}
-                    lead={lead}
-                    selected={selectedLeadIds.has(lead.id)}
-                    onSelect={toggleSelect}
-                    onOpenDrawer={(l) => setDrawerLead(l)}
-                    onGenerateOutreach={handleGenerateOutreach}
-                    generatingOutreach={generatingOutreachId === lead.id}
-                    onAddToPipeline={handleAddToPipeline}
-                    addingToPipeline={pipelineLeadId === lead.id}
-                  />
-                ))}
-              </div>
-            </>
-          ) : phase === "idle" ? (
-            <Panel padding="lg" className="rounded-sm text-center">
-              <Search className="mx-auto mb-5 h-8 w-8 text-muted-foreground" strokeWidth={1} />
-              <p className="label-eyebrow mb-2">Start</p>
-              <h2 className="font-display text-xl font-medium text-foreground md:text-2xl">
-                Run a search
-              </h2>
-              <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">
-                Maps-first discovery, then enrichment across search and directories.
-                Results appear in the list on the right.
-              </p>
-            </Panel>
-          ) : null}
+          </div>
+          <div className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm">
+            <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Ville (ex: Paris, Lyon...)"
+              className="w-32 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleSearch}
+            disabled={isSearching || !niche.trim() || !location.trim()}
+            className="btn-solid flex items-center gap-1.5 text-xs disabled:opacity-50"
+          >
+            {isSearching ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Search className="h-3.5 w-3.5" />
+            )}
+            {isSearching ? "Recherche..." : "Lancer"}
+          </button>
         </div>
       </div>
 
-      {/* Selection action bar */}
-      <SelectBar
-        selectedCount={selectedLeadIds.size}
-        lists={lists}
-        onAddToList={handleAddToList}
-        onCreateListWithSelected={handleCreateListWithSelected}
-        onClearSelection={() => setSelectedLeadIds(new Set())}
-        onExportSelected={() => {}}
-      />
+      {/* Phase status */}
+      {(isSearching || phaseMessage) && (
+        <div className={cn(
+          "mt-4 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm",
+          phase === "failed"
+            ? "border-red-200 bg-red-50 text-red-700"
+            : "border-blue-200 bg-blue-50 text-blue-700"
+        )}>
+          {isSearching && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
+          {phase === "failed" && <AlertCircle className="h-4 w-4 shrink-0" />}
+          {phase === "completed" && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />}
+          <span>{error || phaseMessage}</span>
+        </div>
+      )}
+
+      {/* Worker instructions (show when leads are pending but no enrichment running) */}
+      {leads.length > 0 && !enrichmentProgress && leads.some((l) => l.enrichment_status === "pending") && (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div>
+              <p className="text-sm font-medium text-amber-800">
+                Pour un enrichissement complet sans timeout
+              </p>
+              <p className="mt-0.5 text-xs text-amber-700">
+                Lancez le worker local pour un enrichissement approfondi (sans limite de temps) :
+              </p>
+              <code className="mt-1.5 block rounded bg-amber-100 px-3 py-1.5 font-mono text-xs text-amber-900">
+                npx tsx workers/lead-enricher.ts
+              </code>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enrichment progress bar */}
+      {enrichmentProgress && (
+        <div className="mt-4 rounded-lg border border-border bg-muted/30 px-4 py-3">
+          <div className="flex items-center justify-between text-xs">
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Enrichissement : {enrichmentProgress.done}/{enrichmentProgress.total} leads
+            </span>
+            <button
+              type="button"
+              onClick={() => { enrichRunningRef.current = false; setEnrichmentProgress(null); }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${Math.round((enrichmentProgress.done / enrichmentProgress.total) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Stats bar */}
+      {leads.length > 0 && (
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[
+            { label: "Total", value: stats.total, icon: null },
+            { label: "Enrichis", value: stats.enriched, icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> },
+            { label: "Chauds", value: stats.hot, icon: <Flame className="h-3.5 w-3.5 text-red-500" /> },
+            { label: "Sans site", value: stats.noWebsite, icon: null },
+          ].map((s) => (
+            <div key={s.label} className="rounded-lg border border-border bg-background px-3 py-2">
+              <p className="text-[10px] text-muted-foreground">{s.label}</p>
+              <p className="flex items-center gap-1 text-xl font-semibold text-foreground">
+                {s.icon}
+                {s.value}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* View tabs */}
+      <div className="mt-5 flex items-center gap-1 border-b border-border">
+        <button
+          type="button"
+          onClick={() => setViewTab("search")}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
+            viewTab === "search"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <Search className="h-3.5 w-3.5" />
+          Leads ({leads.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewTab("lists")}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
+            viewTab === "lists"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <LayoutList className="h-3.5 w-3.5" />
+          Listes ({lists.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewTab("search")}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
+            "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <History className="h-3.5 w-3.5" />
+          {pastSearches.length > 0 && (
+            <span className="text-muted-foreground">{pastSearches.length} recherches</span>
+          )}
+        </button>
+      </div>
+
+      {/* Main content */}
+      {viewTab === "search" && (
+        <div className="mt-4">
+          {/* Toolbar */}
+          {leads.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {/* Search filter */}
+              <div className="flex h-7 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5">
+                <Search className="h-3 w-3 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filtrer les leads..."
+                  className="w-36 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                />
+                {searchQuery && (
+                  <button type="button" onClick={() => setSearchQuery("")} className="text-muted-foreground hover:text-foreground">
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+
+              {/* Priority filter */}
+              <div className="flex h-7 items-center gap-1 rounded-lg border border-border bg-background px-1">
+                {(["all", "hot", "warm", "cold"] as FilterPriority[]).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setFilterPriority(p)}
+                    className={cn(
+                      "flex items-center gap-1 rounded px-2 py-0.5 text-[10px] transition-colors",
+                      filterPriority === p ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {p === "hot" && <Flame className="h-2.5 w-2.5" />}
+                    {p === "warm" && <Thermometer className="h-2.5 w-2.5" />}
+                    {p === "cold" && <Snowflake className="h-2.5 w-2.5" />}
+                    {p === "all" ? "Tous" : p === "hot" ? "Chaud" : p === "warm" ? "Tiède" : "Froid"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Status filter */}
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as FilterStatus)}
+                className="h-7 rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none"
+              >
+                <option value="all">Tous statuts</option>
+                <option value="pending">En attente</option>
+                <option value="enriching">En cours</option>
+                <option value="completed">Enrichis</option>
+                <option value="failed">Échec</option>
+              </select>
+
+              {/* Past searches dropdown */}
+              {pastSearches.length > 0 && (
+                <select
+                  value={selectedSearchId || ""}
+                  onChange={async (e) => {
+                    if (e.target.value) await loadLeads(e.target.value);
+                  }}
+                  className="h-7 max-w-[200px] rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none"
+                >
+                  <option value="">— Recherches précédentes</option>
+                  {pastSearches.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.niche} · {s.location} ({s.leads_count})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <span className="ml-auto text-xs text-muted-foreground">
+                {activeLeads.length}/{leads.length} leads
+              </span>
+            </div>
+          )}
+
+          {/* Table */}
+          <LeadsTable
+            leads={activeLeads}
+            loading={isSearching}
+            onLeadClick={(lead) => setDrawerLead(lead)}
+            onLeadUpdate={handleLeadUpdate}
+            selectedIds={selectedLeadIds}
+            onSelectChange={setSelectedLeadIds}
+          />
+        </div>
+      )}
+
+      {viewTab === "lists" && (
+        <div className="mt-4">
+          <ListPanel
+            lists={lists}
+            activeListId={activeListId}
+            listItems={listItems}
+            onSelectList={loadListItems}
+            onCreateList={handleCreateList}
+            onDeleteList={handleDeleteList}
+            onExportList={handleExportList}
+            onExpandList={handleExpandList}
+            enrichmentProgress={enrichmentProgress}
+            phase={phase}
+          />
+        </div>
+      )}
+
+      {/* Bulk select bar */}
+      {selectedLeadIds.size > 0 && (
+        <SelectBar
+          count={selectedLeadIds.size}
+          lists={lists}
+          onCreateList={handleCreateListWithSelected}
+          onAddToList={handleAddToList}
+          onClear={() => setSelectedLeadIds(new Set())}
+        />
+      )}
+
+      {/* Lead detail drawer */}
+      {drawerLead && (
+        <LeadDrawer
+          lead={drawerLead}
+          onClose={() => setDrawerLead(null)}
+          onGenerateOutreach={handleGenerateOutreach}
+          generatingOutreachId={generatingOutreachId}
+          onAddToPipeline={handleAddToPipeline}
+          pipelineLeadId={pipelineLeadId}
+          crmFeedback={crmFeedback}
+        />
+      )}
 
       {/* Outreach modal */}
       {outreachModal && (
@@ -908,16 +781,6 @@ export default function LeadGeneratorPage() {
           onClose={() => setOutreachModal(null)}
         />
       )}
-
-      {/* Lead detail drawer */}
-      <LeadDrawer
-        lead={drawerLead}
-        onClose={() => setDrawerLead(null)}
-        onAddToPipeline={handleAddToPipeline}
-        addingToPipeline={pipelineLeadId === drawerLead?.id}
-        onGenerateOutreach={handleGenerateOutreach}
-        generatingOutreach={generatingOutreachId === drawerLead?.id}
-      />
     </div>
   );
 }

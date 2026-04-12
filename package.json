@@ -12,7 +12,9 @@
     "start": "next start",
     "lint": "eslint",
     "test:crm": "playwright test -c playwright.crm-v2.config.ts",
-    "test:calendar": "playwright test -c playwright.calendar.config.ts"
+    "test:calendar": "playwright test -c playwright.calendar.config.ts",
+    "worker": "tsx workers/lead-enricher.ts",
+    "worker:2": "tsx workers/lead-enricher.ts --concurrency 2"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

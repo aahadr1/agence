@@ -1,19 +1,3 @@
--- Fix infinite recursion in is_org_member() (error: stack depth limit exceeded)
--- Root cause:
--- - is_org_member() queries organization_members with SECURITY INVOKER
--- - organization_members RLS policy calls is_org_member()
--- - This circular dependency triggers recursive policy evaluation.
--- Fix: make the function SECURITY DEFINER so it bypasses RLS on organization_members.
-
-CREATE OR REPLACE FUNCTION public.is_org_member(p_org_id uuid)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM public.organization_members m
-    WHERE m.org_id = p_org_id AND m.user_id = auth.uid()
-  );
-$$;
+-- This migration is now merged into the apply script below.
+-- The fix (SECURITY DEFINER) is baked directly into 010's function definition.
+-- See: supabase/migrations/010_organization_foundation.sql line 48
