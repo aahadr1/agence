@@ -21,7 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   if (oppErr) return NextResponse.json({ error: oppErr.message }, { status: 500 });
   if (!opportunity) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const [accountRes, contactRes, activitiesRes, tasksRes, linksRes] = await Promise.all([
+  const [accountRes, contactRes, activitiesRes, tasksRes, linksRes, stageHistoryRes] = await Promise.all([
     opportunity.account_id
       ? ctx.supabase
           .from("crm_accounts")
@@ -56,6 +56,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       .select("event_id,entity_type,entity_id")
       .eq("entity_type", "deal")
       .eq("entity_id", id),
+    ctx.supabase
+      .from("crm_opportunity_stage_history")
+      .select("id,from_stage_id,to_stage_id,changed_by,changed_at")
+      .eq("opportunity_id", id)
+      .eq("org_id", ctx.orgId)
+      .order("changed_at", { ascending: false }),
   ]);
 
   if (activitiesRes.error || tasksRes.error || linksRes.error) {
@@ -107,6 +113,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     activities: activitiesRes.data || [],
     tasks: tasksRes.data || [],
     calendarLinks: linksRes.data || [],
+    stageHistory: stageHistoryRes.data || [],
     callLinks,
     calls,
   });
@@ -142,6 +149,7 @@ export async function PATCH(
     expected_close_date?: string | null;
     owner_user_id?: string | null;
     source?: string | null;
+    status?: string;
     tags?: string[];
     account_name?: string | null;
     account_phone?: string | null;
@@ -158,6 +166,12 @@ export async function PATCH(
     updated_at: new Date().toISOString(),
   };
 
+  if (body.status !== undefined && ["open", "won", "lost", "archived"].includes(body.status)) {
+    opportunityPatch.status = body.status;
+    if (body.status === "won") opportunityPatch.won_at = new Date().toISOString();
+    if (body.status === "lost") opportunityPatch.lost_at = new Date().toISOString();
+    if (body.status === "archived") opportunityPatch.archived_at = new Date().toISOString();
+  }
   if (body.title !== undefined) {
     const title = normalizeText(body.title);
     if (!title) {
