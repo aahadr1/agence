@@ -27,6 +27,7 @@ import { deduplicateLeads } from "./deduplicator";
 import { findWebsite } from "./enrichment/website-finder";
 import { researchDirigeant } from "./enrichment/dirigeant-researcher";
 import { analyzeProspect } from "./enrichment/prospect-analyzer";
+import { searchOwnerPhone } from "./enrichment/owner-search";
 import { searchSocieteCom } from "./sources/societe-com";
 
 // ---------------------------------------------------------------------------
@@ -473,7 +474,6 @@ export async function runSixStepEnrichment(
       lead.creation_date = lead.creation_date || pappers.creation_date;
       lead.employee_count = lead.employee_count || pappers.employee_count;
       lead.address = lead.address || pappers.address;
-      lead.revenue_bracket = lead.revenue_bracket || pappers.revenue_bracket;
     }
 
     // Societe.com browser scrape (more detailed, has dirigeant info)

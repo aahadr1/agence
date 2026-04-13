@@ -52,24 +52,73 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
       }
     }
 
-    // Website
+    // Website — plusieurs sélecteurs (UI Maps change souvent)
     let website: string | null = null;
-    const siteBtn = document.querySelector(
-      'a[data-item-id="authority"], a[data-item-id^="oloc:"]'
-    );
-    if (siteBtn) {
-      website = siteBtn.getAttribute("href") || null;
+    const siteSelectors = [
+      'a[data-item-id="authority"]',
+      'a[data-item-id^="authority:"]',
+      'a[data-item-id^="oloc:"]',
+      'a[href^="http"][data-item-id]',
+    ];
+    for (const sel of siteSelectors) {
+      const el = document.querySelector(sel) as HTMLAnchorElement | null;
+      const href = el?.getAttribute("href");
+      if (href && /^https?:\/\//i.test(href) && !href.includes("google.com/maps")) {
+        website = href;
+        break;
+      }
     }
     if (!website) {
-      const allLinks = document.querySelectorAll('a[href]');
+      const allLinks = document.querySelectorAll("a[href]");
       for (const a of allLinks) {
-        const label = (a.getAttribute("aria-label") || "").toLowerCase();
+        const href = a.getAttribute("href") || "";
+        if (!/^https?:\/\//i.test(href)) continue;
+        if (
+          href.includes("google.com") ||
+          href.includes("g.page") ||
+          href.includes("maps.app.goo.gl")
+        )
+          continue;
+        const label = (a.getAttribute("aria-label") || a.textContent || "").toLowerCase();
         if (
           label.includes("site web") ||
           label.includes("website") ||
-          label.includes("site internet")
+          label.includes("site internet") ||
+          label.includes("open website") ||
+          label.includes("ouvrir le site")
         ) {
-          website = a.getAttribute("href");
+          website = href;
+          break;
+        }
+      }
+    }
+    // Dernier recours : premier lien externe visible dans le panneau latéral (hors Google)
+    if (!website) {
+      const main = document.querySelector('[role="main"]') || document.body;
+      const ext = main.querySelectorAll('a[href^="http"]');
+      for (const a of ext) {
+        const href = a.getAttribute("href") || "";
+        if (
+          href.includes("google.") ||
+          href.includes("gstatic.") ||
+          href.includes("maps.app.goo.gl") ||
+          href.includes("schema.org")
+        )
+          continue;
+        const host = (() => {
+          try {
+            return new URL(href).hostname;
+          } catch {
+            return "";
+          }
+        })();
+        if (
+          host &&
+          !host.includes("google") &&
+          !host.includes("facebook.com") &&
+          !host.includes("instagram.com")
+        ) {
+          website = href;
           break;
         }
       }

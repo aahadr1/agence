@@ -1,6 +1,7 @@
 import type { Page } from "playwright-core";
 import {
   screenshotAndAsk,
+  askGeminiText,
   safeGoto,
   normalizeUrl,
   randomDelay,
@@ -10,7 +11,7 @@ import {
 export interface WebsiteFinderResult {
   has_website: boolean;
   website_url: string | null;
-  found_via: "gmb" | "google_search" | "pages_jaunes" | "click_through" | null;
+  found_via: "gmb" | "google_search" | "pages_jaunes" | "click_through" | "http_verify" | null;
   confidence: "high" | "medium" | "low";
 }
 
@@ -24,7 +25,10 @@ const SOCIAL_AND_DIRECTORY_DOMAINS = [
   "tripadvisor.com",
   "pagesjaunes.fr",
   "google.com",
+  "google.fr",
+  "gstatic.com",
   "maps.google",
+  "googleusercontent.com",
   "lafourchette.com",
   "thefork.com",
   "booking.com",
@@ -35,22 +39,57 @@ const SOCIAL_AND_DIRECTORY_DOMAINS = [
   "societe.com",
   "pappers.fr",
   "annuaire.gouv.fr",
-  "lefigaro.fr",
-  "lemonde.fr",
   "wikipedia.org",
   "youtube.com",
   "tiktok.com",
   "pinterest.com",
 ];
 
+function hostnameBlocked(hostname: string): boolean {
+  const h = hostname.replace(/^www\./, "").toLowerCase();
+  return SOCIAL_AND_DIRECTORY_DOMAINS.some((d) => h === d || h.endsWith("." + d));
+}
+
 function isRealWebsite(url: string | null | undefined): boolean {
   if (!url) return false;
   try {
     const parsed = new URL(url.startsWith("http") ? url : "https://" + url);
     const hostname = parsed.hostname.replace(/^www\./, "");
-    return !SOCIAL_AND_DIRECTORY_DOMAINS.some((d) => hostname.includes(d));
+    return !hostnameBlocked(hostname);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Google wraps almost all organic results as:
+ *   https://www.google.com/url?q=https://example.com/&sa=...
+ *   https://www.google.com/url?url=https://example.com/...
+ * Without unwrapping, extractGoogleResultLinks() saw hostname "google.com" and skipped everything.
+ */
+function unwrapGoogleRedirect(href: string): string | null {
+  const trimmed = href.trim();
+  if (!trimmed.startsWith("http")) return null;
+
+  try {
+    const u = new URL(trimmed);
+    const host = u.hostname.replace(/^www\./, "");
+
+    if (host === "google.com" || host === "google.fr" || host.endsWith(".google.com")) {
+      if (u.pathname === "/url" || u.pathname.startsWith("/url")) {
+        const q = u.searchParams.get("q") || u.searchParams.get("url") || u.searchParams.get("u");
+        if (q && /^https?:\/\//i.test(q)) return q;
+        if (q && q.startsWith("/url?")) {
+          /* nested — rare */
+        }
+      }
+      // /imgres, /search — skip
+      return null;
+    }
+
+    return trimmed;
+  } catch {
+    return null;
   }
 }
 
@@ -62,41 +101,129 @@ function city(location: string): string {
   return location.replace(/\d{5}/g, "").replace(/,.*$/, "").trim();
 }
 
+/** Normalise pour comparer titre de page et nom d'enseigne */
+function normalizeForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^a-z0-9\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
- * Extract all organic result links from a Google SERP via DOM — more reliable
- * than screenshot-only extraction.
+ * Si au moins 1 mot significatif du nom commerce apparaît dans le titre (ou l'inverse pour noms courts).
+ */
+function titleLikelyMatchesBusiness(pageTitle: string, businessName: string): boolean {
+  const title = normalizeForMatch(pageTitle);
+  const name = normalizeForMatch(businessName);
+  const words = name.split(" ").filter((w) => w.length > 2);
+  if (words.length === 0) return false;
+  const hits = words.filter((w) => title.includes(w));
+  if (hits.length >= 2) return true;
+  if (hits.length === 1 && words.length === 1) return true;
+  if (hits.length === 1 && name.length >= 8) return true;
+  if (title.length > 0 && name.length > 5 && title.includes(name.slice(0, Math.min(12, name.length))))
+    return true;
+  return false;
+}
+
+async function quickAlive(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: AbortSignal.timeout(6000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LeadAgent/2.0)" },
+    });
+    if (res.ok) return true;
+    const res2 = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LeadAgent/2.0)" },
+    });
+    return res2.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extrait les URLs réelles des résultats Google (déballage /url?q=...).
+ * Cible surtout #rso et les h3 > a (résultats organiques).
  */
 async function extractGoogleResultLinks(page: Page): Promise<string[]> {
   try {
-    return await page.evaluate((blocked) => {
-      const anchors = Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[];
-      const results: string[] = [];
-      for (const a of anchors) {
-        const href = a.href;
-        if (!href || !href.startsWith("http")) continue;
+    return await page.evaluate((blockedList) => {
+      const blocked = (host: string) => {
+        const h = host.replace(/^www\./, "").toLowerCase();
+        return (blockedList as string[]).some((d) => h === d || h.endsWith("." + d));
+      };
+
+      const seen = new Set<string>();
+      const out: string[] = [];
+
+      const tryAdd = (raw: string | null | undefined) => {
+        if (!raw || !raw.startsWith("http")) return;
+
+        let finalUrl = raw;
         try {
-          const u = new URL(href);
-          // Skip Google-owned and blocked domains
-          if (u.hostname.includes("google.") || u.hostname.includes("gstatic.")) continue;
-          if (blocked.some((d: string) => u.hostname.includes(d))) continue;
-          // Google wraps organic results in /url?q=... or /search?...
-          // Also accept direct hrefs that look like real sites
-          if (!results.includes(href)) results.push(href);
-          if (results.length >= 15) break;
+          const u = new URL(raw);
+          const host = u.hostname.replace(/^www\./, "");
+          if (host === "google.com" || host === "google.fr" || host.endsWith(".google.com")) {
+            if (u.pathname === "/url" || u.pathname.startsWith("/url")) {
+              const inner =
+                u.searchParams.get("q") || u.searchParams.get("url") || u.searchParams.get("u");
+              if (inner && /^https?:\/\//i.test(inner)) finalUrl = inner;
+              else return;
+            } else {
+              return;
+            }
+          }
         } catch {
-          /* bad href */
+          return;
         }
+
+        try {
+          const u2 = new URL(finalUrl);
+          const h2 = u2.hostname.replace(/^www\./, "");
+          if (blocked(h2)) return;
+          if (!seen.has(finalUrl)) {
+            seen.add(finalUrl);
+            out.push(finalUrl);
+          }
+        } catch {
+          /* */
+        }
+      };
+
+      // Résultats organiques classiques
+      const selectors = [
+        "#rso a[href]",
+        "#search a[href]",
+        "div[data-sokoban-container] a[href]",
+        "div.g a[href]",
+        "a[jsname][href]",
+      ];
+      const anchors = new Set<HTMLAnchorElement>();
+      for (const sel of selectors) {
+        document.querySelectorAll<HTMLAnchorElement>(sel).forEach((a) => anchors.add(a));
       }
-      return results;
+
+      for (const a of anchors) {
+        tryAdd(a.href);
+        if (out.length >= 20) break;
+      }
+
+      return out;
     }, SOCIAL_AND_DIRECTORY_DOMAINS);
   } catch {
     return [];
   }
 }
 
-/**
- * Ask Gemini vision: is this page the website for {businessName}?
- */
 async function isThisTheirWebsite(
   page: Page,
   businessName: string,
@@ -105,14 +232,16 @@ async function isThisTheirWebsite(
   try {
     return await screenshotAndAsk<{ match: boolean; confidence: "high" | "medium" | "low" }>(
       page,
-      `You are looking at a webpage. Determine if this is the OFFICIAL website for the business "${businessName}" located in ${location}.
+      `You are looking at a webpage. We need to know if this is the OFFICIAL website of the business "${businessName}" in ${location} (same brand / same establishment).
 
+Return JSON only:
 {
-  "match": true if this appears to be the official business website, false otherwise,
-  "confidence": "high" if the business name appears prominently and matches, "medium" if likely but not certain, "low" if uncertain
+  "match": true if this page is clearly that business's own site (logo, name, address, or activity matches). true even if the design is simple.
+  "match": false only if it is clearly a different company, a generic directory, a social network profile, an error page, or unrelated content.
+  "confidence": "high" | "medium" | "low"
 }
 
-NOT a match if: error page, unrelated business, social media page, directory listing, competitor site.
+Be generous: local shops often use simple sites; if the business name or brand appears on the page, prefer match: true.
 Return JSON only.`
     );
   } catch {
@@ -121,15 +250,63 @@ Return JSON only.`
 }
 
 /**
- * Dedicated website finder that goes beyond a SERP screenshot.
- *
- * Strategy:
- * 1. If GMB already gave us a website_url → validate it's a real domain → return immediately.
- * 2. Run up to 3 Google searches with varied queries.
- * 3. For each SERP → first try Gemini vision on the SERP itself to extract website URL.
- * 4. Then extract all organic links from DOM → navigate to each (skipping social/directories)
- *    → ask Gemini "Is this the website for {businessName}?" → stop at first confident match.
- * 5. Max 10 link navigations total across all queries.
+ * Gemini lit l'URL depuis la capture d'écran + contexte texte (double vérification).
+ */
+async function extractWebsiteFromSerpWithAI(
+  businessName: string,
+  city: string,
+  candidateUrls: string[]
+): Promise<string | null> {
+  if (candidateUrls.length === 0) return null;
+  const list = candidateUrls.slice(0, 15).join("\n");
+  const prompt = `Business: "${businessName}" in ${city}.
+Below are URLs taken from Google search result links (already filtered to exclude Facebook, Google Maps, directories).
+
+Which URL is most likely the OFFICIAL website of THIS exact business?
+If none is clearly their site, return null.
+
+URLs:
+${list}
+
+Return JSON only: { "website_url": "https://..." or null, "reason": "one short phrase" }`;
+
+  try {
+    const raw = await askGeminiText(prompt);
+    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const objStart = cleaned.indexOf("{");
+    const jsonSlice = objStart >= 0 ? cleaned.slice(objStart) : cleaned;
+    const parsed = JSON.parse(jsonSlice) as { website_url?: string | null };
+    const u = parsed.website_url?.trim();
+    if (!u || !isRealWebsite(u)) return null;
+
+    const normalized = normalizeUrl(u) || u;
+    let origin: string;
+    try {
+      origin = new URL(normalized).origin;
+    } catch {
+      return null;
+    }
+    const fromSerp = candidateUrls.some((c) => {
+      try {
+        return new URL(c).origin === origin;
+      } catch {
+        return false;
+      }
+    });
+    if (!fromSerp) return null;
+
+    if (await quickAlive(normalized)) return normalized;
+  } catch {
+    /* */
+  }
+  return null;
+}
+
+/**
+ * 1. GMB: si l'URL charge et n'est pas un réseau social → on fait confiance (Maps est la source).
+ * 2. Google: déballage /url?q= + extraction #rso.
+ * 3. IA sur liste d'URLs candidates + navigation + vision (match sans exiger confidence !== low).
+ * 4. Secours: titre de page ~ nom commerce.
  */
 export async function findWebsite(
   page: Page,
@@ -140,23 +317,49 @@ export async function findWebsite(
 ): Promise<WebsiteFinderResult> {
   const c = city(location);
 
-  // ── Step 1: Validate GMB website ──
+  // ── Step 1: GMB — confiance si la page charge (évite faux négatifs vision) ──
   if (gmbWebsiteUrl && isRealWebsite(gmbWebsiteUrl)) {
-    log(`[WebFinder] GMB website: ${gmbWebsiteUrl} — validating...`);
+    const normalizedGmb = normalizeUrl(gmbWebsiteUrl) || gmbWebsiteUrl;
+    log(`[WebFinder] GMB website: ${normalizedGmb} — loading...`);
     try {
-      const ok = await safeGoto(page, gmbWebsiteUrl, log, 12000);
+      const ok = await safeGoto(page, normalizedGmb, log, 15000);
       if (ok) {
         const currentUrl = page.url();
-        // Check it didn't redirect to a social media page
         if (isRealWebsite(currentUrl)) {
-          const check = await isThisTheirWebsite(page, businessName, location);
-          if (check.match) {
-            log(`[WebFinder] ✓ GMB website confirmed: ${currentUrl}`);
+          const alive = await quickAlive(normalizeUrl(currentUrl) || currentUrl);
+          if (alive) {
+            const vision = await isThisTheirWebsite(page, businessName, location);
+            if (vision.match) {
+              log(`[WebFinder] ✓ GMB confirmed (vision): ${currentUrl}`);
+              return {
+                has_website: true,
+                website_url: normalizeUrl(currentUrl) || normalizedGmb,
+                found_via: "gmb",
+                confidence: vision.confidence,
+              };
+            }
+            let pageTitle = "";
+            try {
+              pageTitle = (await page.title()) || "";
+            } catch {
+              /* */
+            }
+            if (titleLikelyMatchesBusiness(pageTitle, businessName)) {
+              log(`[WebFinder] ✓ GMB kept (title matches): ${currentUrl}`);
+              return {
+                has_website: true,
+                website_url: normalizeUrl(currentUrl) || normalizedGmb,
+                found_via: "gmb",
+                confidence: "medium",
+              };
+            }
+            // Maps pointe souvent vers le bon domaine même si la vision hésite
+            log(`[WebFinder] ✓ GMB kept (loaded OK, trust Maps): ${currentUrl}`);
             return {
               has_website: true,
-              website_url: normalizeUrl(currentUrl) || gmbWebsiteUrl,
+              website_url: normalizeUrl(currentUrl) || normalizedGmb,
               found_via: "gmb",
-              confidence: check.confidence,
+              confidence: "medium",
             };
           }
         }
@@ -164,19 +367,19 @@ export async function findWebsite(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-      log(`[WebFinder] GMB validation error: ${msg.slice(0, 80)}`);
+      log(`[WebFinder] GMB load error: ${msg.slice(0, 80)}`);
     }
   }
 
-  // ── Step 2: Google search with multiple queries ──
   const queries = [
     `"${businessName}" ${c} site officiel`,
     `"${businessName}" ${c} site web`,
-    `${businessName} ${c} contact`,
+    `${businessName} ${c}`,
+    `"${businessName}" ${c} contact`,
   ];
 
   let totalNavigations = 0;
-  const MAX_NAVIGATIONS = 10;
+  const MAX_NAVIGATIONS = 12;
 
   for (const query of queries) {
     if (totalNavigations >= MAX_NAVIGATIONS) break;
@@ -188,64 +391,71 @@ export async function findWebsite(
       if (!ok) continue;
 
       await dismissConsent(page);
-      await randomDelay(1000, 2000);
+      await randomDelay(1200, 2000);
 
-      // First: try Gemini vision on SERP directly (fast path)
+      const links = await extractGoogleResultLinks(page);
+      log(`[WebFinder] ${links.length} organic URLs after unwrap (query: "${query.slice(0, 40)}...")`);
+
+      // IA choisit une URL dans la liste (sans dépendre du screenshot seul)
+      const aiPick = await extractWebsiteFromSerpWithAI(businessName, c, links);
+      if (aiPick) {
+        log(`[WebFinder] ✓ AI picked from link list: ${aiPick}`);
+        return {
+          has_website: true,
+          website_url: aiPick,
+          found_via: "google_search",
+          confidence: "high",
+        };
+      }
+
+      // Vision sur la SERP (filet de sécurité)
       try {
         const serpResult = await screenshotAndAsk<{
           has_real_website: boolean;
           website_url: string | null;
         }>(
           page,
-          `You are looking at Google Search results for "${businessName}" in ${c}.
+          `Google results for "${businessName}" in ${c}. Find the official business website URL (own domain, not Facebook, not PagesJaunes, not Google).
 
-Look for the official website of this specific business (NOT Facebook, Instagram, PagesJaunes, TripAdvisor, Yelp, annuaires, or competitors).
-
-{
-  "has_real_website": true if you can see their own website URL in the results (own domain),
-  "website_url": "full https:// URL of their website" or null
-}
-
-Be strict: only return a URL if you are confident it belongs specifically to "${businessName}" in ${c}.
-Return JSON only.`
+JSON only:
+{ "has_real_website": true/false, "website_url": "https://..." or null }`
         );
 
-        if (serpResult.has_real_website && serpResult.website_url && isRealWebsite(serpResult.website_url)) {
-          const normalized = normalizeUrl(serpResult.website_url);
-          log(`[WebFinder] ✓ SERP vision found: ${normalized}`);
-          return {
-            has_website: true,
-            website_url: normalized,
-            found_via: "google_search",
-            confidence: "medium",
-          };
+        if (serpResult.website_url && isRealWebsite(serpResult.website_url)) {
+          const n = normalizeUrl(serpResult.website_url);
+          if (n && (await quickAlive(n))) {
+            log(`[WebFinder] ✓ SERP vision URL: ${n}`);
+            return {
+              has_website: true,
+              website_url: n,
+              found_via: "google_search",
+              confidence: serpResult.has_real_website ? "medium" : "low",
+            };
+          }
         }
       } catch {
-        /* continue to click-through */
+        /* */
       }
-
-      // Second: extract organic links and click through them
-      const links = await extractGoogleResultLinks(page);
-      log(`[WebFinder] Extracted ${links.length} links from SERP, checking up to ${Math.min(links.length, MAX_NAVIGATIONS - totalNavigations)}...`);
 
       for (const link of links) {
         if (totalNavigations >= MAX_NAVIGATIONS) break;
         totalNavigations++;
 
         try {
-          log(`[WebFinder] Navigating to: ${link.slice(0, 80)}`);
-          const ok = await safeGoto(page, link, log, 12000);
-          if (!ok) continue;
+          log(`[WebFinder] Visit #${totalNavigations}: ${link.slice(0, 72)}`);
+          const navOk = await safeGoto(page, link, log, 14000);
+          if (!navOk) continue;
 
-          await randomDelay(500, 1200);
+          await randomDelay(400, 900);
 
           const currentUrl = page.url();
           if (!isRealWebsite(currentUrl)) continue;
 
           const check = await isThisTheirWebsite(page, businessName, location);
-          if (check.match && check.confidence !== "low") {
+          // Toute confirmation match compte (plus d'exclusion "low")
+          if (check.match) {
             const finalUrl = normalizeUrl(currentUrl) || link;
-            log(`[WebFinder] ✓ Click-through match (${check.confidence}): ${finalUrl}`);
+            log(`[WebFinder] ✓ Match (${check.confidence}): ${finalUrl}`);
             return {
               has_website: true,
               website_url: finalUrl,
@@ -254,15 +464,32 @@ Return JSON only.`
             };
           }
 
-          await randomDelay(300, 800);
+          let pageTitle = "";
+          try {
+            pageTitle = (await page.title()) || "";
+          } catch {
+            /* */
+          }
+          if (titleLikelyMatchesBusiness(pageTitle, businessName)) {
+            const finalUrl = normalizeUrl(currentUrl) || link;
+            log(`[WebFinder] ✓ Title heuristic match: ${finalUrl}`);
+            return {
+              has_website: true,
+              website_url: finalUrl,
+              found_via: "click_through",
+              confidence: "medium",
+            };
+          }
+
+          await randomDelay(200, 500);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-          log(`[WebFinder] ✗ Link error: ${msg.slice(0, 60)}`);
+          log(`[WebFinder] ✗ ${msg.slice(0, 55)}`);
         }
       }
 
-      await randomDelay(1500, 2500);
+      await randomDelay(1000, 1800);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
@@ -270,11 +497,11 @@ Return JSON only.`
     }
   }
 
-  log(`[WebFinder] No website found for "${businessName}" after ${totalNavigations} navigations`);
+  log(`[WebFinder] No website for "${businessName}" after ${totalNavigations} visits`);
   return {
     has_website: false,
     website_url: null,
     found_via: null,
-    confidence: "high", // high confidence there is NO website
+    confidence: "high",
   };
 }
