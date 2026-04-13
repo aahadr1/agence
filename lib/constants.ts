@@ -49,6 +49,12 @@ export const NAV_ITEMS = [
     href: "/telephony",
     icon: "Phone" as const,
   },
+  {
+    label: "Lead Agent",
+    href: "/lead-agent",
+    icon: "Bot" as const,
+    beta: true,
+  },
 ] as const;
 
 export const STEPS = [

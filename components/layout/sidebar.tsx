@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/layout/notification-bell";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import {
+  Bot,
   Calendar,
   FolderOpen,
   Globe,
@@ -36,6 +37,7 @@ const iconMap = {
   Search,
   Radar,
   Phone,
+  Bot,
 } as const;
 
 // ─── shared nav list ───────────────────────────────────────────────────────
@@ -77,6 +79,11 @@ function NavList({
                   }
                 />
                 {item.label}
+                {"beta" in item && item.beta && (
+                  <span className="ml-1.5 rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-500">
+                    Beta
+                  </span>
+                )}
               </Link>
             </li>
           );

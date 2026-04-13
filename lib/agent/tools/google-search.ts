@@ -1,0 +1,35 @@
+import { registerTool } from "../tool-registry";
+import { searchGoogle } from "@/lib/lead-agent/sources/google-search";
+import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+
+registerTool(
+  {
+    name: "google_search",
+    description:
+      "Search Google for a business to find phone, email, owner name, social media URLs, website, and description.",
+    parameters: {
+      business_name: { type: "string", description: "Business name" },
+      location: { type: "string", description: "City or region" },
+      phone: { type: "string", description: "Known phone (optional)", required: false },
+      address: { type: "string", description: "Known address (optional)", required: false },
+    },
+    required: ["business_name", "location"],
+    costEstimateCents: 2,
+  },
+  async (args) => {
+    const log = (msg: string) => console.log(`[google_search] ${msg}`);
+    const session = await launchBrowser();
+    try {
+      return await searchGoogle(
+        session.page,
+        args.business_name as string,
+        args.location as string,
+        (args.phone as string) || null,
+        (args.address as string) || null,
+        log
+      );
+    } finally {
+      await safeClose(session);
+    }
+  }
+);
