@@ -1,6 +1,6 @@
 import type { Page } from "playwright-core";
 import { normalizeUrl, randomDelay, dismissConsent } from "../browser";
-import { classifyUrl } from "../enrichment/website-finder";
+import { classifyUrl } from "../../platform-registry";
 
 export interface MapsLead {
   business_name: string;

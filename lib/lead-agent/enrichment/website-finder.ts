@@ -6,76 +6,15 @@ import {
   randomDelay,
   dismissConsent,
 } from "../browser";
+import {
+  type WebsiteType,
+  type PlatformDef,
+  PLATFORM_REGISTRY,
+  classifyUrl,
+} from "../../platform-registry";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Platform classification registry
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type WebsiteType =
-  | "own_domain"
-  | "facebook_page"
-  | "instagram_page"
-  | "planity"
-  | "treatwell"
-  | "doctolib"
-  | "booking"
-  | "thefork"
-  | "tripadvisor"
-  | "pagesjaunes"
-  | "google_maps"
-  | "directory"
-  | null;
-
-interface PlatformDef {
-  host: string; // matched against hostname without www.
-  type: Exclude<WebsiteType, "own_domain" | null>;
-  label: string; // human-readable
-}
-
-export const PLATFORM_REGISTRY: PlatformDef[] = [
-  { host: "planity.com", type: "planity", label: "Planity" },
-  { host: "treatwell.fr", type: "treatwell", label: "Treatwell" },
-  { host: "treatwell.com", type: "treatwell", label: "Treatwell" },
-  { host: "doctolib.fr", type: "doctolib", label: "Doctolib" },
-  { host: "facebook.com", type: "facebook_page", label: "Facebook" },
-  { host: "fb.com", type: "facebook_page", label: "Facebook" },
-  { host: "instagram.com", type: "instagram_page", label: "Instagram" },
-  { host: "booking.com", type: "booking", label: "Booking.com" },
-  { host: "airbnb.com", type: "booking", label: "Airbnb" },
-  { host: "airbnb.fr", type: "booking", label: "Airbnb" },
-  { host: "lafourchette.com", type: "thefork", label: "TheFork" },
-  { host: "thefork.com", type: "thefork", label: "TheFork" },
-  { host: "tripadvisor.com", type: "tripadvisor", label: "TripAdvisor" },
-  { host: "tripadvisor.fr", type: "tripadvisor", label: "TripAdvisor" },
-  { host: "pagesjaunes.fr", type: "pagesjaunes", label: "PagesJaunes" },
-  { host: "google.com", type: "google_maps", label: "Google" },
-  { host: "google.fr", type: "google_maps", label: "Google" },
-  { host: "g.page", type: "google_maps", label: "Google" },
-  { host: "maps.app.goo.gl", type: "google_maps", label: "Google Maps" },
-  { host: "yelp.com", type: "directory", label: "Yelp" },
-  { host: "yelp.fr", type: "directory", label: "Yelp" },
-  { host: "societe.com", type: "directory", label: "Societe.com" },
-  { host: "pappers.fr", type: "directory", label: "Pappers" },
-  { host: "linkedin.com", type: "directory", label: "LinkedIn" },
-  { host: "youtube.com", type: "directory", label: "YouTube" },
-  { host: "tiktok.com", type: "directory", label: "TikTok" },
-  { host: "twitter.com", type: "directory", label: "Twitter/X" },
-  { host: "x.com", type: "directory", label: "Twitter/X" },
-  { host: "wikipedia.org", type: "directory", label: "Wikipedia" },
-  { host: "just-eat.fr", type: "booking", label: "Just Eat" },
-  { host: "ubereats.com", type: "booking", label: "Uber Eats" },
-  { host: "deliveroo.fr", type: "booking", label: "Deliveroo" },
-  { host: "annuaire.gouv.fr", type: "directory", label: "Annuaire Officiel" },
-  { host: "kompass.com", type: "directory", label: "Kompass" },
-  { host: "verif.com", type: "directory", label: "Verif.com" },
-  { host: "manageo.fr", type: "directory", label: "Manageo" },
-  { host: "infogreffe.fr", type: "directory", label: "Infogreffe" },
-  { host: "groupon.fr", type: "directory", label: "Groupon" },
-  { host: "rueducommerce.fr", type: "directory", label: "Directory" },
-  { host: "wixsite.com", type: "directory", label: "Wix (autre)" },
-  { host: "jimdo.com", type: "directory", label: "Jimdo" },
-  { host: "strikingly.com", type: "directory", label: "Strikingly" },
-];
+export type { WebsiteType, PlatformDef };
+export { PLATFORM_REGISTRY, classifyUrl };
 
 /** Priority for showing "best platform" when no owned site found (higher = prefer showing) */
 const PLATFORM_PRIORITY: Record<string, number> = {
@@ -91,26 +30,6 @@ const PLATFORM_PRIORITY: Record<string, number> = {
   directory: 3,
   google_maps: 2,
 };
-
-/**
- * Classify a URL as a known platform or null (= potential owned domain).
- */
-export function classifyUrl(
-  url: string
-): { type: Exclude<WebsiteType, "own_domain" | null>; label: string } | null {
-  try {
-    const parsed = new URL(url.startsWith("http") ? url : "https://" + url);
-    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
-    for (const p of PLATFORM_REGISTRY) {
-      if (host === p.host || host.endsWith("." + p.host)) {
-        return { type: p.type, label: p.label };
-      }
-    }
-    return null; // not a known platform → candidate owned domain
-  } catch {
-    return null;
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Result type

@@ -1,5 +1,5 @@
-import { classifyUrl, PLATFORM_REGISTRY } from "./lead-agent/enrichment/website-finder";
-import type { WebsiteType } from "./lead-agent/enrichment/website-finder";
+import { classifyUrl, PLATFORM_REGISTRY } from "./platform-registry";
+import type { WebsiteType } from "./platform-registry";
 
 export type { WebsiteType };
 
