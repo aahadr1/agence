@@ -34,7 +34,7 @@ export function Stepper({ currentStep }: StepperProps) {
                   done
                     ? "border-foreground bg-foreground text-primary-foreground"
                     : active
-                      ? "animate-blue-glow"
+                      ? "animate-accent-glow"
                       : "border-border"
                 )}
                 style={active ? { borderColor: "var(--blue)" } : undefined}

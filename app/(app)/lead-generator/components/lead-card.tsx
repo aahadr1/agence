@@ -257,7 +257,7 @@ export function LeadCard({
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 transition-all text-blue-400"
+                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-zinc-500/10 hover:bg-zinc-500/20 transition-all text-zinc-600 dark:text-zinc-400"
                 >
                   <Facebook className="w-3 h-3" /> FB
                 </a>
@@ -279,7 +279,7 @@ export function LeadCard({
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 transition-all text-blue-500"
+                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-zinc-600/10 hover:bg-zinc-600/20 transition-all text-zinc-700 dark:text-zinc-300"
                 >
                   <Linkedin className="w-3 h-3" /> LI
                 </a>

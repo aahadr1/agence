@@ -81,7 +81,9 @@ export function ProspectDetailHeader({
                 className="input-minimal py-1 text-lg font-semibold"
               />
             ) : (
-              <h1 className="text-lg font-semibold text-foreground sm:text-xl">{opportunity.title}</h1>
+              <h1 className="font-display text-xl font-medium tracking-tight text-display-title sm:text-2xl">
+                {opportunity.title}
+              </h1>
             )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {editing ? (

@@ -3,7 +3,7 @@
 import type { CrmOpportunityStatus } from "@/lib/crm/types";
 
 const STATUS_CONFIG: Record<CrmOpportunityStatus, { label: string; className: string }> = {
-  open: { label: "Open", className: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
+  open: { label: "Open", className: "bg-zinc-500/10 text-zinc-800 dark:text-zinc-300" },
   won: { label: "Won", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
   lost: { label: "Lost", className: "bg-red-500/10 text-red-700 dark:text-red-300" },
   archived: { label: "Archived", className: "bg-muted text-muted-foreground" },

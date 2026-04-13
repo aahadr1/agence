@@ -1,6 +1,14 @@
 "use client";
 
 import type { ProspectListItem } from "@/lib/crm/types";
+import {
+  AlertTriangle,
+  Euro,
+  ListOrdered,
+  Percent,
+  Scale,
+  Users,
+} from "lucide-react";
 
 function formatCurrency(cents: number) {
   return (cents / 100).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
@@ -25,38 +33,52 @@ export function StatsBar({ prospects, total }: { prospects: ProspectListItem[]; 
 
   const overdueTasks = prospects.reduce((sum, p) => sum + p.overdue_task_count, 0);
 
-  const stats = [
-    { label: "Total prospects", value: total.toString() },
-    { label: "Pipeline", value: formatCurrency(pipelineValue) },
-    { label: "Weighted", value: formatCurrency(weightedValue) },
-    { label: "Won this month", value: `${wonThisMonth.length} (${formatCurrency(wonValue)})` },
-    { label: "Conversion", value: `${conversionRate}%` },
+  const stats: {
+    label: string;
+    value: string;
+    icon: typeof Users;
+    alert?: boolean;
+  }[] = [
+    { label: "Total prospects", value: total.toString(), icon: Users },
+    { label: "Pipeline", value: formatCurrency(pipelineValue), icon: Euro },
+    { label: "Weighted", value: formatCurrency(weightedValue), icon: Scale },
+    {
+      label: "Won this month",
+      value: `${wonThisMonth.length} (${formatCurrency(wonValue)})`,
+      icon: ListOrdered,
+    },
+    { label: "Conversion", value: `${conversionRate}%`, icon: Percent },
     {
       label: "Overdue tasks",
       value: overdueTasks.toString(),
+      icon: AlertTriangle,
       alert: overdueTasks > 0,
     },
   ];
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      {stats.map((stat) => (
-        <div
-          key={stat.label}
-          className="rounded-[var(--radius)] border border-border bg-card px-3 py-2.5"
-        >
-          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            {stat.label}
-          </p>
-          <p
-            className={`mt-0.5 text-sm font-semibold ${
-              "alert" in stat && stat.alert ? "text-destructive" : "text-foreground"
-            }`}
+      {stats.map((stat) => {
+        const Icon = stat.icon;
+        return (
+          <div
+            key={stat.label}
+            className="rounded-[var(--radius)] border border-border bg-card px-3 py-2.5 shadow-sm"
           >
-            {stat.value}
-          </p>
-        </div>
-      ))}
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
+              <p className="text-[10px] font-medium uppercase tracking-wider">{stat.label}</p>
+            </div>
+            <p
+              className={`mt-1 text-sm font-semibold tabular-nums ${
+                stat.alert ? "text-destructive" : "text-foreground"
+              }`}
+            >
+              {stat.value}
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }

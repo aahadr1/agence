@@ -548,7 +548,7 @@ export default function LeadGeneratorPage() {
           "mt-4 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm",
           phase === "failed"
             ? "border-red-200 bg-red-50 text-red-700"
-            : "border-blue-200 bg-blue-50 text-blue-700"
+            : "border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200"
         )}>
           {isSearching && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
           {phase === "failed" && <AlertCircle className="h-4 w-4 shrink-0" />}

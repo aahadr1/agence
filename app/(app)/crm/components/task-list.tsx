@@ -13,7 +13,7 @@ const PRIORITY_COLORS: Record<CrmTaskPriority, string> = {
 
 const STATUS_ICONS: Record<CrmTaskStatus, React.ReactNode> = {
   todo: <Circle className="h-3.5 w-3.5 text-muted-foreground" />,
-  in_progress: <Clock className="h-3.5 w-3.5 text-blue-500" />,
+  in_progress: <Clock className="h-3.5 w-3.5 text-muted-foreground" />,
   done: <Check className="h-3.5 w-3.5 text-emerald-500" />,
   cancelled: <Check className="h-3.5 w-3.5 text-muted-foreground line-through" />,
 };

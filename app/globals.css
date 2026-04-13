@@ -16,7 +16,7 @@
   --secondary: #f0f0ed;
   --secondary-foreground: #171717;
   --muted: #ecece8;
-  --muted-foreground: #5e8699;
+  --muted-foreground: #64748b;
   --accent: #262626;
   --accent-foreground: #fafafa;
   --destructive: #b91c1c;
@@ -30,14 +30,16 @@
   --hairline: rgba(0, 0, 0, 0.06);
   --preview-chrome: #ffffff;
   --shimmer-from: #ecece8;
-  --shimmer-mid: #d9e8ef;
+  --shimmer-mid: #e4e4e7;
   --shimmer-to: #ecece8;
   --control-border: rgba(0, 0, 0, 0.1);
   --control-border-hover: rgba(0, 0, 0, 0.22);
   --control-bg-hover: rgba(0, 0, 0, 0.03);
-  /* Accent — pastel baby blue */
-  --blue: #a8cfe0;
-  --blue-subtle: rgba(168, 207, 224, 0.15);
+  /* UI accent — cool neutral zinc (links, focus, nav) */
+  --blue: #52525b;
+  --blue-subtle: rgba(82, 82, 91, 0.1);
+  /* Display titles — Fraunces / editorial headings */
+  --display-title: #1c1917;
 }
 
 .dark {
@@ -52,7 +54,7 @@
   --secondary: #242422;
   --secondary-foreground: #f4f4f1;
   --muted: #2a2a27;
-  --muted-foreground: #85b9cd;
+  --muted-foreground: #94a3b8;
   --accent: #e5e5e0;
   --accent-foreground: #141413;
   --destructive: #ef4444;
@@ -93,6 +95,7 @@
   --color-ring: var(--ring);
   --color-blue: var(--blue);
   --color-blue-subtle: var(--blue-subtle);
+  --color-display-title: var(--display-title);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-display: var(--font-fraunces);
@@ -195,8 +198,7 @@ body {
   animation: pulse-subtle 2s ease-in-out infinite;
 }
 
-/* Baby-blue glow pulse — stepper active node */
-@keyframes blueGlow {
+@keyframes accentGlow {
   0%, 100% {
     box-shadow: 0 0 0 0 var(--blue-subtle);
   }
@@ -205,11 +207,15 @@ body {
   }
 }
 
-.animate-blue-glow {
-  animation: blueGlow 2.4s ease-in-out infinite;
+.animate-accent-glow {
+  animation: accentGlow 2.4s ease-in-out infinite;
 }
 
-/* Focus visible — baby blue ring */
+.animate-blue-glow {
+  animation: accentGlow 2.4s ease-in-out infinite;
+}
+
+/* Focus visible */
 :focus-visible {
   outline: 1.5px solid var(--blue);
   outline-offset: 2px;
@@ -217,6 +223,10 @@ body {
 
 .font-display {
   font-family: var(--font-fraunces), Georgia, serif;
+}
+
+.text-display-title {
+  color: var(--display-title);
 }
 
 /* Eyebrow / label style */

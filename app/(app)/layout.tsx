@@ -1,15 +1,18 @@
 import { Sidebar } from "@/components/layout/sidebar";
+import { ProductGuideProvider } from "@/components/help/product-guide";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-background">
-      <Sidebar />
-      {/* pt-14 clears the mobile top bar; lg:pt-0 + lg:pl removes it on desktop */}
-      <main className="min-h-screen pt-14 lg:pt-0 lg:pl-[var(--sidebar-width)]">
-        <div className="mx-auto min-w-0 max-w-[1680px] px-4 py-8 sm:px-6 sm:py-10 md:px-8 md:py-10 xl:px-10">
-          {children}
-        </div>
-      </main>
-    </div>
+    <ProductGuideProvider>
+      <div className="min-h-screen bg-background">
+        <Sidebar />
+        {/* pt-14 clears the mobile top bar; lg:pt-0 + lg:pl removes it on desktop */}
+        <main className="min-h-screen pt-14 lg:pt-0 lg:pl-[var(--sidebar-width)]">
+          <div className="mx-auto min-w-0 max-w-[1680px] px-4 py-8 sm:px-6 sm:py-10 md:px-8 md:py-10 xl:px-10">
+            {children}
+          </div>
+        </main>
+      </div>
+    </ProductGuideProvider>
   );
 }

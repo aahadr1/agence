@@ -101,7 +101,7 @@ export function CompetitorTable({ prospect, competitors }: CompetitorTableProps)
             </td>
             <td className="px-3 py-3">
               <div className="flex items-center justify-center gap-1.5">
-                {prospect.facebook_url ? <Facebook className="h-3.5 w-3.5 text-blue-400" /> : <Facebook className="h-3.5 w-3.5 text-red-400/40" />}
+                {prospect.facebook_url ? <Facebook className="h-3.5 w-3.5 text-slate-600" /> : <Facebook className="h-3.5 w-3.5 text-red-400/40" />}
                 {prospect.instagram_url ? <Instagram className="h-3.5 w-3.5 text-pink-400" /> : <Instagram className="h-3.5 w-3.5 text-red-400/40" />}
               </div>
             </td>
@@ -137,7 +137,7 @@ export function CompetitorTable({ prospect, competitors }: CompetitorTableProps)
               </td>
               <td className="px-3 py-3">
                 <div className="flex items-center justify-center gap-1.5">
-                  {comp.facebook_url ? <Facebook className="h-3.5 w-3.5 text-blue-400" /> : <Facebook className="h-3.5 w-3.5 text-muted-foreground/30" />}
+                  {comp.facebook_url ? <Facebook className="h-3.5 w-3.5 text-slate-600" /> : <Facebook className="h-3.5 w-3.5 text-muted-foreground/30" />}
                   {comp.instagram_url ? <Instagram className="h-3.5 w-3.5 text-pink-400" /> : <Instagram className="h-3.5 w-3.5 text-muted-foreground/30" />}
                 </div>
               </td>

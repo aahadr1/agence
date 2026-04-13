@@ -533,7 +533,7 @@ export function LeadDrawer({
                     href={lead.facebook_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 border border-blue-500/20 bg-blue-500/5 text-blue-400 hover:bg-blue-500/10 transition-colors"
+                    className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 border border-zinc-500/20 bg-zinc-500/5 text-zinc-600 hover:bg-zinc-500/10 dark:text-zinc-400 transition-colors"
                   >
                     <Facebook className="w-3 h-3" />
                     Facebook
@@ -557,7 +557,7 @@ export function LeadDrawer({
                     href={lead.linkedin_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 border border-blue-600/20 bg-blue-600/5 text-blue-500 hover:bg-blue-600/10 transition-colors"
+                    className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 border border-zinc-600/20 bg-zinc-600/5 text-zinc-700 hover:bg-zinc-600/10 dark:text-zinc-300 transition-colors"
                   >
                     <Linkedin className="w-3 h-3" /> LinkedIn
                   </a>

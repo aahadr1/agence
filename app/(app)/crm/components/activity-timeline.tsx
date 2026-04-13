@@ -23,7 +23,7 @@ const ACTIVITY_ICONS: Record<CrmActivityType, React.ReactNode> = {
 };
 
 const ACTIVITY_COLORS: Record<CrmActivityType, string> = {
-  note: "#3b82f6",
+  note: "#57534e",
   call: "#22c55e",
   meeting: "#a78bfa",
   email: "#f59e0b",

@@ -60,7 +60,7 @@ export interface LeadsTableProps {
 
 const PIPELINE_STATUS_LABELS: Record<string, { label: string; color: string }> = {
   new: { label: "Nouveau", color: "bg-slate-100 text-slate-700" },
-  to_contact: { label: "À contacter", color: "bg-blue-50 text-blue-700" },
+  to_contact: { label: "À contacter", color: "bg-zinc-100 text-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-200" },
   contacted: { label: "Contacté", color: "bg-indigo-50 text-indigo-700" },
   responded: { label: "Répondu", color: "bg-violet-50 text-violet-700" },
   demo_sent: { label: "Démo envoyée", color: "bg-amber-50 text-amber-700" },
@@ -97,7 +97,7 @@ function PriorityBadge({ score }: { score: string | null }) {
       </span>
     );
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+    <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-200">
       <Snowflake className="h-3 w-3" />
       Froid
     </span>
@@ -119,7 +119,7 @@ function PipelineStatusBadge({ status }: { status: string | null }) {
 
 /** Platform badge colour map */
 const PLATFORM_COLORS: Record<string, string> = {
-  facebook_page: "text-blue-600 bg-blue-50",
+  facebook_page: "text-slate-700 bg-slate-100 dark:text-slate-300 dark:bg-slate-800/50",
   instagram_page: "text-pink-600 bg-pink-50",
   planity: "text-purple-600 bg-purple-50",
   treatwell: "text-teal-600 bg-teal-50",
@@ -160,7 +160,7 @@ function WebsiteCell({ lead }: { lead: Lead }) {
         target="_blank"
         rel="noopener noreferrer"
         onClick={(e) => e.stopPropagation()}
-        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+        className="inline-flex items-center gap-1 text-xs text-blue hover:underline"
       >
         <Globe className="h-3.5 w-3.5" />
         <span className="max-w-[120px] truncate">
@@ -218,7 +218,7 @@ function EnrichmentStepBadge({ step, status }: { step: string | null; status: st
     );
   if (status === "enriching" || status === "pending")
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-blue-500">
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" />
         {step ? step.replace(/_/g, " ") : "En cours..."}
       </span>

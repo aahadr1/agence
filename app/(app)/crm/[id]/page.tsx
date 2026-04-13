@@ -108,19 +108,27 @@ export default function ProspectDetailPage() {
         {/* Left: Activities + Tasks */}
         <div className="lg:col-span-2 space-y-5">
           {/* Tabs */}
-          <div className="flex gap-1 border-b border-border pb-0">
+          <div
+            className="inline-flex w-full max-w-md rounded-[var(--radius)] border border-border bg-muted/30 p-0.5 sm:w-auto"
+            role="tablist"
+            aria-label="Prospect sections"
+          >
             {(["timeline", "tasks"] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
+                role="tab"
+                aria-selected={activeTab === tab}
                 onClick={() => setActiveTab(tab)}
-                className={`border-b-2 px-3 py-2 text-xs font-medium capitalize transition-colors ${
+                className={`min-w-0 flex-1 rounded-[calc(var(--radius)-2px)] px-3 py-2 text-center text-xs font-medium transition-colors sm:flex-none sm:px-4 ${
                   activeTab === tab
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                {tab === "timeline" ? "Activity timeline" : `Tasks (${tasks.filter((t) => t.status === "todo" || t.status === "in_progress").length})`}
+                {tab === "timeline"
+                  ? "Timeline"
+                  : `Tasks (${tasks.filter((t) => t.status === "todo" || t.status === "in_progress").length})`}
               </button>
             ))}
           </div>

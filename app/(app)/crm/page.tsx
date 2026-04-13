@@ -14,10 +14,13 @@ import { AddProspectModal } from "./components/add-prospect-modal";
 import { ExportButton } from "./components/export-button";
 import { SavedViewsPicker, useSavedViews } from "./components/saved-views";
 import { loadColumns, saveColumns } from "./components/prospect-columns";
-import { Plus, Settings2, KanbanSquare } from "lucide-react";
+import { Plus, Settings2, KanbanSquare, BookOpen } from "lucide-react";
 import Link from "next/link";
+import { useProductGuide } from "@/components/help/product-guide";
+import { CrmQuickStart } from "./components/crm-quick-start";
 
 export default function CrmPage() {
+  const { openGuide } = useProductGuide();
   const router = useRouter();
   const [prospects, setProspects] = useState<ProspectListItem[]>([]);
   const [stages, setStages] = useState<CrmStage[]>([]);
@@ -216,12 +219,22 @@ export default function CrmPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="label-eyebrow">CRM</p>
-          <h1 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">Prospects</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Track your pipeline, manage follow-ups, and close deals.
+          <h1 className="font-display mt-1 text-2xl font-medium tracking-tight text-display-title sm:text-3xl">
+            Prospects
+          </h1>
+          <p className="mt-1 max-w-lg text-sm text-muted-foreground">
+            Pipeline, follow-ups, and deal history in one place. Use the board for stages or stay in the table for bulk work.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => openGuide("crm")}
+            className="flex items-center gap-1.5 rounded-[var(--radius)] border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
+          >
+            <BookOpen className="h-3.5 w-3.5" strokeWidth={1.5} />
+            How it works
+          </button>
           <Link
             href="/crm/board"
             className="flex items-center gap-1.5 rounded-[var(--radius)] border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
@@ -240,8 +253,10 @@ export default function CrmPage() {
         </div>
       </div>
 
+      <CrmQuickStart onOpenGuide={openGuide} />
+
       {/* Stats */}
-      <div className="mt-6">
+      <div className="mt-2 sm:mt-4">
         <StatsBar prospects={prospects} total={total} />
       </div>
 

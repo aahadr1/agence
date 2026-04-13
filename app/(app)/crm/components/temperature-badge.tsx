@@ -5,7 +5,7 @@ import type { ProspectTemperature } from "@/lib/crm/types";
 const TEMP_CONFIG: Record<ProspectTemperature, { label: string; color: string; bgClass: string }> = {
   hot: { label: "Hot", color: "#ef4444", bgClass: "bg-red-500/10" },
   warm: { label: "Warm", color: "#f59e0b", bgClass: "bg-amber-500/10" },
-  cold: { label: "Cold", color: "#3b82f6", bgClass: "bg-blue-500/10" },
+  cold: { label: "Cold", color: "#52525b", bgClass: "bg-zinc-500/10" },
 };
 
 export function TemperatureBadge({ temperature }: { temperature: ProspectTemperature }) {

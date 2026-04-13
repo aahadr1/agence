@@ -35,7 +35,7 @@ interface AnalysisReportProps {
 const severityColors: Record<string, string> = {
   critical: "border-red-500/30 bg-red-500/5 text-red-400",
   high: "border-amber-500/30 bg-amber-500/5 text-amber-400",
-  medium: "border-blue-400/30 bg-blue-400/5 text-blue-400",
+  medium: "border-zinc-400/30 bg-zinc-400/5 text-zinc-600 dark:text-zinc-400",
   low: "border-foreground/10 bg-secondary/50 text-muted-foreground",
 };
 
@@ -249,13 +249,13 @@ export function AnalysisReport({ analysis }: AnalysisReportProps) {
               <SocialLink href={a.website_url} icon={Globe} label="Site" color="text-foreground" bg="bg-secondary" />
             )}
             {a.facebook_url && (
-              <SocialLink href={a.facebook_url} icon={Facebook} label="Facebook" color="text-blue-400" bg="bg-blue-500/10" />
+              <SocialLink href={a.facebook_url} icon={Facebook} label="Facebook" color="text-slate-600" bg="bg-slate-500/10" />
             )}
             {a.instagram_url && (
               <SocialLink href={a.instagram_url} icon={Instagram} label="Instagram" color="text-pink-400" bg="bg-pink-500/10" />
             )}
             {a.linkedin_url && (
-              <SocialLink href={a.linkedin_url} icon={Linkedin} label="LinkedIn" color="text-blue-500" bg="bg-blue-600/10" />
+              <SocialLink href={a.linkedin_url} icon={Linkedin} label="LinkedIn" color="text-[#0A66C2]" bg="bg-[#0A66C2]/10" />
             )}
           </div>
         </Panel>
