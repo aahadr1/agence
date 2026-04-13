@@ -45,17 +45,19 @@ export default function LeadAgentPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const fetchMissions = useCallback(async () => {
-    const res = await fetch("/api/lead-agent/missions");
-    if (!res.ok) return;
-    const { missions: m } = await res.json();
-    setMissions(m || []);
+    try {
+      const res = await fetch("/api/lead-agent/missions");
+      const json = await res.json().catch(() => ({}));
+      setMissions(json.missions || []);
+    } catch { /* network error — ignore silently */ }
   }, []);
 
   const fetchMessages = useCallback(async (missionId: string) => {
-    const res = await fetch(`/api/lead-agent/messages?missionId=${missionId}`);
-    if (!res.ok) return;
-    const { messages: msgs } = await res.json();
-    setMessages(msgs || []);
+    try {
+      const res = await fetch(`/api/lead-agent/messages?missionId=${missionId}`);
+      const json = await res.json().catch(() => ({}));
+      setMessages(json.messages || []);
+    } catch { /* network error — ignore silently */ }
   }, []);
 
   useEffect(() => {
@@ -64,12 +66,17 @@ export default function LeadAgentPage() {
 
   useEffect(() => {
     if (!activeMission) return;
+    // Only poll when mission is actively running
+    const isActive = ["pending", "planning", "running", "paused"].includes(
+      activeMission.status
+    );
     fetchMessages(activeMission.id);
+    if (!isActive) return;
 
     const interval = setInterval(() => {
       fetchMessages(activeMission.id);
       fetchMissions();
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [activeMission, fetchMessages, fetchMissions]);
