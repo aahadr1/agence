@@ -38,6 +38,8 @@ interface LeadDrawerProps {
   addingToPipeline?: boolean;
   onGenerateOutreach?: (leadId: string) => void;
   generatingOutreach?: boolean;
+  /** Message après action CRM (succès / erreur) */
+  pipelineFeedback?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +173,7 @@ export function LeadDrawer({
   addingToPipeline,
   onGenerateOutreach,
   generatingOutreach,
+  pipelineFeedback,
 }: LeadDrawerProps) {
   const drawerRef = useRef<HTMLDivElement>(null);
   const [noteText, setNoteText] = useState("");
@@ -512,6 +515,11 @@ export function LeadDrawer({
         </div>
 
         {/* Footer actions */}
+        {pipelineFeedback ? (
+          <p className="border-t border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
+            {pipelineFeedback}
+          </p>
+        ) : null}
         <div className="flex items-center gap-2 border-t border-border p-4">
           {lead.phone && (
             <a

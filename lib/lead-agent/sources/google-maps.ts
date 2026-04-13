@@ -1,5 +1,6 @@
 import type { Page } from "playwright-core";
 import { normalizeUrl, randomDelay, dismissConsent } from "../browser";
+import { classifyUrl } from "../enrichment/website-finder";
 
 export interface MapsLead {
   business_name: string;
@@ -28,8 +29,24 @@ interface DetailFields {
   category: string | null;
 }
 
+// Hosts that must never be picked as the "website" from Maps (they are platform pages)
+const MAPS_SKIP_HOSTS = [
+  "google.com", "google.fr", "gstatic.com", "maps.app.goo.gl", "g.page", "schema.org",
+  "facebook.com", "instagram.com", "twitter.com", "x.com", "linkedin.com",
+  "youtube.com", "tiktok.com", "pinterest.com",
+];
+
+function mapsHostOk(href: string): boolean {
+  try {
+    const host = new URL(href).hostname.replace(/^www\./, "").toLowerCase();
+    return !MAPS_SKIP_HOSTS.some((h) => host === h || host.endsWith("." + h));
+  } catch {
+    return false;
+  }
+}
+
 async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
-  return page.evaluate(() => {
+  const result = await page.evaluate(() => {
     const text = (sel: string) => {
       const el = document.querySelector(sel);
       return el?.textContent?.trim() || null;
@@ -42,9 +59,7 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
     );
     if (phoneBtn) {
       const label = phoneBtn.getAttribute("aria-label") || "";
-      const match = label.match(
-        /(?:\+?\d[\d\s.\-()]{7,})/
-      );
+      const match = label.match(/(?:\+?\d[\d\s.\-()]{7,})/);
       phone = match ? match[0].trim() : null;
       if (!phone) {
         const raw = phoneBtn.getAttribute("data-item-id");
@@ -52,75 +67,69 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
       }
     }
 
-    // Website — plusieurs sélecteurs (UI Maps change souvent)
+    // ── Website ─────────────────────────────────────────────────────────────
+    // Strategy: cascade through progressively less-specific selectors.
+    // We collect the HREF and let the caller filter platform URLs.
     let website: string | null = null;
-    const siteSelectors = [
+
+    // 1. Structured data-item-id (historical Maps API)
+    const dataSelectors = [
       'a[data-item-id="authority"]',
       'a[data-item-id^="authority:"]',
       'a[data-item-id^="oloc:"]',
-      'a[href^="http"][data-item-id]',
     ];
-    for (const sel of siteSelectors) {
+    for (const sel of dataSelectors) {
       const el = document.querySelector(sel) as HTMLAnchorElement | null;
       const href = el?.getAttribute("href");
-      if (href && /^https?:\/\//i.test(href) && !href.includes("google.com/maps")) {
-        website = href;
-        break;
-      }
+      if (href && /^https?:\/\//i.test(href)) { website = href; break; }
     }
+
+    // 2. Any <a> whose aria-label signals "website" (multiple languages)
     if (!website) {
-      const allLinks = document.querySelectorAll("a[href]");
+      const websiteKeywords = [
+        "site web", "website", "site internet", "open website",
+        "ouvrir le site", "visiter le site", "visit website",
+        "site officiel", "official site",
+      ];
+      const allLinks = document.querySelectorAll<HTMLAnchorElement>("a[href]");
       for (const a of allLinks) {
         const href = a.getAttribute("href") || "";
         if (!/^https?:\/\//i.test(href)) continue;
-        if (
-          href.includes("google.com") ||
-          href.includes("g.page") ||
-          href.includes("maps.app.goo.gl")
-        )
-          continue;
-        const label = (a.getAttribute("aria-label") || a.textContent || "").toLowerCase();
-        if (
-          label.includes("site web") ||
-          label.includes("website") ||
-          label.includes("site internet") ||
-          label.includes("open website") ||
-          label.includes("ouvrir le site")
-        ) {
+        const label = (a.getAttribute("aria-label") || a.textContent || "").toLowerCase().trim();
+        if (websiteKeywords.some((kw) => label.includes(kw))) {
           website = href;
           break;
         }
       }
     }
-    // Dernier recours : premier lien externe visible dans le panneau latéral (hors Google)
+
+    // 3. The Maps detail panel often wraps the website in a button-like div
+    //    with a Globe SVG. Look for any <a href^="http"> that is a sibling of
+    //    or descendant of an element whose aria-label contains "Web".
+    if (!website) {
+      const webSections = document.querySelectorAll<HTMLElement>(
+        '[aria-label*="Web" i], [aria-label*="Site" i], [data-section-id="apb"]'
+      );
+      for (const section of webSections) {
+        const a = section.querySelector<HTMLAnchorElement>('a[href^="http"]');
+        if (a) { website = a.getAttribute("href"); break; }
+        if (section instanceof HTMLAnchorElement && /^https?:\/\//i.test(section.href)) {
+          website = section.href; break;
+        }
+      }
+    }
+
+    // 4. Fallback: first external link in the detail panel
+    //    (kept narrow — exclude Google properties; social/platforms filtered later)
     if (!website) {
       const main = document.querySelector('[role="main"]') || document.body;
-      const ext = main.querySelectorAll('a[href^="http"]');
+      const ext = main.querySelectorAll<HTMLAnchorElement>('a[href^="http"]');
       for (const a of ext) {
         const href = a.getAttribute("href") || "";
-        if (
-          href.includes("google.") ||
-          href.includes("gstatic.") ||
-          href.includes("maps.app.goo.gl") ||
-          href.includes("schema.org")
-        )
+        if (href.includes("google.") || href.includes("gstatic.") || href.includes("schema.org"))
           continue;
-        const host = (() => {
-          try {
-            return new URL(href).hostname;
-          } catch {
-            return "";
-          }
-        })();
-        if (
-          host &&
-          !host.includes("google") &&
-          !host.includes("facebook.com") &&
-          !host.includes("instagram.com")
-        ) {
-          website = href;
-          break;
-        }
+        website = href;
+        break;
       }
     }
 
@@ -131,12 +140,15 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
     );
     if (addrBtn) {
       address =
-        addrBtn.getAttribute("aria-label")?.replace(/^Adresse\s*:\s*/i, "").replace(/^Address\s*:\s*/i, "").trim() ||
-        null;
+        addrBtn
+          .getAttribute("aria-label")
+          ?.replace(/^Adresse\s*:\s*/i, "")
+          .replace(/^Address\s*:\s*/i, "")
+          .trim() || null;
     }
 
-    // Rating & review count from the header area
-    const ratingSpan = document.querySelector('div.fontDisplayLarge, span.fontDisplayLarge');
+    // Rating & review count
+    const ratingSpan = document.querySelector("div.fontDisplayLarge, span.fontDisplayLarge");
     const rating = ratingSpan?.textContent?.trim().replace(",", ".") || null;
 
     let reviewCount: string | null = null;
@@ -146,11 +158,47 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
       reviewCount = m ? m[1].replace(/\s/g, "") : null;
     }
 
-    // Category / description
-    const category = text('button[jsaction*="category"]') || text('span.fontBodyMedium > span > span');
+    const category =
+      text('button[jsaction*="category"]') || text("span.fontBodyMedium > span > span");
 
     return { phone, website, address, rating, reviewCount, category };
   });
+
+  // ── Playwright locator fallback (runs in Node context, more reliable) ──────
+  if (!result.website) {
+    try {
+      const locatorSelectors = [
+        'a[data-item-id="authority"]',
+        'a[data-item-id^="authority:"]',
+        'a[aria-label*="site web" i]',
+        'a[aria-label*="website" i]',
+        'a[aria-label*="visiter" i]',
+        'a[aria-label*="ouvrir le site" i]',
+      ];
+      for (const sel of locatorSelectors) {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
+          const href = await el.getAttribute("href").catch(() => null);
+          if (href && /^https?:\/\//i.test(href)) {
+            result.website = href;
+            break;
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // ── Filter out social / platform URLs from the "last resort" fallback ─────
+  // (data-item-id selectors are almost always the real website;
+  //  the aria-label ones we already filtered; the fallback can grab socials)
+  if (result.website && !mapsHostOk(result.website)) {
+    // It's a platform URL — keep it but let the caller decide has_website
+    // (the enrichment step will reclassify it properly)
+  }
+
+  return result as DetailFields;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +381,14 @@ export async function scrapeGoogleMaps(
 
       const detail = await extractDetailFromDOM(page);
 
+      // Determine if the website found is an owned domain or a platform page.
+      // Platform URLs (Facebook, Planity, etc.) are stored in website_url so the
+      // enrichment step can classify them, but has_website stays false — the
+      // business does NOT have an "owned" website.
+      const rawWebsite = detail.website;
+      const normalizedWebsite = normalizeUrl(rawWebsite);
+      const isPlatform = normalizedWebsite ? classifyUrl(normalizedWebsite) !== null : false;
+
       const lead: MapsLead = {
         business_name: item.name,
         description: detail.category || item.category,
@@ -342,15 +398,20 @@ export async function scrapeGoogleMaps(
         rating: detail.rating || item.rating,
         review_count: detail.reviewCount || item.reviewCount,
         review_highlights: [],
-        has_website: Boolean(detail.website),
-        website_url: normalizeUrl(detail.website),
+        // Only mark has_website true for owned domains (not Planity, Facebook, etc.)
+        has_website: Boolean(normalizedWebsite) && !isPlatform,
+        website_url: normalizedWebsite,
         google_maps_url: page.url(),
       };
 
       leads.push(lead);
       seenNames.add(item.name.toLowerCase());
 
-      const status = lead.has_website ? "has website" : "NO WEBSITE";
+      const status = lead.has_website
+        ? `has website: ${lead.website_url}`
+        : normalizedWebsite
+          ? `platform only: ${normalizedWebsite.slice(0, 40)}`
+          : "NO WEBSITE";
       log(`[Maps] ✓ ${item.name} — ${status}${lead.phone ? ` — ${lead.phone}` : ""}`);
 
       // Go back to list

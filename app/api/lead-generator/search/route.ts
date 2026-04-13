@@ -1,6 +1,7 @@
 import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { runDiscovery } from "@/lib/lead-agent";
+import { augmentLeadsWithAiWebsites } from "@/lib/lead-agent/enrichment/batch-website-ai";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -61,6 +62,11 @@ export async function POST(request: Request) {
       attemptedKeywords: attemptedKeywords || [],
     });
 
+    // Sans Playwright fiable sur Maps : compléter les URLs manquantes (Gemini + vérif HTTP)
+    if (leads.length > 0) {
+      await augmentLeadsWithAiWebsites(leads, location, console.log);
+    }
+
     // Save leads to database with enrichment_status = "pending"
     if (leads.length > 0) {
       const leadsToInsert = leads.map((lead) => ({
@@ -78,7 +84,7 @@ export async function POST(request: Request) {
         niche,
         location,
         source: lead.source,
-        has_website: lead.has_website,
+        has_website: Boolean(lead.website_url?.trim()) || lead.has_website,
         website_url: lead.website_url,
         google_maps_url: lead.google_maps_url,
         website_quality: null,

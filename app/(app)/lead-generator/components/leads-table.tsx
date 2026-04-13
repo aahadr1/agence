@@ -27,6 +27,7 @@ import {
   Loader2,
 } from "lucide-react";
 import type { Lead } from "@/lib/types";
+import { getWebsiteContext } from "@/lib/lead-utils";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -116,8 +117,25 @@ function PipelineStatusBadge({ status }: { status: string | null }) {
   );
 }
 
+/** Platform badge colour map */
+const PLATFORM_COLORS: Record<string, string> = {
+  facebook_page: "text-blue-600 bg-blue-50",
+  instagram_page: "text-pink-600 bg-pink-50",
+  planity: "text-purple-600 bg-purple-50",
+  treatwell: "text-teal-600 bg-teal-50",
+  doctolib: "text-sky-600 bg-sky-50",
+  booking: "text-indigo-600 bg-indigo-50",
+  thefork: "text-orange-600 bg-orange-50",
+  tripadvisor: "text-green-700 bg-green-50",
+  pagesjaunes: "text-yellow-700 bg-yellow-50",
+  google_maps: "text-slate-600 bg-slate-100",
+  directory: "text-slate-500 bg-slate-100",
+};
+
 function WebsiteCell({ lead }: { lead: Lead }) {
-  if (!lead.has_website || !lead.website_url) {
+  const ctx = getWebsiteContext(lead);
+
+  if (!ctx) {
     return (
       <span className="inline-flex items-center gap-1 text-xs text-red-500 font-medium">
         <GlobeOff className="h-3.5 w-3.5" />
@@ -125,19 +143,41 @@ function WebsiteCell({ lead }: { lead: Lead }) {
       </span>
     );
   }
+
+  if (ctx.isOwned) {
+    return (
+      <a
+        href={ctx.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+      >
+        <Globe className="h-3.5 w-3.5" />
+        <span className="max-w-[120px] truncate">
+          {ctx.url.replace(/^https?:\/\/(www\.)?/, "")}
+        </span>
+        <ExternalLink className="h-3 w-3 opacity-50" />
+      </a>
+    );
+  }
+
+  // Platform page (Planity, Facebook, etc.)
+  const colorClass = PLATFORM_COLORS[ctx.type ?? ""] || "text-slate-500 bg-slate-100";
   return (
     <a
-      href={lead.website_url}
+      href={ctx.url}
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
-      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium hover:opacity-80",
+        colorClass
+      )}
+      title={ctx.url}
     >
-      <Globe className="h-3.5 w-3.5" />
-      <span className="max-w-[120px] truncate">
-        {lead.website_url.replace(/^https?:\/\/(www\.)?/, "")}
-      </span>
-      <ExternalLink className="h-3 w-3 opacity-50" />
+      {ctx.label}
+      <ExternalLink className="h-2.5 w-2.5 opacity-60" />
     </a>
   );
 }
@@ -203,7 +243,7 @@ function StatusDropdown({
   onUpdate?: (id: string, updates: Partial<Lead>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const current = (lead as Record<string, unknown>).pipeline_status as string | null;
+  const current = lead.pipeline_status;
 
   return (
     <div className="relative">
@@ -290,8 +330,8 @@ export function LeadsTable({
     }
     if (sortField === "priority_score") {
       const order = { hot: 3, warm: 2, cold: 1 };
-      const av = (a as Record<string, unknown>).priority_score as string;
-      const bv = (b as Record<string, unknown>).priority_score as string;
+      const av = a.priority_score;
+      const bv = b.priority_score;
       return ((order[av as keyof typeof order] ?? 0) - (order[bv as keyof typeof order] ?? 0)) * dir;
     }
     if (sortField === "created_at") {
@@ -443,8 +483,11 @@ export function LeadsTable({
         </thead>
         <tbody className="divide-y divide-border">
           {sorted.map((lead) => {
-            const ext = lead as Record<string, unknown>;
             const isSelected = selectedIds.has(lead.id);
+            const salesBriefPreview =
+              typeof lead.enrichment_data?.sales_brief === "string"
+                ? `${lead.enrichment_data.sales_brief.slice(0, 60)}…`
+                : null;
             const ownerPhone = lead.owner_phone || lead.phone;
             const ownerEmail = lead.owner_email || lead.email;
 
@@ -580,7 +623,7 @@ export function LeadsTable({
 
                 {/* QUALIFICATION */}
                 <td className="px-3 py-2.5">
-                  <PriorityBadge score={(ext.priority_score as string) || null} />
+                  <PriorityBadge score={lead.priority_score} />
                 </td>
 
                 <td className="px-3 py-2.5">
@@ -588,10 +631,10 @@ export function LeadsTable({
                 </td>
 
                 <td className="px-3 py-2.5 text-muted-foreground">
-                  {ext.targeted_offer ? (
+                  {lead.targeted_offer ? (
                     <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px]">
                       <Tag className="h-2.5 w-2.5" />
-                      {OFFER_LABELS[(ext.targeted_offer as string)] || ext.targeted_offer as string}
+                      {OFFER_LABELS[lead.targeted_offer] || lead.targeted_offer}
                     </span>
                   ) : (
                     "—"
@@ -600,10 +643,7 @@ export function LeadsTable({
 
                 <td className="max-w-[160px] px-3 py-2.5 text-muted-foreground">
                   <span className="truncate block text-xs">
-                    {(ext.identified_need as string) || 
-                     (lead.enrichment_data as Record<string, unknown>)?.sales_brief
-                       ? ((lead.enrichment_data as Record<string, unknown>).sales_brief as string)?.slice(0, 60) + "..."
-                       : "—"}
+                    {lead.identified_need || salesBriefPreview || "—"}
                   </span>
                 </td>
 
@@ -613,15 +653,15 @@ export function LeadsTable({
                 </td>
 
                 <td className="px-3 py-2.5">
-                  {ext.next_action ? (
+                  {lead.next_action ? (
                     <div className="flex flex-col gap-0.5">
-                      <span className="text-xs text-foreground">{ext.next_action as string}</span>
-                      {ext.next_action_date && (
+                      <span className="text-xs text-foreground">{lead.next_action}</span>
+                      {lead.next_action_date ? (
                         <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
                           <Clock className="h-2.5 w-2.5" />
-                          {new Date(ext.next_action_date as string).toLocaleDateString("fr-FR")}
+                          {new Date(lead.next_action_date).toLocaleDateString("fr-FR")}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   ) : (
                     <span className="text-muted-foreground">—</span>
@@ -630,21 +670,21 @@ export function LeadsTable({
 
                 {/* FOLLOW-UP */}
                 <td className="px-3 py-2.5 text-center text-muted-foreground tabular-nums">
-                  {(ext.contact_attempts as number) || 0}
+                  {lead.contact_attempts || 0}
                 </td>
 
                 <td className="px-3 py-2.5">
-                  {ext.quote_sent ? (
+                  {lead.quote_sent ? (
                     <div className="flex flex-col gap-0.5">
                       <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
                         <CheckCircle2 className="h-3 w-3" />
                         Envoyé
                       </span>
-                      {ext.quote_amount && (
+                      {lead.quote_amount ? (
                         <span className="text-[10px] font-semibold text-foreground">
-                          {ext.quote_amount as string}
+                          {lead.quote_amount}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   ) : (
                     <span className="text-muted-foreground">—</span>
@@ -653,7 +693,7 @@ export function LeadsTable({
 
                 <td className="px-3 py-2.5">
                   <EnrichmentStepBadge
-                    step={(ext.enrichment_step as string) || null}
+                    step={lead.enrichment_step}
                     status={lead.enrichment_status}
                   />
                   {lead.enrichment_status === "completed" && (

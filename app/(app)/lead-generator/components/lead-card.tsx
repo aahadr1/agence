@@ -1,6 +1,7 @@
 "use client";
 
 import { Lead } from "@/lib/types";
+import { getWebsiteContext } from "@/lib/lead-utils";
 import {
   MapPin,
   Phone,
@@ -51,10 +52,21 @@ function ScoreBadge({ score }: { score: number | null }) {
 }
 
 function WebsiteQualityBadge({ lead }: { lead: Lead }) {
-  if (!lead.has_website) {
+  const ctx = getWebsiteContext(lead);
+
+  if (!ctx) {
     return (
       <span className="shrink-0 border border-border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-foreground">
         No site
+      </span>
+    );
+  }
+
+  if (!ctx.isOwned) {
+    // Platform page — show label like "Planity", "Facebook", etc.
+    return (
+      <span className="shrink-0 border border-border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-amber-600">
+        {ctx.label}
       </span>
     );
   }
@@ -86,8 +98,9 @@ export function LeadCard({
   onAddToPipeline,
   addingToPipeline,
 }: LeadCardProps) {
+  const websiteCtx = getWebsiteContext(lead);
   const isHotLead =
-    !lead.has_website ||
+    !websiteCtx?.isOwned ||
     lead.website_quality === "dead" ||
     lead.website_quality === "outdated" ||
     lead.website_quality === "poor";
@@ -222,15 +235,20 @@ export function LeadCard({
                   <MapPin className="w-3 h-3" /> Maps
                 </a>
               )}
-              {lead.website_url && (
+              {websiteCtx && (
                 <a
-                  href={lead.website_url}
+                  href={websiteCtx.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-secondary hover:bg-secondary/80 transition-all text-muted-foreground"
+                  className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg transition-all ${
+                    websiteCtx.isOwned
+                      ? "bg-secondary hover:bg-secondary/80 text-muted-foreground"
+                      : "bg-amber-50 hover:bg-amber-100 text-amber-700"
+                  }`}
                 >
-                  <Globe className="w-3 h-3" /> Site
+                  <Globe className="w-3 h-3" />
+                  {websiteCtx.isOwned ? "Site" : websiteCtx.label}
                 </a>
               )}
               {lead.facebook_url && (

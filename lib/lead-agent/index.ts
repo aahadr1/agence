@@ -390,11 +390,17 @@ export async function runSixStepEnrichment(
   }
 
   async function save(stepName: string, partial: Partial<LeadResult>) {
-    const update = { ...partial, enrichment_step: stepName };
-    // Merge into lead
-    Object.assign(lead, partial);
+    // Always MERGE enrichment_data — never overwrite accumulated fields
+    let mergedPartial = partial;
+    if (partial.enrichment_data) {
+      const merged = { ...lead.enrichment_data, ...partial.enrichment_data };
+      mergedPartial = { ...partial, enrichment_data: merged };
+    }
+
+    const update = { ...mergedPartial, enrichment_step: stepName };
+    Object.assign(lead, mergedPartial);
     lead.enrichment_step = stepName;
-    record(lead, stepName, partial);
+    record(lead, stepName, mergedPartial);
     if (onStepComplete) {
       try { await onStepComplete(stepName, update as Partial<LeadResult> & { enrichment_step: string }); }
       catch (e) { log(`[Save] ✗ ${e instanceof Error ? e.message : e}`); }
@@ -409,10 +415,27 @@ export async function runSixStepEnrichment(
     );
 
     if (websiteResult) {
+      const websiteEnrichmentData: Record<string, unknown> = {
+        website_type: websiteResult.website_type,
+        website_found_via: websiteResult.found_via,
+        website_confidence: websiteResult.confidence,
+      };
+      if (websiteResult.platform_url) {
+        websiteEnrichmentData.platform_url = websiteResult.platform_url;
+        websiteEnrichmentData.platform_label = websiteResult.platform_label;
+      }
+
       await save("website_finder", {
         has_website: websiteResult.has_website,
         website_url: websiteResult.website_url,
+        enrichment_data: websiteEnrichmentData,
       });
+
+      if (websiteResult.platform_url) {
+        log(
+          `[Step 1/6] Platform found: ${websiteResult.platform_label} — ${websiteResult.platform_url.slice(0, 50)}`
+        );
+      }
     } else {
       await save("website_finder", { has_website: lead.has_website, website_url: lead.website_url });
     }

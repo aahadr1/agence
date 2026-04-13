@@ -29,6 +29,7 @@ import { SelectBar } from "./components/select-bar";
 import { OutreachModal } from "./components/outreach-modal";
 import { createSearchContext } from "@/lib/lead-agent/search-context";
 import { cn } from "@/lib/utils";
+import { leadHasWebsite, getWebsiteContext } from "@/lib/lead-utils";
 
 type SearchPhase = "idle" | "searching" | "analyzing" | "completed" | "failed";
 type ViewTab = "search" | "lists";
@@ -438,8 +439,7 @@ export default function LeadGeneratorPage() {
 
   // Filter + sort active leads
   const activeLeads = leads.filter((l) => {
-    const ext = l as Record<string, unknown>;
-    if (filterPriority !== "all" && ext.priority_score !== filterPriority) return false;
+    if (filterPriority !== "all" && l.priority_score !== filterPriority) return false;
     if (filterStatus !== "all" && l.enrichment_status !== filterStatus) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -457,8 +457,8 @@ export default function LeadGeneratorPage() {
   const stats = {
     total: leads.length,
     enriched: leads.filter((l) => l.enrichment_status === "completed").length,
-    hot: leads.filter((l) => (l as Record<string, unknown>).priority_score === "hot").length,
-    noWebsite: leads.filter((l) => !l.has_website).length,
+    hot: leads.filter((l) => l.priority_score === "hot").length,
+    noWebsite: leads.filter((l) => !getWebsiteContext(l)?.isOwned).length,
   };
 
   const isSearching = phase === "analyzing" || phase === "searching";
@@ -737,14 +737,11 @@ export default function LeadGeneratorPage() {
           <ListPanel
             lists={lists}
             activeListId={activeListId}
-            listItems={listItems}
-            onSelectList={loadListItems}
+            onSelectList={(id) => void loadListItems(id)}
             onCreateList={handleCreateList}
             onDeleteList={handleDeleteList}
             onExportList={handleExportList}
             onExpandList={handleExpandList}
-            enrichmentProgress={enrichmentProgress}
-            phase={phase}
           />
         </div>
       )}
@@ -752,11 +749,12 @@ export default function LeadGeneratorPage() {
       {/* Bulk select bar */}
       {selectedLeadIds.size > 0 && (
         <SelectBar
-          count={selectedLeadIds.size}
+          selectedCount={selectedLeadIds.size}
           lists={lists}
-          onCreateList={handleCreateListWithSelected}
+          onCreateListWithSelected={handleCreateListWithSelected}
           onAddToList={handleAddToList}
-          onClear={() => setSelectedLeadIds(new Set())}
+          onClearSelection={() => setSelectedLeadIds(new Set())}
+          onExportSelected={() => {}}
         />
       )}
 
@@ -766,10 +764,10 @@ export default function LeadGeneratorPage() {
           lead={drawerLead}
           onClose={() => setDrawerLead(null)}
           onGenerateOutreach={handleGenerateOutreach}
-          generatingOutreachId={generatingOutreachId}
+          generatingOutreach={generatingOutreachId === drawerLead.id}
           onAddToPipeline={handleAddToPipeline}
-          pipelineLeadId={pipelineLeadId}
-          crmFeedback={crmFeedback}
+          addingToPipeline={pipelineLeadId === drawerLead.id}
+          pipelineFeedback={crmFeedback}
         />
       )}
 

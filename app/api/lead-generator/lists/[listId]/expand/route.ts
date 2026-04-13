@@ -6,6 +6,7 @@ import {
 } from "@/lib/lead-agent/search-context";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { runDiscovery } from "@/lib/lead-agent";
+import { augmentLeadsWithAiWebsites } from "@/lib/lead-agent/enrichment/batch-website-ai";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -119,7 +120,7 @@ export async function POST(
       niche: searchNiche,
       location: searchLocation,
       source: lead.source,
-      has_website: lead.has_website,
+      has_website: Boolean(lead.website_url?.trim()) || lead.has_website,
       website_url: lead.website_url,
       google_maps_url: lead.google_maps_url,
       website_quality: null,
