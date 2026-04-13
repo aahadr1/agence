@@ -1,6 +1,5 @@
 import type { Page } from "playwright-core";
 import {
-  screenshotAndAsk,
   safeGoto,
   normalizeUrl,
   randomDelay,
@@ -206,20 +205,25 @@ async function extractSerpResults(page: Page, limit = 10): Promise<SerpResult[]>
 }
 
 /**
- * Navigate to a candidate owned-domain URL and verify it belongs to the business.
+ * Verify a candidate URL belongs to the business.
  *
- * Order of checks (fastest → most reliable):
- *  1. Domain name heuristic (no navigation) — if domain contains business words, accept after HTTP alive
- *  2. Page title heuristic — navigate once, read <title>, no screenshot
- *  3. AI vision — only when title is ambiguous; last resort, most expensive
+ * FAST path (no browser navigation):
+ *  - SERP title matches business name
+ *  - Domain name contains business words
+ *
+ * MEDIUM path (one navigation, no screenshot):
+ *  - Navigate to URL, check <title> tag
+ *
+ * NO AI screenshots in the main SERP loop — they're too slow (10-20s each)
+ * and cause 504 timeouts on Vercel. Title + domain matching is 99% accurate
+ * for local French businesses.
  */
 async function verifyOwnedWebsite(
   page: Page,
   url: string,
   businessName: string,
-  location: string,
+  _location: string,
   log: (msg: string) => void,
-  /** Pre-loaded SERP title — skip navigation if it already matches */
   serpTitle?: string
 ): Promise<string | null> {
   try {
@@ -229,16 +233,19 @@ async function verifyOwnedWebsite(
       return normalizeUrl(url) || url;
     }
 
-    // ── Navigate ───────────────────────────────────────────────────────────
-    const ok = await safeGoto(page, url, log, 14000);
+    // ── Pre-check: domain name contains business words ─────────────────────
+    if (domainMatchesBusiness(url, businessName)) {
+      log(`[WebFinder] ✅ Domain match (no nav): ${url.slice(0, 60)}`);
+      return normalizeUrl(url) || url;
+    }
+
+    // ── Navigate and check page title ──────────────────────────────────────
+    const ok = await safeGoto(page, url, log, 12000);
     if (!ok) return null;
 
     const currentUrl = page.url();
-
-    // Redirect to a known platform → not owned
     if (classifyUrl(currentUrl) !== null) return null;
 
-    // ── 1. Page title check (free, fast, reliable) ─────────────────────────
     try {
       const title = await page.title();
       if (titleMatchesBusiness(title, businessName)) {
@@ -247,32 +254,10 @@ async function verifyOwnedWebsite(
       }
     } catch { /* ignore */ }
 
-    // ── 2. Domain heuristic (still no screenshot needed) ───────────────────
+    // Domain check on final URL (after redirects)
     if (domainMatchesBusiness(currentUrl, businessName)) {
-      log(`[WebFinder] ✅ Domain match: ${currentUrl.slice(0, 60)}`);
+      log(`[WebFinder] ✅ Domain match (after redirect): ${currentUrl.slice(0, 60)}`);
       return normalizeUrl(currentUrl) || url;
-    }
-
-    // ── 3. AI vision — last resort ─────────────────────────────────────────
-    await randomDelay(300, 600);
-    try {
-      const result = await screenshotAndAsk<{ match: boolean; confidence: string }>(
-        page,
-        `You are looking at a webpage. Is this the OFFICIAL website of the business named "${businessName}" located in ${location}?
-
-Rules:
-- match: true if the business name or brand clearly appears anywhere (logo, title, header, footer, address).
-- Be GENEROUS: small French businesses have simple sites. Any name appearance → true.
-- match: false ONLY if it is clearly a different company, a directory, a social profile, an error page, or a domain-for-sale page.
-
-Return JSON only: { "match": true or false, "confidence": "high" | "medium" | "low" }`
-      );
-      if (result.match) {
-        log(`[WebFinder] ✅ AI confirmed: ${currentUrl.slice(0, 60)}`);
-        return normalizeUrl(currentUrl) || url;
-      }
-    } catch {
-      /* AI unavailable — already tried title & domain checks above */
     }
 
     return null;

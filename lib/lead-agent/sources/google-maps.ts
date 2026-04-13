@@ -364,18 +364,30 @@ export async function scrapeGoogleMaps(
 
       await link.click();
 
-      // Wait for the detail panel to fully render.
-      // The website section loads last — wait until either the authority link
-      // OR the address button (always present) appears, then give a bit more
-      // time for the website row to appear after that.
+      // Wait for the detail panel to fully render. The website section loads
+      // LAST (after name, rating, address, phone) so we need to be patient.
       await page.waitForURL(/maps\/place/, { timeout: 8000 }).catch(() => {});
+
+      // First wait for the panel shell (address/phone always render first)
       await page
         .waitForSelector(
-          'a[data-item-id="authority"], a[data-item-id^="authority:"], button[data-item-id="address"], button[data-item-id^="phone:"]',
-          { timeout: 8000 }
+          'button[data-item-id="address"], button[data-item-id^="phone:"]',
+          { timeout: 6000 }
         )
         .catch(() => {});
-      await randomDelay(1000, 1800); // small extra buffer for JS rendering
+
+      // Then specifically wait for the website link (loads after address/phone)
+      await page
+        .waitForSelector(
+          'a[data-item-id="authority"], a[data-item-id^="authority:"], a[aria-label*="site web" i], a[aria-label*="website" i]',
+          { timeout: 5000 }
+        )
+        .catch(() => {
+          // May not have a website at all — that's ok
+        });
+
+      // Extra buffer for any remaining JS hydration
+      await randomDelay(600, 1200);
 
       const detail = await extractDetailFromDOM(page);
 

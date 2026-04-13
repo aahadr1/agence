@@ -67,6 +67,15 @@ export const PLATFORM_REGISTRY: PlatformDef[] = [
   { host: "wixsite.com", type: "directory", label: "Wix (autre)" },
   { host: "jimdo.com", type: "directory", label: "Jimdo" },
   { host: "strikingly.com", type: "directory", label: "Strikingly" },
+  { host: "annuaires-online.com", type: "directory", label: "Annuaire" },
+  { host: "beautyplanet.com", type: "directory", label: "BeautyPlanet" },
+  { host: "kiute.com", type: "directory", label: "Kiute" },
+  { host: "genially.com", type: "directory", label: "Genially" },
+  { host: "my.barber", type: "directory", label: "MyBarber" },
+  { host: "uala.com", type: "booking", label: "Uala" },
+  { host: "fresha.com", type: "booking", label: "Fresha" },
+  { host: "balinea.com", type: "booking", label: "Balinea" },
+  { host: "salonkee.com", type: "booking", label: "Salonkee" },
 ];
 
 /**

@@ -458,7 +458,7 @@ export default function LeadGeneratorPage() {
     total: leads.length,
     enriched: leads.filter((l) => l.enrichment_status === "completed").length,
     hot: leads.filter((l) => l.priority_score === "hot").length,
-    noWebsite: leads.filter((l) => !getWebsiteContext(l)?.isOwned).length,
+    noWebsite: leads.filter((l) => l.enrichment_status === "completed" && !getWebsiteContext(l)).length,
   };
 
   const isSearching = phase === "analyzing" || phase === "searching";

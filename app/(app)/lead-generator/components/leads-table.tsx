@@ -136,6 +136,15 @@ function WebsiteCell({ lead }: { lead: Lead }) {
   const ctx = getWebsiteContext(lead);
 
   if (!ctx) {
+    // Don't declare "no website" until enrichment has actually checked
+    if (lead.enrichment_status === "pending" || lead.enrichment_status === "enriching") {
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Recherche...
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 text-xs text-red-500 font-medium">
         <GlobeOff className="h-3.5 w-3.5" />
