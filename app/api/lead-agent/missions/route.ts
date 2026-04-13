@@ -4,21 +4,28 @@ import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
 import { inngest } from "@/lib/inngest/client";
 
 export async function GET() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const orgId = await resolveOrgIdForUser(supabase, user.id);
+    const orgId = await resolveOrgIdForUser(supabase, user.id);
 
-  const { data: missions, error } = await supabase
-    .from("missions")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false })
-    .limit(50);
+    const { data: missions, error } = await supabase
+      .from("missions")
+      .select("*")
+      .eq("org_id", orgId)
+      .order("created_at", { ascending: false })
+      .limit(50);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ missions });
+    if (error) {
+      if (error.code === "42P01") return NextResponse.json({ missions: [] });
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ missions: missions || [] });
+  } catch {
+    return NextResponse.json({ missions: [] });
+  }
 }
 
 export async function POST(req: Request) {
