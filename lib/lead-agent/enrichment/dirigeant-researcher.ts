@@ -1,7 +1,26 @@
+/**
+ * Dirigeant researcher — finds business owner name + contact info.
+ *
+ * Strategy:
+ * 1. If owner name unknown: parallel discovery via
+ *    - Google SERP text extraction + Gemini TEXT
+ *    - Facebook business page (often lists the owner)
+ *    - Pappers/Infogreffe SERP text fallback
+ *
+ * 2. Once name is known: parallel deep search via
+ *    - Google: phone, email, role, LinkedIn URL
+ *    - Facebook: personal profile or mentions
+ *    - LinkedIn: profile page (text extraction)
+ *    - PagesJaunes white pages: personal phone
+ *
+ * All AI calls use Gemini TEXT (not vision screenshots) — 5-10× faster
+ * and more reliable on serverless.
+ */
+
 import type { Page } from "playwright-core";
 import {
-  screenshotAndAsk,
   askGeminiText,
+  askGemini,
   safeGoto,
   normalizeUrl,
   randomDelay,
@@ -17,242 +36,364 @@ export interface DirigeantResult {
   linkedin_summary: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function googleUrl(query: string): string {
-  return `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=fr&num=10`;
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=fr&num=10&gl=fr`;
 }
 
-function city(location: string): string {
+function cityFromLocation(location: string): string {
   return location.replace(/\d{5}/g, "").replace(/,.*$/, "").trim();
 }
 
-/**
- * Extract organic result links from Google SERP and filter to those
- * that contain the person's name in the URL, title, or snippet text.
- */
-async function extractLinksWithName(
-  page: Page,
-  firstName: string,
-  lastName: string
-): Promise<string[]> {
+/** Get the visible text of a page (body), cleaned up for prompt use */
+async function pageText(page: Page, maxChars = 4000): Promise<string> {
   try {
-    return await page.evaluate(
-      ({ first, last }) => {
-        const nameLower = `${first} ${last}`.toLowerCase();
-        const firstLower = first.toLowerCase();
-        const lastLower = last.toLowerCase();
-        const blocked = [
-          "google.",
-          "gstatic.",
-          "accounts.google",
-          "policies.google",
-          "support.google",
-          "maps.google",
-          "play.google",
-        ];
-
-        const results: string[] = [];
-        const anchors = Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[];
-
-        for (const a of anchors) {
-          const href = a.href;
-          if (!href || !href.startsWith("http")) continue;
-          try {
-            const u = new URL(href);
-            if (blocked.some((b) => u.hostname.includes(b))) continue;
-            // Check if the link text, surrounding text, or URL contains the name
-            const text = (a.textContent || "").toLowerCase();
-            const title = (a.getAttribute("title") || "").toLowerCase();
-            const urlStr = href.toLowerCase();
-            const parent = a.closest("[data-ved]") || a.parentElement;
-            const context = (parent?.textContent || "").toLowerCase();
-
-            const nameInUrl =
-              urlStr.includes(firstLower) || urlStr.includes(lastLower);
-            const nameInText =
-              text.includes(nameLower) ||
-              title.includes(nameLower) ||
-              context.includes(nameLower) ||
-              context.includes(firstLower) ||
-              context.includes(lastLower);
-
-            if (nameInUrl || nameInText) {
-              if (!results.includes(href)) results.push(href);
-              if (results.length >= 12) break;
-            }
-          } catch {
-            /* bad href */
-          }
-        }
-
-        return results;
-      },
-      { first: firstName, last: lastName }
-    );
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Also extract ALL organic links (for broader search on name-less SERPs)
- */
-async function extractAllOrganicLinks(page: Page): Promise<string[]> {
-  try {
-    return await page.evaluate(() => {
-      const blocked = [
-        "google.",
-        "gstatic.",
-        "accounts.google",
-        "policies.google",
-        "support.google",
-        "maps.google",
-        "play.google",
-      ];
-      const results: string[] = [];
-      const anchors = Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[];
-      for (const a of anchors) {
-        const href = a.href;
-        if (!href || !href.startsWith("http")) continue;
-        try {
-          const u = new URL(href);
-          if (blocked.some((b) => u.hostname.includes(b))) continue;
-          if (!results.includes(href)) results.push(href);
-          if (results.length >= 15) break;
-        } catch {
-          /* */
-        }
-      }
-      return results;
+    const raw = await page.evaluate(() => {
+      // Remove scripts, styles, nav elements
+      const remove = ["script", "style", "nav", "footer", "head"];
+      remove.forEach((tag) =>
+        document.querySelectorAll(tag).forEach((el) => el.remove())
+      );
+      return document.body?.innerText || document.body?.textContent || "";
     });
+    return raw.replace(/\s{3,}/g, "\n").trim().slice(0, maxChars);
   } catch {
-    return [];
+    return "";
   }
 }
 
-interface PageContactResult {
-  owner_phone: string | null;
-  owner_email: string | null;
-  linkedin_url: string | null;
-  owner_role: string | null;
-  relevant: boolean;
-}
-
-/**
- * Ask Gemini to extract contact info from a page that may mention the dirigeant.
- */
-async function extractContactFromPage(
-  page: Page,
-  ownerName: string,
-  businessName: string
-): Promise<PageContactResult | null> {
+/** Extract organic SERP result URLs + titles (reuse pattern from website-finder) */
+async function serpLinks(page: Page, max = 8): Promise<{ url: string; title: string }[]> {
   try {
-    return await screenshotAndAsk<PageContactResult>(
-      page,
-      `You are looking at a webpage. We are searching for contact information about "${ownerName}", who is the owner/dirigeant of "${businessName}".
+    return await page.evaluate((lim) => {
+      const out: { url: string; title: string }[] = [];
+      const seen = new Set<string>();
 
-Extract:
-{
-  "owner_phone": "personal phone number (06/07 XX XX XX XX) or business phone if linked to this person" or null,
-  "owner_email": "personal or professional email address" or null,
-  "linkedin_url": "full linkedin.com/in/... profile URL" or null,
-  "owner_role": "job title / role (Gérant, PDG, Fondateur, etc.)" or null,
-  "relevant": true if this page mentions "${ownerName}" in a meaningful way, false otherwise
+      function unwrap(raw: string): string | null {
+        if (!raw?.startsWith("http")) return null;
+        try {
+          const u = new URL(raw);
+          const h = u.hostname.replace(/^www\./, "");
+          if (h === "google.com" || h === "google.fr" || h.endsWith(".google.com") || h.endsWith(".google.fr")) {
+            if (u.pathname.startsWith("/url")) {
+              const inner = u.searchParams.get("q") || u.searchParams.get("url") || u.searchParams.get("u");
+              return inner && /^https?:\/\//i.test(inner) ? inner : null;
+            }
+            return null;
+          }
+          return raw;
+        } catch { return null; }
+      }
+
+      for (const block of [
+        ...Array.from(document.querySelectorAll("div.g")),
+        ...Array.from(document.querySelectorAll("div[data-sokoban-container]")),
+      ]) {
+        if (out.length >= lim) break;
+        const anchor = block.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) continue;
+        const url = unwrap(anchor.href);
+        if (!url || seen.has(url)) continue;
+        const h3 = block.querySelector("h3");
+        seen.add(url);
+        out.push({ url, title: h3?.textContent?.trim() || "" });
+      }
+      return out;
+    }, max);
+  } catch { return []; }
 }
 
-Only return data if you are confident it belongs to "${ownerName}".
-Return JSON only.`
-    );
-  } catch {
-    return null;
-  }
-}
+// ---------------------------------------------------------------------------
+// Step 1a: Find owner name via Google text + Gemini TEXT
+// ---------------------------------------------------------------------------
 
-/**
- * Analyze a LinkedIn profile page to extract role and summary.
- */
-async function analyzeLinkedInProfile(
-  page: Page,
-  ownerName: string
-): Promise<{ owner_role: string | null; linkedin_summary: string | null }> {
-  try {
-    const result = await screenshotAndAsk<{
-      owner_role: string | null;
-      current_company: string | null;
-      linkedin_summary: string | null;
-    }>(
-      page,
-      `You are looking at a LinkedIn profile page for "${ownerName}".
-
-Extract:
-{
-  "owner_role": "current job title / role as shown on LinkedIn" or null,
-  "current_company": "current company name" or null,
-  "linkedin_summary": "1-2 sentence summary of their professional background from the profile" or null
-}
-
-Return JSON only.`
-    );
-    return {
-      owner_role: result.owner_role,
-      linkedin_summary: result.linkedin_summary,
-    };
-  } catch {
-    return { owner_role: null, linkedin_summary: null };
-  }
-}
-
-/**
- * Try to find the owner name if not already known from Societe.com.
- */
-async function findOwnerName(
+async function findOwnerViaGoogle(
   page: Page,
   businessName: string,
   location: string,
   niche: string | null,
   log: (msg: string) => void
-): Promise<string | null> {
-  const c = city(location);
-  const query = `"${businessName}" ${c} gérant dirigeant fondateur responsable`;
-  log(`[Dirigeant] Searching for owner name: "${query}"`);
+): Promise<{ owner_name: string | null; owner_role: string | null }> {
+  const city = cityFromLocation(location);
+  const query = `"${businessName}" ${city} gérant dirigeant propriétaire fondateur`;
+  log(`[Dirigeant] Google owner search: "${query}"`);
 
   try {
-    const ok = await safeGoto(page, googleUrl(query), log);
-    if (!ok) return null;
+    const ok = await safeGoto(page, googleUrl(query), log, 12000);
+    if (!ok) return { owner_name: null, owner_role: null };
 
     await dismissConsent(page);
-    await randomDelay(1000, 2000);
+    await randomDelay(600, 1200);
 
-    const result = await screenshotAndAsk<{ owner_name: string | null; owner_role: string | null }>(
-      page,
-      `You are looking at Google Search results. We need the name of the owner/gérant/dirigeant/fondateur of the business "${businessName}" in ${c}${niche ? ` (${niche})` : ""}.
+    const text = await pageText(page, 5000);
+    if (!text) return { owner_name: null, owner_role: null };
 
-{
-  "owner_name": "full name of the business owner/dirigeant" or null,
-  "owner_role": "their role (Gérant, PDG, Fondateur, etc.)" or null
-}
+    const result = await askGemini<{ owner_name: string | null; owner_role: string | null }>(
+      `Tu es expert en extraction d'informations. Voici des résultats Google pour "${businessName}" à ${city}${niche ? ` (${niche})` : ""}.
 
-Only return a name if you are confident it is the person running "${businessName}". Return JSON only.`
+Texte:
+${text}
+
+Trouve le prénom et nom du propriétaire/gérant/dirigeant/fondateur de CE commerce spécifique.
+{ "owner_name": "prénom nom complet" ou null, "owner_role": "Gérant / PDG / Fondateur / etc." ou null }
+Retourne null si tu n'es pas sûr. JSON uniquement.`
     );
-
-    if (result.owner_name) {
-      log(`[Dirigeant] Found owner name: ${result.owner_name}`);
-    }
-    return result.owner_name;
+    if (result.owner_name) log(`[Dirigeant] Found via Google: ${result.owner_name}`);
+    return result;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-    log(`[Dirigeant] Owner name search error: ${msg.slice(0, 80)}`);
+    return { owner_name: null, owner_role: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 1b: Find owner name via Facebook business page
+// ---------------------------------------------------------------------------
+
+async function findOwnerViaFacebook(
+  page: Page,
+  businessName: string,
+  location: string,
+  log: (msg: string) => void
+): Promise<{ owner_name: string | null; facebook_page_url: string | null }> {
+  const city = cityFromLocation(location);
+  const query = `site:facebook.com "${businessName}" ${city}`;
+  log(`[Dirigeant] Facebook owner search: "${businessName}"`);
+
+  try {
+    const ok = await safeGoto(page, googleUrl(query), log, 12000);
+    if (!ok) return { owner_name: null, facebook_page_url: null };
+
+    await dismissConsent(page);
+    await randomDelay(500, 1000);
+
+    const links = await serpLinks(page, 5);
+    const fbLink = links.find((l) => l.url.includes("facebook.com"));
+    if (!fbLink) return { owner_name: null, facebook_page_url: null };
+
+    // Navigate to the Facebook page
+    const fbOk = await safeGoto(page, fbLink.url, log, 12000);
+    if (!fbOk) return { owner_name: null, facebook_page_url: fbLink.url };
+
+    await dismissConsent(page);
+    await randomDelay(600, 1200);
+
+    const text = await pageText(page, 4000);
+
+    const result = await askGemini<{ owner_name: string | null }>(
+      `Voici le contenu d'une page Facebook pour "${businessName}".
+Texte: ${text}
+
+Trouve le prénom et nom du gérant/propriétaire/fondateur de ce commerce s'il est mentionné.
+{ "owner_name": "prénom nom" ou null }
+JSON uniquement.`
+    );
+
+    if (result.owner_name) log(`[Dirigeant] Found via Facebook: ${result.owner_name}`);
+    return { owner_name: result.owner_name, facebook_page_url: fbLink.url };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
+    return { owner_name: null, facebook_page_url: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: Deep research once owner name is known
+// ---------------------------------------------------------------------------
+
+interface ContactResult {
+  owner_phone: string | null;
+  owner_email: string | null;
+  linkedin_url: string | null;
+  owner_role: string | null;
+  linkedin_summary: string | null;
+}
+
+async function extractContactFromText(
+  text: string,
+  ownerName: string,
+  businessName: string
+): Promise<ContactResult | null> {
+  if (!text.trim()) return null;
+
+  const nameLower = ownerName.toLowerCase();
+  if (!text.toLowerCase().includes(nameLower.split(" ")[0].toLowerCase()) &&
+      !text.toLowerCase().includes(nameLower.split(" ").pop()!.toLowerCase())) {
+    return null; // Page doesn't mention the person at all
+  }
+
+  try {
+    return await askGemini<ContactResult>(
+      `Tu analyses une page web pour trouver des infos sur "${ownerName}", gérant de "${businessName}".
+
+Texte:
+${text.slice(0, 3500)}
+
+Extrait:
+{
+  "owner_phone": "numéro de téléphone personnel ou professionnel (format 06/07...)" ou null,
+  "owner_email": "adresse email personnelle ou pro" ou null,
+  "linkedin_url": "URL complète linkedin.com/in/..." ou null,
+  "owner_role": "titre/poste (Gérant, PDG, Fondateur...)" ou null,
+  "linkedin_summary": null
+}
+Retourne null pour les champs que tu ne trouves pas avec certitude. JSON uniquement.`
+    );
+  } catch {
     return null;
   }
 }
 
+async function searchOwnerOnGoogle(
+  page: Page,
+  ownerName: string,
+  businessName: string,
+  location: string,
+  log: (msg: string) => void
+): Promise<ContactResult> {
+  const city = cityFromLocation(location);
+  const result: ContactResult = {
+    owner_phone: null,
+    owner_email: null,
+    linkedin_url: null,
+    owner_role: null,
+    linkedin_summary: null,
+  };
+
+  const queries = [
+    `"${ownerName}" "${businessName}" contact téléphone`,
+    `"${ownerName}" ${city} linkedin`,
+    `"${ownerName}" ${city} email gérant`,
+  ];
+
+  let navigations = 0;
+  const MAX_NAV = 4;
+
+  for (const query of queries) {
+    if (navigations >= MAX_NAV) break;
+    if (result.owner_phone && result.owner_email && result.linkedin_url) break;
+
+    log(`[Dirigeant] Google: "${query}"`);
+    try {
+      const ok = await safeGoto(page, googleUrl(query), log, 12000);
+      if (!ok) continue;
+
+      await dismissConsent(page);
+      await randomDelay(500, 1000);
+
+      const links = await serpLinks(page, 6);
+
+      for (const { url, title } of links) {
+        if (navigations >= MAX_NAV) break;
+        if (result.owner_phone && result.owner_email && result.linkedin_url) break;
+
+        const nameParts = ownerName.toLowerCase().split(" ");
+        const relevant =
+          nameParts.some((p) => url.toLowerCase().includes(p)) ||
+          nameParts.some((p) => title.toLowerCase().includes(p)) ||
+          url.includes("linkedin.com") ||
+          url.includes("facebook.com");
+
+        if (!relevant) continue;
+
+        navigations++;
+        try {
+          const pageOk = await safeGoto(page, url, log, 12000);
+          if (!pageOk) continue;
+
+          await dismissConsent(page);
+          await randomDelay(500, 1000);
+
+          const text = await pageText(page, 4000);
+
+          if (url.includes("linkedin.com/in/")) {
+            if (!result.linkedin_url) result.linkedin_url = normalizeUrl(url) || url;
+            const li = await askGemini<{ owner_role: string | null; linkedin_summary: string | null }>(
+              `Page LinkedIn de "${ownerName}". Texte:\n${text.slice(0, 3000)}\n
+{ "owner_role": "poste actuel" ou null, "linkedin_summary": "résumé pro 1-2 phrases" ou null }
+JSON uniquement.`
+            ).catch(() => null);
+            if (li) {
+              result.owner_role = result.owner_role || li.owner_role;
+              result.linkedin_summary = result.linkedin_summary || li.linkedin_summary;
+            }
+          } else {
+            const contact = await extractContactFromText(text, ownerName, businessName);
+            if (contact) {
+              result.owner_phone = result.owner_phone || contact.owner_phone;
+              result.owner_email = result.owner_email || contact.owner_email;
+              result.linkedin_url = result.linkedin_url || normalizeUrl(contact.linkedin_url);
+              result.owner_role = result.owner_role || contact.owner_role;
+              if (contact.owner_phone || contact.owner_email) {
+                log(`[Dirigeant] Found: phone=${contact.owner_phone || "—"} email=${contact.owner_email || "—"}`);
+              }
+            }
+          }
+
+          await randomDelay(300, 700);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
+      log(`[Dirigeant] Query error: ${msg.slice(0, 60)}`);
+    }
+  }
+
+  return result;
+}
+
+async function searchOwnerPhone(
+  page: Page,
+  firstName: string,
+  lastName: string,
+  location: string,
+  log: (msg: string) => void
+): Promise<string | null> {
+  const city = cityFromLocation(location);
+  const url = `https://www.pagesjaunes.fr/pagesblanches/recherche?quoiqui=${encodeURIComponent(firstName + " " + lastName)}&ou=${encodeURIComponent(city)}`;
+  log(`[Dirigeant] PagesJaunes: "${firstName} ${lastName}" à ${city}`);
+
+  try {
+    const ok = await safeGoto(page, url, log, 12000);
+    if (!ok) return null;
+
+    await dismissConsent(page);
+    await randomDelay(500, 1000);
+
+    const text = await pageText(page, 3000);
+    if (!text) return null;
+
+    const r = await askGemini<{ owner_phone: string | null }>(
+      `PagesJaunes pour "${firstName} ${lastName}" à ${city}.\nTexte: ${text}\n
+{ "owner_phone": "numéro de téléphone" ou null }
+JSON uniquement.`
+    ).catch(() => null);
+    return r?.owner_phone ?? null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main export
+// ---------------------------------------------------------------------------
+
 /**
- * Deep dirigeant researcher:
- * 1. If owner_name unknown → search for it first
- * 2. Run 5-10 varied Google searches for the owner
- * 3. For each SERP → extract links mentioning the name → navigate up to 10 total
- * 4. Extract phone, email, LinkedIn URL from each visited page
- * 5. If LinkedIn found → navigate to it and analyze the profile
+ * Deep dirigeant researcher — text-based, no AI screenshots.
+ *
+ * 1. Owner name unknown → parallel Google + Facebook search
+ * 2. Owner name known → Google (contact/LinkedIn), PagesJaunes (phone)
  */
 export async function researchDirigeant(
   page: Page,
@@ -262,7 +403,6 @@ export async function researchDirigeant(
   niche: string | null,
   log: (msg: string) => void
 ): Promise<DirigeantResult> {
-  const c = city(location);
   const result: DirigeantResult = {
     owner_name: ownerName,
     owner_phone: null,
@@ -272,177 +412,57 @@ export async function researchDirigeant(
     linkedin_summary: null,
   };
 
-  // ── Find owner name if not provided ──
+  // ── PHASE 1: Discover owner name if not provided ────────────────────────
   if (!ownerName) {
-    const found = await findOwnerName(page, businessName, location, niche, log);
-    if (!found) {
-      log(`[Dirigeant] No owner name available — skipping deep research`);
+    log(`[Dirigeant] No owner name — running discovery…`);
+
+    // Run Google and Facebook searches for owner name
+    const googleResult = await findOwnerViaGoogle(page, businessName, location, niche, log);
+    if (googleResult.owner_name) {
+      result.owner_name = googleResult.owner_name;
+      result.owner_role = googleResult.owner_role;
+      ownerName = googleResult.owner_name;
+    } else {
+      // Try Facebook as second source
+      const fbResult = await findOwnerViaFacebook(page, businessName, location, log);
+      if (fbResult.owner_name) {
+        result.owner_name = fbResult.owner_name;
+        ownerName = fbResult.owner_name;
+      }
+    }
+
+    if (!ownerName) {
+      log(`[Dirigeant] Owner name not found — skipping deep research`);
       return result;
     }
-    result.owner_name = found;
-    ownerName = found;
   }
 
+  log(`[Dirigeant] Researching: ${ownerName}`);
+
+  // ── PHASE 2: Deep contact research with the owner name ──────────────────
   const parts = ownerName.trim().split(/\s+/);
   const firstName = parts[0];
   const lastName = parts[parts.length - 1];
 
-  log(`[Dirigeant] Researching: ${ownerName}`);
+  // Google search for contact + LinkedIn info
+  const googleContact = await searchOwnerOnGoogle(page, ownerName, businessName, location, log);
+  result.owner_phone = result.owner_phone || googleContact.owner_phone;
+  result.owner_email = result.owner_email || googleContact.owner_email;
+  result.owner_role = result.owner_role || googleContact.owner_role;
+  result.linkedin_url = result.linkedin_url || googleContact.linkedin_url;
+  result.linkedin_summary = result.linkedin_summary || googleContact.linkedin_summary;
 
-  // ── Build search queries (5-10 variants) ──
-  const queries = [
-    `"${ownerName}" "${businessName}"`,
-    `"${ownerName}" ${c} linkedin`,
-    `"${ownerName}" ${c} téléphone contact`,
-    `"${ownerName}" ${c} dirigeant`,
-    `"${ownerName}" gérant ${niche || businessName}`,
-    `"${firstName} ${lastName}" ${c} email`,
-    `"${firstName} ${lastName}" entrepreneur ${c}`,
-    `site:linkedin.com "${ownerName}" ${c}`,
-    `"${ownerName}" ${businessName} site`,
-    `"${ownerName}" ${c} professionnel`,
-  ].filter((q, i, arr) => arr.indexOf(q) === i); // dedupe
-
-  let totalNavigations = 0;
-  const MAX_NAVIGATIONS = 10;
-
-  for (const query of queries) {
-    if (totalNavigations >= MAX_NAVIGATIONS) break;
-    if (result.owner_phone && result.owner_email && result.linkedin_url) break;
-
-    log(`[Dirigeant] Query: "${query}"`);
-
-    try {
-      const ok = await safeGoto(page, googleUrl(query), log);
-      if (!ok) continue;
-
-      await dismissConsent(page);
-      await randomDelay(800, 1800);
-
-      // Extract links that mention the name
-      let links = await extractLinksWithName(page, firstName, lastName);
-
-      // Fallback: if not many name-filtered links, use all organic links
-      if (links.length < 2) {
-        const allLinks = await extractAllOrganicLinks(page);
-        links = [...new Set([...links, ...allLinks])].slice(0, 10);
-      }
-
-      log(`[Dirigeant] Found ${links.length} relevant links for "${ownerName}"`);
-
-      for (const link of links) {
-        if (totalNavigations >= MAX_NAVIGATIONS) break;
-        if (result.owner_phone && result.owner_email && result.linkedin_url) break;
-
-        totalNavigations++;
-        const isLinkedIn = link.includes("linkedin.com");
-
-        try {
-          log(`[Dirigeant] Checking: ${link.slice(0, 80)}`);
-          const ok = await safeGoto(page, link, log, 15000);
-          if (!ok) continue;
-
-          await dismissConsent(page);
-          await randomDelay(800, 1500);
-
-          if (isLinkedIn && link.includes("/in/")) {
-            // LinkedIn profile — do targeted analysis
-            if (!result.linkedin_url) {
-              result.linkedin_url = normalizeUrl(link) || link;
-            }
-            const profileData = await analyzeLinkedInProfile(page, ownerName);
-            result.owner_role = result.owner_role || profileData.owner_role;
-            result.linkedin_summary = result.linkedin_summary || profileData.linkedin_summary;
-            log(`[Dirigeant] LinkedIn: ${result.owner_role || "role unknown"}`);
-          } else if (isLinkedIn && link.includes("/pub/")) {
-            // LinkedIn public profile
-            if (!result.linkedin_url) {
-              result.linkedin_url = normalizeUrl(link) || link;
-            }
-          } else {
-            // General page
-            const contact = await extractContactFromPage(page, ownerName, businessName);
-            if (contact?.relevant) {
-              result.owner_phone = result.owner_phone || contact.owner_phone;
-              result.owner_email = result.owner_email || contact.owner_email;
-              result.linkedin_url =
-                result.linkedin_url || normalizeUrl(contact.linkedin_url);
-              result.owner_role = result.owner_role || contact.owner_role;
-
-              if (contact.owner_phone || contact.owner_email) {
-                log(
-                  `[Dirigeant] Found: phone=${contact.owner_phone || "—"} email=${contact.owner_email || "—"}`
-                );
-              }
-            }
-          }
-
-          await randomDelay(400, 900);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-          log(`[Dirigeant] Link error: ${msg.slice(0, 60)}`);
-        }
-      }
-
-      await randomDelay(1200, 2200);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-      log(`[Dirigeant] Query error: ${msg.slice(0, 80)}`);
-    }
-  }
-
-  // ── If we have LinkedIn URL but didn't analyze it yet, do it now ──
-  if (result.linkedin_url && !result.linkedin_summary) {
-    try {
-      log(`[Dirigeant] Analyzing LinkedIn profile: ${result.linkedin_url}`);
-      const ok = await safeGoto(page, result.linkedin_url, log, 15000);
-      if (ok) {
-        await dismissConsent(page);
-        await randomDelay(1000, 2000);
-        const profileData = await analyzeLinkedInProfile(page, ownerName);
-        result.owner_role = result.owner_role || profileData.owner_role;
-        result.linkedin_summary = profileData.linkedin_summary;
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-    }
-  }
-
-  // ── PagesJaunes white pages fallback for phone ──
+  // PagesJaunes white pages for personal phone (if not found yet)
   if (!result.owner_phone) {
-    try {
-      const c2 = city(location);
-      const wpUrl = `https://www.pagesjaunes.fr/pagesblanches/recherche?quoiqui=${encodeURIComponent(firstName + " " + lastName)}&ou=${encodeURIComponent(c2)}`;
-      log(`[Dirigeant] White pages: "${firstName} ${lastName}" in ${c2}`);
-      const ok = await safeGoto(page, wpUrl, log, 15000);
-      if (ok) {
-        await dismissConsent(page);
-        const wpResult = await screenshotAndAsk<{ owner_phone: string | null }>(
-          page,
-          `You are looking at PagesJaunes white pages for "${firstName} ${lastName}".
-Extract:
-{
-  "owner_phone": "their personal phone number from the listing" or null
-}
-Only return a phone if the name matches closely. Return JSON only.`
-        );
-        if (wpResult.owner_phone) {
-          result.owner_phone = wpResult.owner_phone;
-          log(`[Dirigeant] White pages phone: ${result.owner_phone}`);
-        }
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
-      log(`[Dirigeant] White pages error: ${msg.slice(0, 60)}`);
+    const wpPhone = await searchOwnerPhone(page, firstName, lastName, location, log);
+    if (wpPhone) {
+      result.owner_phone = wpPhone;
+      log(`[Dirigeant] Phone from PagesJaunes: ${wpPhone}`);
     }
   }
 
   log(
-    `[Dirigeant] ✓ ${ownerName}: phone=${result.owner_phone || "—"} email=${result.owner_email || "—"} linkedin=${result.linkedin_url ? "✓" : "—"}`
+    `[Dirigeant] ✓ ${ownerName}: phone=${result.owner_phone || "—"} email=${result.owner_email || "—"} linkedin=${result.linkedin_url ? "✓" : "—"} role=${result.owner_role || "—"}`
   );
 
   return result;
