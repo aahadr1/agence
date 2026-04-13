@@ -29,6 +29,7 @@ import { researchDirigeant } from "./enrichment/dirigeant-researcher";
 import { analyzeProspect } from "./enrichment/prospect-analyzer";
 import { searchOwnerPhone } from "./enrichment/owner-search";
 import { searchSocieteCom } from "./sources/societe-com";
+import { searchSocieteComApi, hasSocieteComApiKey } from "./sources/societe-com-api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -499,17 +500,16 @@ export async function runSixStepEnrichment(
       });
     }
 
-    // ── STEP 3: Legal Data (Pappers API + Societe.com) — PARALLEL ─────────
-    log(`\n[Step 3/6] Legal Data (Pappers + Societe.com in parallel)...`);
+    // ── STEP 3: Legal Data — Pappers API + Societe.com API in parallel, then
+    // browser scrape only if no API key or Societe API did not return a person dirigeant
+    log(`\n[Step 3/6] Legal Data (Pappers + Societe.com API in parallel)...`);
 
-    const [pappers, societe] = await Promise.all([
+    const [pappers, societeApi] = await Promise.all([
       searchPappersApi(lead.business_name, location, log),
-      runStep("legal_data", STEP_TIMEOUT_LONG, (page) =>
-        searchSocieteCom(page, lead.business_name, location, lead.address, log)
-      ),
+      searchSocieteComApi(lead.business_name, location, log),
     ]);
 
-    // Merge: Pappers takes priority, Societe.com fills gaps
+    // Merge: Pappers first, Societe.com API fills gaps (esp. dirigeant PP when Pappers has none)
     if (pappers) {
       lead.owner_name = lead.owner_name || pappers.owner_name;
       lead.owner_role = lead.owner_role || pappers.owner_role;
@@ -519,18 +519,48 @@ export async function runSixStepEnrichment(
       lead.employee_count = lead.employee_count || pappers.employee_count;
       lead.address = lead.address || pappers.address;
     }
-    if (societe) {
-      lead.owner_name = lead.owner_name || societe.owner_name;
-      lead.owner_role = lead.owner_role || societe.owner_role;
-      lead.siren = lead.siren || societe.siren;
-      lead.company_type = lead.company_type || societe.company_type;
-      lead.creation_date = lead.creation_date || societe.creation_date;
-      lead.employee_count = lead.employee_count || societe.employee_count;
-      lead.address = lead.address || societe.address;
-      lead.revenue_bracket = lead.revenue_bracket || societe.revenue_bracket;
-      if (societe.website_url && !lead.website_url) {
-        lead.website_url = societe.website_url;
+    if (societeApi) {
+      lead.owner_name = lead.owner_name || societeApi.owner_name;
+      lead.owner_role = lead.owner_role || societeApi.owner_role;
+      lead.siren = lead.siren || societeApi.siren;
+      lead.company_type = lead.company_type || societeApi.company_type;
+      lead.creation_date = lead.creation_date || societeApi.creation_date;
+      lead.employee_count = lead.employee_count || societeApi.employee_count;
+      lead.address = lead.address || societeApi.address;
+      lead.revenue_bracket = lead.revenue_bracket || societeApi.revenue_bracket;
+      if (societeApi.website_url && !lead.website_url) {
+        lead.website_url = societeApi.website_url;
         lead.has_website = true;
+      }
+      if (societeApi.naf_code || societeApi.capital) {
+        lead.enrichment_data = {
+          ...lead.enrichment_data,
+          naf_code: (lead.enrichment_data?.naf_code as string) || societeApi.naf_code,
+          capital: (lead.enrichment_data?.capital as string) || societeApi.capital,
+        };
+      }
+    }
+
+    const needSocieteBrowser =
+      !hasSocieteComApiKey() || !societeApi?.owner_name?.trim();
+
+    if (needSocieteBrowser) {
+      const societeBrowser = await runStep("legal_data", STEP_TIMEOUT_LONG, (page) =>
+        searchSocieteCom(page, lead.business_name, location, lead.address, log)
+      );
+      if (societeBrowser) {
+        lead.owner_name = lead.owner_name || societeBrowser.owner_name;
+        lead.owner_role = lead.owner_role || societeBrowser.owner_role;
+        lead.siren = lead.siren || societeBrowser.siren;
+        lead.company_type = lead.company_type || societeBrowser.company_type;
+        lead.creation_date = lead.creation_date || societeBrowser.creation_date;
+        lead.employee_count = lead.employee_count || societeBrowser.employee_count;
+        lead.address = lead.address || societeBrowser.address;
+        lead.revenue_bracket = lead.revenue_bracket || societeBrowser.revenue_bracket;
+        if (societeBrowser.website_url && !lead.website_url) {
+          lead.website_url = societeBrowser.website_url;
+          lead.has_website = true;
+        }
       }
     }
 
@@ -697,10 +727,11 @@ export async function runEnrichmentPhaseA(
   location: string,
   log: (msg: string) => void = console.log
 ): Promise<LeadResult> {
-  log(`[Phase A] Pappers API + HTTP check + PageSpeed...`);
+  log(`[Phase A] Pappers + Societe.com API + HTTP check + PageSpeed...`);
 
-  const [pappers, httpCheck, ps] = await Promise.all([
+  const [pappers, societeApi, httpCheck, ps] = await Promise.all([
     searchPappersApi(lead.business_name, location, log),
+    searchSocieteComApi(lead.business_name, location, log),
     lead.has_website && lead.website_url
       ? quickHttpCheck(lead.website_url, log)
       : Promise.resolve(null),
@@ -709,7 +740,7 @@ export async function runEnrichmentPhaseA(
       : Promise.resolve(null),
   ]);
 
-  // Merge Pappers data — this is the primary source for legal/owner info
+  // Merge Pappers data — primary source for legal/owner info
   if (pappers) {
     record(lead, "pappers_api", pappers);
     lead.owner_name = lead.owner_name || pappers.owner_name;
@@ -719,7 +750,6 @@ export async function runEnrichmentPhaseA(
     lead.creation_date = lead.creation_date || pappers.creation_date;
     lead.employee_count = lead.employee_count || pappers.employee_count;
     lead.address = lead.address || pappers.address;
-    // Store NAF code and capital in enrichment_data
     if (pappers.naf_code || pappers.capital) {
       lead.enrichment_data = {
         ...lead.enrichment_data,
@@ -729,6 +759,27 @@ export async function runEnrichmentPhaseA(
     }
   } else {
     record(lead, "pappers_api", null, "no_match");
+  }
+
+  // Societe.com API — fills dirigeant when Pappers search has no PP data
+  if (societeApi) {
+    record(lead, "societe_api", societeApi);
+    lead.owner_name = lead.owner_name || societeApi.owner_name;
+    lead.owner_role = lead.owner_role || societeApi.owner_role;
+    lead.siren = lead.siren || societeApi.siren;
+    lead.company_type = lead.company_type || societeApi.company_type;
+    lead.creation_date = lead.creation_date || societeApi.creation_date;
+    lead.employee_count = lead.employee_count || societeApi.employee_count;
+    lead.address = lead.address || societeApi.address;
+    if (societeApi.naf_code || societeApi.capital) {
+      lead.enrichment_data = {
+        ...lead.enrichment_data,
+        naf_code: (lead.enrichment_data?.naf_code as string) || societeApi.naf_code,
+        capital: (lead.enrichment_data?.capital as string) || societeApi.capital,
+      };
+    }
+  } else if (hasSocieteComApiKey()) {
+    record(lead, "societe_api", null, "no_match");
   }
 
   // Merge HTTP check
