@@ -418,18 +418,19 @@ export async function findWebsite(
     }
   }
 
-  // ── STEP 2: Three Google search variations × 10 links ──────────────────────
+  // ── STEP 2: Google search — 2 queries, fast title/domain matching ─────────
+  // Most businesses are found in the first query. The second is a backup.
+  // No AI screenshots — only title/domain heuristics + HTTP alive.
 
   const queries = [
     `${businessName} ${city}`,
-    `"${businessName}" ${city} site web`,
-    `${businessName} ${city} contact`,
+    `"${businessName}" ${city} site officiel`,
   ];
 
-  const LINKS_PER_QUERY = 10; // 3 × 10 = 30 total candidates
-  const visitedDomains = new Set<string>(); // avoid visiting same domain twice
+  const LINKS_PER_QUERY = 10;
+  const visitedDomains = new Set<string>();
   let ownedDomainVisits = 0;
-  const MAX_OWNED_VISITS = 12; // cap browser navigations
+  const MAX_OWNED_VISITS = 5; // max Playwright navigations (title/domain fast-paths don't count)
 
   for (const query of queries) {
     log(`[WebFinder] 🔍 Query: "${query}"`);

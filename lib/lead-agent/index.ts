@@ -303,7 +303,11 @@ export async function runDiscovery(
 // NEW 6-Step enrichment pipeline (worker-friendly with intermediate saves)
 // ---------------------------------------------------------------------------
 
-const STEP_TIMEOUT_LONG = 120_000; // 2 min per step for deep research
+// Vercel serverless max = 300s. With 6 steps we need tight per-step budgets.
+// Step 1 (website finder) is now fast (no AI screenshots) so 45s is plenty.
+// Browser-heavy steps (dirigeant, societe.com) get 60s each.
+const STEP_TIMEOUT_FAST = 45_000;  // website finder, website analysis
+const STEP_TIMEOUT_LONG = 60_000;  // browser-heavy research steps
 
 /**
  * Structured 6-step lead enrichment pipeline.
@@ -326,6 +330,9 @@ export async function runSixStepEnrichment(
   onStepComplete?: OnStepComplete
 ): Promise<LeadResult> {
   log(`\n═══ 6-Step Enrichment: ${lead.business_name} (${location}) ═══`);
+
+  // Hard deadline: save 15s buffer before Vercel kills us (maxDuration=300s)
+  const HARD_DEADLINE = Date.now() + 270_000;
 
   lead.enrichment_data = { ...(lead.enrichment_data || {}), research_steps: {} };
 
@@ -366,15 +373,23 @@ export async function runSixStepEnrichment(
     timeoutMs: number,
     fn: (page: Page) => Promise<T | null>
   ): Promise<T | null> {
+    // Check hard deadline — skip step if we're running out of time
+    const remaining = HARD_DEADLINE - Date.now();
+    if (remaining < 10_000) {
+      log(`[${stepName}] ⏱ skipped — only ${Math.round(remaining / 1000)}s left`);
+      return null;
+    }
+    const effectiveTimeout = Math.min(timeoutMs, remaining - 5000);
+
     const page = await getPage();
     try {
       return await Promise.race([
         fn(page),
         new Promise<null>((resolve) =>
           setTimeout(() => {
-            log(`[${stepName}] ⏱ timeout (${timeoutMs / 1000}s)`);
+            log(`[${stepName}] ⏱ timeout (${Math.round(effectiveTimeout / 1000)}s)`);
             resolve(null);
-          }, timeoutMs)
+          }, effectiveTimeout)
         ),
       ]);
     } catch (e) {
@@ -410,7 +425,7 @@ export async function runSixStepEnrichment(
   try {
     // ── STEP 1: Website Finder ─────────────────────────────────────────────
     log(`\n[Step 1/6] Website Finder...`);
-    const websiteResult = await runStep("website_finder", STEP_TIMEOUT_LONG, (page) =>
+    const websiteResult = await runStep("website_finder", STEP_TIMEOUT_FAST, (page) =>
       findWebsite(page, lead.business_name, location, lead.website_url, log, lead.google_maps_url)
     );
 
@@ -450,7 +465,7 @@ export async function runSixStepEnrichment(
         if (!httpResult.is_alive) lead.website_quality = "dead";
       }
 
-      const webResult = await runStep("website_analysis", STEP_TIMEOUT_LONG, (page) =>
+      const webResult = await runStep("website_analysis", STEP_TIMEOUT_FAST, (page) =>
         deepCheckWebsite(page, lead.website_url!, lead.business_name, log)
       );
 
