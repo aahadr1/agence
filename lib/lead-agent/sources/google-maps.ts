@@ -23,6 +23,7 @@ export interface MapsLead {
 interface DetailFields {
   phone: string | null;
   website: string | null;
+  allWebsites: string[];
   address: string | null;
   rating: string | null;
   reviewCount: string | null;
@@ -68,70 +69,59 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
     }
 
     // ── Website ─────────────────────────────────────────────────────────────
-    // Strategy: cascade through progressively less-specific selectors.
-    // We collect the HREF and let the caller filter platform URLs.
-    let website: string | null = null;
+    // Collect ALL candidate website hrefs, then let the caller pick the best one.
+    const websiteCandidates: string[] = [];
 
-    // 1. Structured data-item-id (historical Maps API)
-    const dataSelectors = [
+    const addCandidate = (href: string | null | undefined) => {
+      if (href && /^https?:\/\//i.test(href) && !href.includes("google.") && !href.includes("gstatic.") && !href.includes("schema.org")) {
+        websiteCandidates.push(href);
+      }
+    };
+
+    // 1. data-item-id authority selectors (classic + newer variants)
+    for (const sel of [
       'a[data-item-id="authority"]',
       'a[data-item-id^="authority:"]',
       'a[data-item-id^="oloc:"]',
-    ];
-    for (const sel of dataSelectors) {
-      const el = document.querySelector(sel) as HTMLAnchorElement | null;
-      const href = el?.getAttribute("href");
-      if (href && /^https?:\/\//i.test(href)) { website = href; break; }
-    }
-
-    // 2. Any <a> whose aria-label signals "website" (multiple languages)
-    if (!website) {
-      const websiteKeywords = [
-        "site web", "website", "site internet", "open website",
-        "ouvrir le site", "visiter le site", "visit website",
-        "site officiel", "official site",
-      ];
-      const allLinks = document.querySelectorAll<HTMLAnchorElement>("a[href]");
-      for (const a of allLinks) {
-        const href = a.getAttribute("href") || "";
-        if (!/^https?:\/\//i.test(href)) continue;
-        const label = (a.getAttribute("aria-label") || a.textContent || "").toLowerCase().trim();
-        if (websiteKeywords.some((kw) => label.includes(kw))) {
-          website = href;
-          break;
-        }
-      }
-    }
-
-    // 3. The Maps detail panel often wraps the website in a button-like div
-    //    with a Globe SVG. Look for any <a href^="http"> that is a sibling of
-    //    or descendant of an element whose aria-label contains "Web".
-    if (!website) {
-      const webSections = document.querySelectorAll<HTMLElement>(
-        '[aria-label*="Web" i], [aria-label*="Site" i], [data-section-id="apb"]'
+    ]) {
+      document.querySelectorAll<HTMLAnchorElement>(sel).forEach((a) =>
+        addCandidate(a.getAttribute("href"))
       );
-      for (const section of webSections) {
-        const a = section.querySelector<HTMLAnchorElement>('a[href^="http"]');
-        if (a) { website = a.getAttribute("href"); break; }
-        if (section instanceof HTMLAnchorElement && /^https?:\/\//i.test(section.href)) {
-          website = section.href; break;
-        }
-      }
     }
 
-    // 4. Fallback: first external link in the detail panel
-    //    (kept narrow — exclude Google properties; social/platforms filtered later)
-    if (!website) {
-      const main = document.querySelector('[role="main"]') || document.body;
-      const ext = main.querySelectorAll<HTMLAnchorElement>('a[href^="http"]');
-      for (const a of ext) {
-        const href = a.getAttribute("href") || "";
-        if (href.includes("google.") || href.includes("gstatic.") || href.includes("schema.org"))
-          continue;
-        website = href;
-        break;
-      }
-    }
+    // 2. aria-label matching (works regardless of data-item-id changes)
+    const websiteKeywords = [
+      "site web", "website", "site internet", "open website",
+      "ouvrir le site", "visiter le site", "visit website",
+      "site officiel", "official site",
+    ];
+    document.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (!/^https?:\/\//i.test(href)) return;
+      const label = (a.getAttribute("aria-label") || a.getAttribute("data-tooltip") || "").toLowerCase();
+      if (websiteKeywords.some((kw) => label.includes(kw))) addCandidate(href);
+    });
+
+    // 3. Sections with globe icon / "Web" or "Site" in aria-label
+    document.querySelectorAll<HTMLElement>('[aria-label*="Web" i], [aria-label*="Site" i], [data-section-id="apb"]').forEach((section) => {
+      section.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach((a) =>
+        addCandidate(a.getAttribute("href"))
+      );
+    });
+
+    // 4. Any <a> in the detail panel that looks like an external domain
+    //    (last resort — excludes social, Google, and schema.org)
+    const skipHosts = ["google.", "gstatic.", "schema.org", "facebook.", "instagram.", "twitter.", "linkedin.", "youtube.", "tiktok."];
+    const main = document.querySelector('[role="main"]') || document.body;
+    main.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (skipHosts.some((h) => href.includes(h))) return;
+      addCandidate(href);
+    });
+
+    // Deduplicate and return all candidates for the caller to pick from
+    const website = [...new Set(websiteCandidates)][0] ?? null;
+    const allWebsites = [...new Set(websiteCandidates)];
 
     // Address
     let address: string | null = null;
@@ -161,7 +151,7 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
     const category =
       text('button[jsaction*="category"]') || text("span.fontBodyMedium > span > span");
 
-    return { phone, website, address, rating, reviewCount, category };
+    return { phone, website, allWebsites, address, rating, reviewCount, category };
   });
 
   // ── Playwright locator fallback (runs in Node context, more reliable) ──────
@@ -176,26 +166,22 @@ async function extractDetailFromDOM(page: Page): Promise<DetailFields> {
         'a[aria-label*="ouvrir le site" i]',
       ];
       for (const sel of locatorSelectors) {
-        const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
-          const href = await el.getAttribute("href").catch(() => null);
-          if (href && /^https?:\/\//i.test(href)) {
-            result.website = href;
-            break;
+        const elements = page.locator(sel);
+        const count = await elements.count().catch(() => 0);
+        for (let i = 0; i < count; i++) {
+          const el = elements.nth(i);
+          if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
+            const href = await el.getAttribute("href").catch(() => null);
+            if (href && /^https?:\/\//i.test(href)) {
+              if (!result.allWebsites.includes(href)) result.allWebsites.push(href);
+              if (!result.website) result.website = href;
+            }
           }
         }
       }
     } catch {
       /* ignore */
     }
-  }
-
-  // ── Filter out social / platform URLs from the "last resort" fallback ─────
-  // (data-item-id selectors are almost always the real website;
-  //  the aria-label ones we already filtered; the fallback can grab socials)
-  if (result.website && !mapsHostOk(result.website)) {
-    // It's a platform URL — keep it but let the caller decide has_website
-    // (the enrichment step will reclassify it properly)
   }
 
   return result as DetailFields;
@@ -377,17 +363,29 @@ export async function scrapeGoogleMaps(
       }
 
       await link.click();
-      await randomDelay(1500, 2500);
+
+      // Wait for the detail panel to fully render.
+      // The website section loads last — wait until either the authority link
+      // OR the address button (always present) appears, then give a bit more
+      // time for the website row to appear after that.
+      await page.waitForURL(/maps\/place/, { timeout: 8000 }).catch(() => {});
+      await page
+        .waitForSelector(
+          'a[data-item-id="authority"], a[data-item-id^="authority:"], button[data-item-id="address"], button[data-item-id^="phone:"]',
+          { timeout: 8000 }
+        )
+        .catch(() => {});
+      await randomDelay(1000, 1800); // small extra buffer for JS rendering
 
       const detail = await extractDetailFromDOM(page);
 
-      // Determine if the website found is an owned domain or a platform page.
-      // Platform URLs (Facebook, Planity, etc.) are stored in website_url so the
-      // enrichment step can classify them, but has_website stays false — the
-      // business does NOT have an "owned" website.
-      const rawWebsite = detail.website;
-      const normalizedWebsite = normalizeUrl(rawWebsite);
-      const isPlatform = normalizedWebsite ? classifyUrl(normalizedWebsite) !== null : false;
+      // Pick the best website from all candidates:
+      // prefer the first non-platform URL; fall back to any platform URL.
+      const allCandidates = detail.allWebsites.map((u) => normalizeUrl(u)).filter(Boolean) as string[];
+      const ownedUrl = allCandidates.find((u) => classifyUrl(u) === null) ?? null;
+      const platformUrl = allCandidates.find((u) => classifyUrl(u) !== null) ?? null;
+      const normalizedWebsite = ownedUrl ?? platformUrl ?? normalizeUrl(detail.website);
+      const isPlatform = normalizedWebsite ? (ownedUrl === null && classifyUrl(normalizedWebsite) !== null) : false;
 
       const lead: MapsLead = {
         business_name: item.name,

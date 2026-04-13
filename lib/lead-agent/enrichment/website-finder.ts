@@ -304,7 +304,9 @@ export async function findWebsite(
   businessName: string,
   location: string,
   gmbWebsiteUrl: string | null,
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  /** Direct Google Maps URL for this business — used to re-scrape GMB if gmbWebsiteUrl is missing */
+  googleMapsUrl?: string | null
 ): Promise<WebsiteFinderResult> {
   const city = cityFromLocation(location);
 
@@ -325,6 +327,81 @@ export async function findWebsite(
       bestPlatform = { type: classification.type, label: classification.label, url } satisfies PlatformEntry;
     }
   };
+
+  // ── STEP 0: Re-scrape Google Maps directly if we have no website URL yet ───
+  // This is free (direct URL navigation) and avoids 3 Google searches entirely.
+  // Maps is the most authoritative source — we just may have missed it during discovery.
+  if (!gmbWebsiteUrl && googleMapsUrl) {
+    log(`[WebFinder] No GMB website saved — re-scraping Maps page…`);
+    try {
+      const ok = await safeGoto(page, googleMapsUrl, log, 15000);
+      if (ok) {
+        // Wait for the website section to render (it loads last in the Maps panel)
+        await page
+          .waitForSelector(
+            'a[data-item-id="authority"], a[data-item-id^="authority:"], a[aria-label*="site web" i], a[aria-label*="website" i]',
+            { timeout: 8000 }
+          )
+          .catch(() => {});
+        await page.waitForTimeout(800);
+
+        const found = await page.evaluate((): string[] => {
+          const skipHosts = ["google.", "gstatic.", "schema.org", "facebook.", "instagram.", "twitter.", "linkedin.", "youtube.", "tiktok."];
+          const out: string[] = [];
+          const addHref = (href: string | null | undefined) => {
+            if (!href || !/^https?:\/\//i.test(href)) return;
+            if (skipHosts.some((h) => href.includes(h))) return;
+            if (!out.includes(href)) out.push(href);
+          };
+          // Priority selectors
+          for (const sel of ['a[data-item-id="authority"]', 'a[data-item-id^="authority:"]']) {
+            document.querySelectorAll<HTMLAnchorElement>(sel).forEach((a) => addHref(a.href));
+          }
+          // aria-label
+          const kws = ["site web", "website", "ouvrir le site", "visiter le site"];
+          document.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((a) => {
+            const label = (a.getAttribute("aria-label") || "").toLowerCase();
+            if (kws.some((k) => label.includes(k))) addHref(a.href);
+          });
+          // Fallback: any external link in the panel
+          const main = document.querySelector('[role="main"]') || document.body;
+          main.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach((a) => addHref(a.href));
+          return out;
+        });
+
+        // Prefer the first non-platform URL
+        const ownedFromMaps = found.find((u) => classifyUrl(u) === null) ?? null;
+        const platformFromMaps = found.find((u) => classifyUrl(u) !== null) ?? null;
+
+        if (ownedFromMaps) {
+          const normalized = normalizeUrl(ownedFromMaps) || ownedFromMaps;
+          const alive = await quickAlive(normalized);
+          if (alive) {
+            log(`[WebFinder] ✅ Re-scraped Maps → owned URL: ${normalized.slice(0, 60)}`);
+            return {
+              has_website: true,
+              website_url: normalized,
+              website_type: "own_domain",
+              platform_url: null,
+              platform_label: null,
+              found_via: "gmb",
+              confidence: "high",
+            };
+          }
+        }
+        if (platformFromMaps) {
+          const cl = classifyUrl(platformFromMaps)!;
+          considerPlatform(platformFromMaps);
+          log(`[WebFinder] Maps only has platform: ${cl.label}`);
+          // don't return yet — continue to Google search for owned domain
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
+      log(`[WebFinder] Maps re-scrape failed: ${msg.slice(0, 60)}`);
+    }
+  }
 
   // ── STEP 1: GMB / previously saved URL ─────────────────────────────────────
   // Google Maps explicitly surfaces this URL as the business's website.

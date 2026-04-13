@@ -411,7 +411,7 @@ export async function runSixStepEnrichment(
     // ── STEP 1: Website Finder ─────────────────────────────────────────────
     log(`\n[Step 1/6] Website Finder...`);
     const websiteResult = await runStep("website_finder", STEP_TIMEOUT_LONG, (page) =>
-      findWebsite(page, lead.business_name, location, lead.website_url, log)
+      findWebsite(page, lead.business_name, location, lead.website_url, log, lead.google_maps_url)
     );
 
     if (websiteResult) {
