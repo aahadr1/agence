@@ -499,11 +499,17 @@ export async function runSixStepEnrichment(
       });
     }
 
-    // ── STEP 3: Legal Data (Pappers API + Societe.com) ─────────────────────
-    log(`\n[Step 3/6] Legal Data (Pappers + Societe.com)...`);
+    // ── STEP 3: Legal Data (Pappers API + Societe.com) — PARALLEL ─────────
+    log(`\n[Step 3/6] Legal Data (Pappers + Societe.com in parallel)...`);
 
-    // Pappers API (no browser, fast)
-    const pappers = await searchPappersApi(lead.business_name, location, log);
+    const [pappers, societe] = await Promise.all([
+      searchPappersApi(lead.business_name, location, log),
+      runStep("legal_data", STEP_TIMEOUT_LONG, (page) =>
+        searchSocieteCom(page, lead.business_name, location, lead.address, log)
+      ),
+    ]);
+
+    // Merge: Pappers takes priority, Societe.com fills gaps
     if (pappers) {
       lead.owner_name = lead.owner_name || pappers.owner_name;
       lead.owner_role = lead.owner_role || pappers.owner_role;
@@ -513,25 +519,18 @@ export async function runSixStepEnrichment(
       lead.employee_count = lead.employee_count || pappers.employee_count;
       lead.address = lead.address || pappers.address;
     }
-
-    // Societe.com browser scrape (more detailed, has dirigeant info)
-    if (!lead.owner_name || !lead.siren) {
-      const societe = await runStep("legal_data", STEP_TIMEOUT_LONG, (page) =>
-        searchSocieteCom(page, lead.business_name, location, lead.address, log)
-      );
-      if (societe) {
-        lead.owner_name = lead.owner_name || societe.owner_name;
-        lead.owner_role = lead.owner_role || societe.owner_role;
-        lead.siren = lead.siren || societe.siren;
-        lead.company_type = lead.company_type || societe.company_type;
-        lead.creation_date = lead.creation_date || societe.creation_date;
-        lead.employee_count = lead.employee_count || societe.employee_count;
-        lead.address = lead.address || societe.address;
-        lead.revenue_bracket = lead.revenue_bracket || societe.revenue_bracket;
-        if (societe.website_url && !lead.website_url) {
-          lead.website_url = societe.website_url;
-          lead.has_website = true;
-        }
+    if (societe) {
+      lead.owner_name = lead.owner_name || societe.owner_name;
+      lead.owner_role = lead.owner_role || societe.owner_role;
+      lead.siren = lead.siren || societe.siren;
+      lead.company_type = lead.company_type || societe.company_type;
+      lead.creation_date = lead.creation_date || societe.creation_date;
+      lead.employee_count = lead.employee_count || societe.employee_count;
+      lead.address = lead.address || societe.address;
+      lead.revenue_bracket = lead.revenue_bracket || societe.revenue_bracket;
+      if (societe.website_url && !lead.website_url) {
+        lead.website_url = societe.website_url;
+        lead.has_website = true;
       }
     }
 
@@ -569,6 +568,8 @@ export async function runSixStepEnrichment(
         enrichment_data: {
           ...lead.enrichment_data,
           linkedin_summary: dirigeant.linkedin_summary,
+          linkedin_headline: dirigeant.linkedin_headline,
+          related_contacts: dirigeant.related_contacts,
         },
       });
     }

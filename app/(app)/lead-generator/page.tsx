@@ -437,6 +437,31 @@ export default function LeadGeneratorPage() {
     setPipelineLeadId(null);
   };
 
+  const handleCreateLeadFromContact = async (
+    parentLeadId: string,
+    contact: { name: string; title: string | null; linkedin_url: string | null }
+  ) => {
+    try {
+      const res = await fetch("/api/lead-generator/leads/from-contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parent_lead_id: parentLeadId,
+          name: contact.name,
+          title: contact.title,
+          linkedin_url: contact.linkedin_url,
+        }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error((data.error as string) || "Failed");
+      const newLead = data.lead as Lead;
+      setLeads((prev) => [...prev, newLead]);
+      setCrmFeedback(`✓ Lead "${contact.name}" créé.`);
+    } catch (err) {
+      setCrmFeedback(`Erreur : ${err instanceof Error ? err.message : "Création échouée"}`);
+    }
+  };
+
   // Filter + sort active leads
   const activeLeads = leads.filter((l) => {
     if (filterPriority !== "all" && l.priority_score !== filterPriority) return false;
@@ -768,6 +793,7 @@ export default function LeadGeneratorPage() {
           onAddToPipeline={handleAddToPipeline}
           addingToPipeline={pipelineLeadId === drawerLead.id}
           pipelineFeedback={crmFeedback}
+          onCreateLeadFromContact={handleCreateLeadFromContact}
         />
       )}
 

@@ -614,7 +614,7 @@ export function LeadsTable({
                 </td>
 
                 <td className="px-3 py-2.5">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-1">
                     <WebsiteCell lead={lead} />
                     {lead.linkedin_url && (
                       <a
@@ -622,9 +622,10 @@ export function LeadsTable({
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="text-blue-600 hover:text-blue-700"
+                        className="inline-flex w-fit items-center gap-1 rounded-full bg-[#0A66C2]/10 px-2 py-0.5 text-[10px] font-medium text-[#0A66C2] hover:bg-[#0A66C2]/20 transition-colors"
                       >
-                        <Linkedin className="h-3.5 w-3.5" />
+                        <Linkedin className="h-3 w-3" />
+                        LinkedIn
                       </a>
                     )}
                   </div>

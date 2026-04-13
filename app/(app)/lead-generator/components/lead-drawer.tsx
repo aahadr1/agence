@@ -31,6 +31,12 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+interface RelatedContact {
+  name: string;
+  title: string | null;
+  linkedin_url: string | null;
+}
+
 interface LeadDrawerProps {
   lead: Lead | null;
   onClose: () => void;
@@ -40,6 +46,8 @@ interface LeadDrawerProps {
   generatingOutreach?: boolean;
   /** Message après action CRM (succès / erreur) */
   pipelineFeedback?: string | null;
+  /** Create a new lead from a related LinkedIn contact */
+  onCreateLeadFromContact?: (parentLeadId: string, contact: RelatedContact) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +182,7 @@ export function LeadDrawer({
   onGenerateOutreach,
   generatingOutreach,
   pipelineFeedback,
+  onCreateLeadFromContact,
 }: LeadDrawerProps) {
   const drawerRef = useRef<HTMLDivElement>(null);
   const [noteText, setNoteText] = useState("");
@@ -215,6 +224,15 @@ export function LeadDrawer({
     typeof lead.enrichment_data?.capital === "string"
       ? lead.enrichment_data.capital
       : null;
+
+  const linkedinHeadline =
+    typeof lead.enrichment_data?.linkedin_headline === "string"
+      ? lead.enrichment_data.linkedin_headline
+      : null;
+
+  const relatedContacts: RelatedContact[] = Array.isArray(lead.enrichment_data?.related_contacts)
+    ? (lead.enrichment_data.related_contacts as RelatedContact[])
+    : [];
 
   const rating = parseFloat(lead.rating || "0");
   const reviews = parseInt(lead.review_count || "0", 10);
@@ -295,11 +313,25 @@ export function LeadDrawer({
                     href={lead.owner_email ? `mailto:${lead.owner_email}` : undefined}
                     copy
                   />
-                  <Row
-                    label="LinkedIn"
-                    value={lead.linkedin_url ? "Voir profil" : null}
-                    href={lead.linkedin_url || undefined}
-                  />
+                  {lead.linkedin_url && (
+                    <div className="flex items-start justify-between gap-2 py-1.5 border-b border-border/50">
+                      <span className="text-[11px] text-muted-foreground shrink-0 w-28">LinkedIn</span>
+                      <div className="flex-1 text-right">
+                        <a
+                          href={lead.linkedin_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#0A66C2]/10 px-2.5 py-1 text-[11px] font-medium text-[#0A66C2] hover:bg-[#0A66C2]/20 transition-colors"
+                        >
+                          <Linkedin className="h-3.5 w-3.5" />
+                          Voir profil
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  {linkedinHeadline && (
+                    <Row label="Titre LinkedIn" value={linkedinHeadline} />
+                  )}
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground italic">
@@ -308,6 +340,56 @@ export function LeadDrawer({
                 </p>
               )}
             </div>
+
+            {/* ── CONTACTS ASSOCIÉS (LinkedIn) ── */}
+            {relatedContacts.length > 0 && (
+              <div className="p-5">
+                <SectionTitle>
+                  <Users className="h-3 w-3" strokeWidth={1.5} />
+                  Contacts associés
+                </SectionTitle>
+                <div className="space-y-2">
+                  {relatedContacts.map((contact, i) => (
+                    <div
+                      key={`${contact.name}-${i}`}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-border/60 px-3 py-2"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-medium text-foreground truncate">
+                          {contact.name}
+                        </p>
+                        {contact.title && (
+                          <p className="text-[10px] text-muted-foreground truncate">
+                            {contact.title}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {contact.linkedin_url && (
+                          <a
+                            href={contact.linkedin_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[#0A66C2] hover:text-[#0A66C2]/80 transition-colors"
+                          >
+                            <Linkedin className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                        {onCreateLeadFromContact && (
+                          <button
+                            type="button"
+                            onClick={() => onCreateLeadFromContact(lead.id, contact)}
+                            className="text-[10px] font-medium px-2 py-0.5 border border-border rounded hover:bg-accent transition-colors"
+                          >
+                            + Lead
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* ── CONTACT ENTREPRISE ── */}
             <div className="p-5">

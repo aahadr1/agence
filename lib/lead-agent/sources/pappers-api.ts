@@ -8,6 +8,11 @@
  * Set PAPPERS_API_KEY env var (register free at pappers.fr → API).
  */
 
+export interface PappersDirigeantInfo {
+  name: string;
+  role: string | null;
+}
+
 export interface PappersResult {
   owner_name: string | null;
   owner_role: string | null;
@@ -18,6 +23,7 @@ export interface PappersResult {
   address: string | null;
   naf_code: string | null;
   capital: string | null;
+  all_dirigeants: PappersDirigeantInfo[];
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +170,41 @@ function formatEmployeeCount(tranche: string | undefined): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Detail endpoint — always returns full dirigeant list
+// ---------------------------------------------------------------------------
+
+async function fetchDirigeants(
+  siren: string,
+  apiKey: string,
+  log: (msg: string) => void
+): Promise<PappersDirigeant[]> {
+  try {
+    const url =
+      `https://api.pappers.fr/v2/entreprise` +
+      `?siren=${encodeURIComponent(siren)}` +
+      `&api_token=${encodeURIComponent(apiKey)}`;
+
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(8000),
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return [];
+
+    const data = (await res.json()) as { dirigeants?: PappersDirigeant[] };
+    return data.dirigeants || [];
+  } catch {
+    log(`[Pappers API] Detail fetch failed for SIREN ${siren}`);
+    return [];
+  }
+}
+
+function dirigeantToInfo(d: PappersDirigeant): PappersDirigeantInfo | null {
+  const name = [d.prenom, d.nom].filter(Boolean).join(" ");
+  if (!name) return null;
+  return { name, role: d.qualite || null };
+}
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
@@ -180,9 +221,7 @@ export async function searchPappersApi(
 
   const city = cityFromLocation(location);
   const queries = [
-    // First try with city to narrow results
     city ? `${businessName} ${city}` : businessName,
-    // Fallback: name only
     businessName,
   ].filter((q, i, a) => a.indexOf(q) === i);
 
@@ -214,30 +253,33 @@ export async function searchPappersApi(
         continue;
       }
 
-      // Score each result and pick the best
       const scored = results
         .map((r) => ({ r, score: matchScore(businessName, location, r) }))
         .sort((a, b) => b.score - a.score);
 
       const best = scored[0];
-      // Minimum threshold: at least a city OR name word match
       if (best.score < 25) {
-        log(
-          `[Pappers API] Best match score too low (${best.score}) for "${query}"`
-        );
+        log(`[Pappers API] Best match score too low (${best.score}) for "${query}"`);
         continue;
       }
 
       const e = best.r;
 
-      // Build owner name from first dirigeant
-      const dir = (e.dirigeants || [])[0];
-      const ownerName = dir
-        ? [dir.prenom, dir.nom].filter(Boolean).join(" ") || null
-        : null;
-      const ownerRole = dir?.qualite || null;
+      // Build dirigeant list from search results first
+      let dirigeants = (e.dirigeants || []).map(dirigeantToInfo).filter(Boolean) as PappersDirigeantInfo[];
 
-      // Format address
+      // If search results have no dirigeants, fetch from the detail endpoint
+      if (dirigeants.length === 0 && e.siren) {
+        log(`[Pappers API] No dirigeants in search — fetching detail for SIREN ${e.siren}`);
+        const detailDirs = await fetchDirigeants(e.siren, apiKey, log);
+        dirigeants = detailDirs.map(dirigeantToInfo).filter(Boolean) as PappersDirigeantInfo[];
+        if (dirigeants.length > 0) {
+          log(`[Pappers API] Detail returned ${dirigeants.length} dirigeant(s): ${dirigeants[0].name}`);
+        }
+      }
+
+      const owner = dirigeants[0] ?? null;
+
       const s = e.siege;
       const address = s
         ? [s.adresse_ligne_1, s.adresse_ligne_2, s.code_postal, s.ville]
@@ -246,8 +288,8 @@ export async function searchPappersApi(
         : null;
 
       const result: PappersResult = {
-        owner_name: ownerName,
-        owner_role: ownerRole,
+        owner_name: owner?.name ?? null,
+        owner_role: owner?.role ?? null,
         siren: e.siren || null,
         company_type: e.forme_juridique || null,
         creation_date: e.date_creation || null,
@@ -257,10 +299,11 @@ export async function searchPappersApi(
           ? `${e.code_naf}${e.libelle_code_naf ? ` — ${e.libelle_code_naf}` : ""}`
           : null,
         capital: e.capital != null ? `${e.capital.toLocaleString("fr-FR")} €` : null,
+        all_dirigeants: dirigeants,
       };
 
       log(
-        `[Pappers API] ✓ ${result.owner_name || "—"} | ${result.company_type || "—"} | SIREN: ${result.siren || "—"} (score ${best.score})`
+        `[Pappers API] ✓ ${result.owner_name || "—"} | ${result.company_type || "—"} | SIREN: ${result.siren || "—"} | ${dirigeants.length} dirigeant(s) (score ${best.score})`
       );
       return result;
     } catch (e) {
