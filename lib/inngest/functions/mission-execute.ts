@@ -5,7 +5,6 @@
 
 import { inngest } from "../client";
 import { runAgentLoop } from "@/lib/agent/engine";
-import { executeTool as executeRegisteredTool } from "@/lib/agent/tools";
 import { ORCHESTRATOR_SYSTEM_PROMPT, ROLE_TOOLS } from "@/lib/agent/orchestrator";
 import { getToolDefinitions } from "@/lib/agent/tool-registry";
 import type { AgentContext } from "@/lib/agent/types";
@@ -47,7 +46,7 @@ export const missionExecute = inngest.createFunction(
     });
 
     const result = await step.run("orchestrator-loop", async () => {
-      await import("@/lib/agent/tools");
+      const { executeTool: executeRegisteredTool } = await import("@/lib/agent/tools");
 
       const context: AgentContext = {
         missionId,
@@ -102,7 +101,7 @@ export const missionExecute = inngest.createFunction(
           },
         },
         context,
-        executeRegisteredTool,
+        executeRegisteredTool as Parameters<typeof runAgentLoop>[2],
         mission.user_prompt
       );
 
