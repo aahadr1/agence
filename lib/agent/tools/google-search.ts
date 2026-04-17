@@ -1,6 +1,6 @@
 import { registerTool } from "../tool-registry";
 import { searchGoogle } from "@/lib/lead-agent/sources/google-search";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
 
 registerTool(
   {
@@ -18,18 +18,15 @@ registerTool(
   },
   async (args) => {
     const log = (msg: string) => console.log(`[google_search] ${msg}`);
-    const session = await launchBrowser();
-    try {
-      return await searchGoogle(
+    return withBrowserSession(async (session) =>
+      searchGoogle(
         session.page,
         args.business_name as string,
         args.location as string,
         (args.phone as string) || null,
         (args.address as string) || null,
-        log
-      );
-    } finally {
-      await safeClose(session);
-    }
+        log,
+      ),
+    );
   }
 );

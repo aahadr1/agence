@@ -141,11 +141,8 @@ registerTool(
       ? "duckduckgo"
       : "google";
 
-    const { launchBrowser, closeBrowser } = await import(
-      "@/lib/lead-agent/browser"
-    );
-    const session = await launchBrowser();
-    try {
+    const { withBrowserSession } = await import("@/lib/lead-agent/browser");
+    return withBrowserSession(async (session) => {
       const page = session.page;
       let results: SearchResult[] = [];
       let provider: "google" | "duckduckgo" = "google";
@@ -171,8 +168,6 @@ registerTool(
         results,
         count: results.length,
       };
-    } finally {
-      await closeBrowser(session);
-    }
+    });
   },
 );

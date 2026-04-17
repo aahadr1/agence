@@ -290,25 +290,88 @@ export async function safeClose(
 ): Promise<void> {
   if (!session) return;
   try {
+    await session.context.close().catch(() => {});
+  } catch {
+    /* */
+  }
+  try {
     if (session.browser.isConnected()) await session.browser.close();
   } catch {
     /* already dead */
   }
 }
 
+/** True when Playwright died mid-call — a fresh browser often recovers. */
+export function isTransientPlaywrightFailure(e: unknown): boolean {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  return (
+    (msg.includes("browsercontext") && msg.includes("closed")) ||
+    msg.includes("target closed") ||
+    msg.includes("target page, context or browser has been closed") ||
+    msg.includes("protocol error") ||
+    msg.includes("execution context was destroyed") ||
+    msg.includes("frame has been detached") ||
+    msg.includes("net::err_aborted")
+  );
+}
+
+/**
+ * Run `runner` with a fresh browser, close it, and on transient Playwright
+ * crashes retry the whole operation (new launch). Mitigates serverless
+ * "BrowserContext closed" flakes between tool calls.
+ */
+export async function withBrowserSession<T>(
+  runner: (session: BrowserSession) => Promise<T>,
+  opts?: { attempts?: number },
+): Promise<T> {
+  const defaultAttempts = IS_SERVERLESS ? 4 : 3;
+  const max = Math.min(Math.max(opts?.attempts ?? defaultAttempts, 1), 6);
+  let lastErr: unknown;
+  for (let i = 1; i <= max; i++) {
+    const session = await launchBrowser();
+    try {
+      return await runner(session);
+    } catch (e) {
+      lastErr = e;
+      if (i < max && isTransientPlaywrightFailure(e)) {
+        const backoffMs = IS_SERVERLESS ? 900 + 700 * i : 500 * i;
+        await sleep(backoffMs);
+        continue;
+      }
+      throw e;
+    } finally {
+      await safeClose(session);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export async function launchBrowser(): Promise<BrowserSession> {
-  const args = [
+  // Vercel Pro (2–4 GB): prefer **multi-process** Chromium — much fewer
+  // "BrowserContext closed" flakes than --single-process + --no-zygote.
+  // If you hit OOM on tiny plans, set PLAYWRIGHT_SERVERLESS_SINGLE_PROCESS=1.
+  const serverlessSingleProcess =
+    IS_SERVERLESS &&
+    String(process.env.PLAYWRIGHT_SERVERLESS_SINGLE_PROCESS || "")
+      .trim()
+      .toLowerCase() === "1";
+
+  const baseArgs = [
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--disable-dev-shm-usage",
     "--disable-gpu",
-    "--single-process",
-    "--no-zygote",
   ];
 
+  const args = IS_SERVERLESS
+    ? serverlessSingleProcess
+      ? [...baseArgs, "--single-process", "--no-zygote"]
+      : baseArgs
+    : baseArgs;
+
   let browser!: Browser;
-  const maxAttempts = 2;
+  const maxAttempts = 4;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {

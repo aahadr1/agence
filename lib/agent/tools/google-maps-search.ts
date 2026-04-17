@@ -1,6 +1,6 @@
 import { registerTool } from "../tool-registry";
 import { scrapeGoogleMaps } from "@/lib/lead-agent/sources/google-maps";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
 
 registerTool(
   {
@@ -23,11 +23,10 @@ registerTool(
   },
   async (args) => {
     const log = (msg: string) => console.log(`[google_maps] ${msg}`);
-    const session = await launchBrowser();
     const seenNames = new Set<string>();
     const maxResults = (args.max_results as number) || 20;
     const deadline = Date.now() + 120_000;
-    try {
+    return withBrowserSession(async (session) => {
       const results = await scrapeGoogleMaps(
         session.page,
         args.query as string,
@@ -35,11 +34,9 @@ registerTool(
         log,
         3,
         maxResults,
-        deadline
+        deadline,
       );
       return { count: results.length, leads: results };
-    } finally {
-      await safeClose(session);
-    }
+    });
   }
 );

@@ -67,11 +67,8 @@ async function withBrowser<T>(
   state: BrowserState | null,
   fn: (ctx: BrowserContext) => Promise<T>,
 ): Promise<T> {
-  const { launchBrowser, closeBrowser } = await import(
-    "@/lib/lead-agent/browser"
-  );
-  const session = await launchBrowser();
-  try {
+  const { withBrowserSession } = await import("@/lib/lead-agent/browser");
+  return withBrowserSession(async (session) => {
     if (state?.cookies?.length) {
       try {
         await session.context.addCookies(state.cookies);
@@ -79,10 +76,8 @@ async function withBrowser<T>(
         /* ignore invalid cookies from previous sessions */
       }
     }
-    return await fn(session.context);
-  } finally {
-    await closeBrowser(session);
-  }
+    return fn(session.context);
+  });
 }
 
 async function extractPageText(ctx: BrowserContext, url: string): Promise<{

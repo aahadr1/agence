@@ -152,6 +152,8 @@ You can manage the user's Google Calendar with \`calendar_list_upcoming\` and \`
 
 const PACK_WEB_RESEARCH = `<CAPABILITY:web-research>
 Both \`web_search\` and \`web_fetch\` run through a real headless Chromium (Playwright) — no third-party search API. Results come from a rendered SERP; pages come back with JS already executed. Normal workflow: \`web_search(query)\` to find URLs, then \`web_fetch(url)\` to read each. Cite the URL alongside any fact you report. For multi-step interactions (click, type, scroll, screenshot-based extraction), use \`browser_navigate\` + \`browser_act\` / \`browser_extract\` instead — they share the same browser stack but expose a stateful session.
+
+**Representative photo for a business:** anchor the correct entity first (\`google_maps_search\` or verified address), then obtain an image URL you can cite — e.g. \`web_fetch\` the official site or Maps place page with \`include_html: true\` and read the first \`og:image\` / prominent photo URL from the markup; or a reputable directory page that clearly shows that establishment. Never guess image URLs; always include the **source page URL** next to the image link.
 </CAPABILITY:web-research>`;
 
 const PACK_BROWSER = `<CAPABILITY:browser>

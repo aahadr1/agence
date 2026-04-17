@@ -86,11 +86,11 @@ registerTool(
       throw new Error("web_fetch requires an absolute http(s) URL");
     }
 
-    const { launchBrowser, closeBrowser, safeGoto, isCaptchaPage } =
-      await import("@/lib/lead-agent/browser");
+    const { withBrowserSession, safeGoto, isCaptchaPage } = await import(
+      "@/lib/lead-agent/browser"
+    );
 
-    const session = await launchBrowser();
-    try {
+    return withBrowserSession(async (session) => {
       const page = session.page;
       const loaded = await safeGoto(page, url);
       const finalUrl = page.url();
@@ -128,8 +128,6 @@ registerTool(
         length: text.length,
         ...(includeHtml ? { html } : {}),
       };
-    } finally {
-      await closeBrowser(session);
-    }
+    });
   },
 );

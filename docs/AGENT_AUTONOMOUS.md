@@ -54,6 +54,16 @@ clearTimeout, Promise, Error`.
 No `require`, no `process`, no filesystem, no child processes. Hard 30s
 timeout, 256 KB output cap.
 
+## Vercel Pro — Playwright (prod stable)
+
+Les outils `web_search`, `web_fetch`, `google_search`, `google_maps_search`, etc. lancent **Chromium** (Sparticuz) dans les routes `/api/agent/*`. Sur **Pro**, donnez-leur assez de RAM / CPU :
+
+1. **Dashboard** → ton projet → **Settings** → **Functions** → **Function CPU** (ou *Advanced* selon l’UI).
+2. Choisis **Performance — 4 GB / 2 vCPUs** si tu vois des timeouts ou des plantages navigateur. **Standard — 2 GB** suffit souvent depuis qu’on évite `--single-process` par défaut sur Vercel.
+3. Avec **Fluid Compute** activé, la taille mémoire se règle **ici (dashboard)** — pas via `memory` dans `vercel.json` (souvent ignoré / déconseillé).
+
+Variable optionnelle : **`PLAYWRIGHT_SERVERLESS_SINGLE_PROCESS=1`** — force l’ancien mode Chromium très économe en RAM ; utile seulement si tu as des **OOM** sur un plan serré, au prix d’erreurs `BrowserContext closed` un peu plus fréquentes.
+
 ## Environment variables
 
 | Name | Required | What it does |
@@ -64,6 +74,7 @@ timeout, 256 KB output cap.
 | `GEMINI_API_KEY` | Yes | Default LLM. |
 | `ANTHROPIC_API_KEY` | Optional | Needed to use Claude models. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Used by the runtime to bypass RLS for session writes. |
+| `PLAYWRIGHT_SERVERLESS_SINGLE_PROCESS` | Optional | Set to `1` on Vercel only if Chromium OOMs; defaults to multi-process (more stable). |
 
 ## Migrations to apply
 
