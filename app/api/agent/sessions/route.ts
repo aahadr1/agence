@@ -43,13 +43,17 @@ export async function GET() {
   if (!user) return NextResponse.json({ sessions: [] });
 
   const orgId = await resolveOrgIdForUser(supabase, user.id);
-  const { data, error } = await supabase
+  const service = await createServiceClient();
+  const { data, error } = await service
     .from("agent_sessions")
     .select("*")
     .eq("org_id", orgId)
     .order("created_at", { ascending: false })
     .limit(50);
-  if (error) return NextResponse.json({ sessions: [] });
+  if (error) {
+    console.error("[agent] list sessions error:", error);
+    return NextResponse.json({ sessions: [] });
+  }
   return NextResponse.json({ sessions: data || [] });
 }
 
