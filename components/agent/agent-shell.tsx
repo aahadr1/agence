@@ -35,13 +35,14 @@ const CAPABILITY_PRESETS: CapabilityPreset[] = [
     label: "Lead Gen FR",
     packs: ["lead-gen-fr", "browser", "web-research"],
     description:
-      "Prospection B2B France (Pappers, GMB, Societe.com, save_lead) + navigateur Playwright en fallback",
+      "Prospection B2B France (Pappers, GMB, Societe.com, save_lead) + navigateur Playwright + images Replicate (Nano Banana / 2 / Pro)",
   },
   {
     id: "assistant",
     label: "Assistant général",
     packs: ["browser", "web-research"],
-    description: "Recherche web + navigateur Playwright pour les pages dynamiques",
+    description:
+      "Recherche web + navigateur Playwright + images Replicate (Nano Banana par défaut)",
   },
   {
     id: "email-ops",

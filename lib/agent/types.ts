@@ -115,6 +115,11 @@ export interface AgentConfig {
    * empty string disables the snapshot for that turn.
    */
   todoSnapshot?: () => Promise<string>;
+  /**
+   * When true, forced reflection nudges include a lead-gen verification checklist
+   * (model must still reply with JSON only — see engine).
+   */
+  reflectionLeadGenDepth?: boolean;
 }
 
 export type SubAgentRole =

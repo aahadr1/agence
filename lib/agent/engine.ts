@@ -756,18 +756,27 @@ async function runForcedReflection(
     }
   }
 
+  const leadGenDepthBlock =
+    config.reflectionLeadGenDepth
+      ? " LEAD-GEN DEPTH: Inside the JSON strings, briefly cover (a) legal-entity vs Maps address / cessée / homonym risk for work in flight, (b) whether any 'no website' claim still holds vs Maps website_url, (c) quality vs filling N weak rows. Each field may use up to 4 short sentences."
+      : "";
+
   const nudge = dueToError
     ? [
         "You hit repeated tool errors. Pause and reflect (for yourself only, NOT as a user-facing message).",
         "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
         `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
-        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." + todoBlock,
+        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." +
+          leadGenDepthBlock +
+          todoBlock,
       ].join(" ")
     : [
         "Pause and reflect internally (not shown to the user).",
         "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
         `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
-        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." + todoBlock,
+        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." +
+          leadGenDepthBlock +
+          todoBlock,
       ].join(" ");
 
   state.history.push({

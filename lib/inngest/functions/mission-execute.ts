@@ -71,6 +71,8 @@ export const missionExecute = inngest.createFunction(
           tools,
           model: "gemini-2.5-pro",
           maxIterations: 50,
+          reflectEveryN: 4,
+          reflectionLeadGenDepth: true,
           onThinking: async (text) => {
             await db.from("mission_messages").insert({
               mission_id: missionId,

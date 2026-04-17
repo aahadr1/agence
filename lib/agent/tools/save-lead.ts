@@ -8,6 +8,21 @@ function getServiceClient() {
   );
 }
 
+/** Only set leads.mission_id when candidate exists in public.missions (FK-safe). */
+async function resolveMissionIdForLead(
+  db: ReturnType<typeof getServiceClient>,
+  candidate: string | undefined,
+): Promise<string | null> {
+  if (!candidate?.trim()) return null;
+  const { data, error } = await db
+    .from("missions")
+    .select("id")
+    .eq("id", candidate.trim())
+    .maybeSingle();
+  if (error || !data?.id) return null;
+  return data.id;
+}
+
 registerTool(
   {
     name: "save_lead",
@@ -46,9 +61,13 @@ registerTool(
       business_name: args.business_name,
       org_id: context.orgId,
       user_id: context.userId,
-      mission_id: context.missionId,
       source: "lead-agent-v2",
     };
+
+    const missionFk = await resolveMissionIdForLead(db, context.missionId);
+    if (missionFk) {
+      leadData.mission_id = missionFk;
+    }
 
     const optionalFields = [
       "address", "phone", "email", "website_url", "rating", "review_count",
@@ -64,6 +83,10 @@ registerTool(
     }
 
     if (args.website_url) leadData.has_website = true;
+
+    if (!args.lead_id && context.sessionId) {
+      leadData.enrichment_data = { agent_session_id: context.sessionId };
+    }
 
     if (args.lead_id) {
       const { data, error } = await db

@@ -92,7 +92,8 @@ export async function runSession(
       tools,
       model: (session.model as AgentModel) || "gemini-2.5-pro",
       maxIterations: 40,
-      reflectEveryN: 5,
+      reflectEveryN: packs.includes("lead-gen-fr") ? 4 : 5,
+      reflectionLeadGenDepth: packs.includes("lead-gen-fr"),
       onThinking: async (text) => {
         await db.from("agent_messages").insert({
           session_id: sessionId,

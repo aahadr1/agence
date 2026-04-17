@@ -69,6 +69,8 @@ interface SessionRow {
   tick_count: number;
   attempt_count: number;
   last_error: string | null;
+  /** Legacy link to missions row; null for pure agent_sessions runs */
+  mission_id: string | null;
 }
 
 // -----------------------------------------------------------------------------
@@ -159,7 +161,8 @@ async function runOneTickLocked(
   const iterBudget = sessionPacksForBudget.includes("lead-gen-fr")
     ? ITER_PER_TICK_LEAD_GEN
     : ITER_PER_TICK;
-  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 6 : 5;
+  /** Lead-gen: reflect more often so forced JSON reflection realigns todos vs evidence. */
+  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 4 : 5;
 
   // Journal the step (best-effort, non-fatal)
   const stepNum = (session.tick_count || 0) + 1;
@@ -237,7 +240,7 @@ async function runOneTickLocked(
       stepNum === 1 ? await fetchInitialPrompt(sessionId) : undefined;
 
     const context: AgentContext = {
-      missionId: sessionId,
+      missionId: session.mission_id ?? sessionId,
       sessionId,
       orgId: session.org_id,
       userId: session.user_id,
@@ -257,6 +260,7 @@ async function runOneTickLocked(
         model: (session.model as AgentModel) || "gemini-2.5-pro",
         maxIterations: iterBudget,
         reflectEveryN,
+        reflectionLeadGenDepth: sessionPacksForBudget.includes("lead-gen-fr"),
         onThinking: async (text) => {
           await db.from("agent_messages").insert({
             session_id: sessionId,

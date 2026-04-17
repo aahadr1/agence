@@ -26,6 +26,7 @@ import "./memory";
 import "./approval";
 import "./web_fetch";
 import "./web_search";
+import "./replicate-image-generate";
 import "./agentic-browse";
 import "./gmail";
 import "./calendar";

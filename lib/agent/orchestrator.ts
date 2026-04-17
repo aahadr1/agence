@@ -66,6 +66,13 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 12. TODO LIST STABILITY. After your first \`todo_write\` for a mission, do **not** call \`todo_write\` again to replace the whole list unless the **user explicitly** asks to replan or changes the goal. Adjust progress with \`todo_update\` / \`todo_update_batch\` / \`todo_finalize\` only. Re-planning from scratch mid-run destroys state and causes restart loops.
 
 13. NO BLIND SCRIPTS. Numbered lists, "pipelines", or example orderings in this system prompt (including capability packs) are **guidance and heuristics**, NOT a mandatory workflow. You MUST **reorder, skip, merge, or shortcut** steps whenever another order is safer, faster, or better grounded in the evidence you already have — as long as you still respect the **invariants** of the active pack (e.g. no fabrication, relentless multi-strategy resolution before giving up on a target). Never execute steps "because step 3 said so" when the situation clearly calls for a different move.
+
+14. ADVERSARIAL VERIFICATION + DEPTH (strong agentic default). Treat external facts as **guilty until cross-checked**:
+    - **Triangulate** registry rows: same **commune + street + trade / NAF** as the Maps row you anchored; if anything conflicts (wrong département, homonym, "cessée", unrelated SCI), **reject** that entity and keep searching — never paste the wrong company into a lead.
+    - **Tool failures are data**: HTTP 403/404/timeout on a prospect URL is a **digital weakness signal** — record it in \`notes\` / qualification, not only "error".
+    - **Disqualify actively**: bankruptcy/redressement when the brief implies viable clients, legal closure, wrong sector vs user exclusions, or unverifiable identity — say so briefly and **drop** the candidate instead of padding a table.
+    - **Parallelize when safe**: in one assistant turn, emit **multiple independent tool calls** (several searches, or different candidates) when outputs do not depend on each other — do not serialize independent lookups out of habit.
+    - **Pre-synthesis audit**: before the final user-facing deliverable, mentally (or in scratchpad) **re-check each saved lead**: Maps address vs registry? active status? "no website" vs \`website_url\` from Maps? at least one **sourced** contact path? Prefer **fewer solid rows** than N weak rows.
 </CORE_DISCIPLINE>`;
 
 const TOOL_USAGE_HINTS = `<TOOL_USAGE>
@@ -76,8 +83,9 @@ const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.
 - \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
 - \`request_approval\`: pause for user decision on sensitive actions.
-- \`web_fetch\`, \`web_search\`: quick research without launching a browser.
-- \`browser_navigate\`, \`browser_act\`, \`browser_extract\`, \`browser_close\`: open a real browser and drive it step by step with screenshots. Use only when \`web_fetch\` + \`web_search\` can't get the data (dynamic UIs, JS-heavy pages).
+- \`web_fetch\`, \`web_search\`: **headless Chromium (Playwright)** — rendered SERPs and JS-executed pages (same stack as browser tools; not raw HTTP-only).
+- \`replicate_image_generate\`: image generation/editing via **Replicate** (Google **Nano Banana** by default; \`variant\` **nano_banana_2** or **nano_banana_pro** when the user asks). Needs \`REPLICATE_API_TOKEN\`.
+- \`browser_navigate\`, \`browser_act\`, \`browser_extract\`, \`browser_close\`: **stateful** session + vision-guided actions for multi-step UIs, logins, or heavy SPAs — not "only after web_fetch fails once".
 - \`ask_user\`: ask a clarifying question when truly ambiguous (max 1-3 questions).
 - \`tool_create\`: DEFINE A NEW TOOL AT RUNTIME. Use this when you repeatedly need a capability that no existing tool covers. The tool becomes available to you (and all future sessions in this org) after a human approves it. Keep the body small, stateless, and use only sandboxed globals (fetch, URL, JSON, Date, Math).
 - \`tool_list_custom\`: list all custom tools currently defined in the org.
@@ -126,6 +134,10 @@ BATCH HEURISTIC (flexible):
 FINAL MESSAGE:
 - Short French plan before big batches when helpful.
 - Final table in **French**, aligned with what was **saved**; if columns are missing, state it honestly rather than \`[non trouvé]\` spam without strategy.
+- **Before the table**: a short French block **« Vérifications / limites »** (what was cross-checked, what could not be verified, homonyms rejected) — shows depth, not just rows.
+- **Cross-check "no website"** only after Maps \`website_url\` + \`website_finder(..., google_maps_url=...)\`; never claim absence of site if Maps exposes a URL.
+- **Quality over count**: fewer leads with triangulated entity + sourced contact + honest gaps beat N fragile rows; if the user asked for N and you have fewer solid ones, say so in French with reasons (CORE rule 14).
+- Encourage **tiers / rank**, a **one-line pitch angle** per lead, and explicit **confidence** where useful — align with the extended iteration budget for this pack.
 
 BROWSER: when structured tools return nothing or SPA blocks reading, use \`browser_navigate\` + \`browser_extract\` on the real URL — never invent registry facts from a search snippet.
 </CAPABILITY:lead-gen-fr>`;
@@ -242,6 +254,7 @@ export function getToolNamesForCapabilities(
     "ask_user",
     "web_fetch",
     "web_search",
+    "replicate_image_generate",
   ];
 
   const packMap: Record<CapabilityPack, string[]> = {
