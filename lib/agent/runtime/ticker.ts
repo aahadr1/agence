@@ -40,8 +40,11 @@ import type { AgentMessage } from "@/lib/ai/llm-router";
  */
 const TICK_SOFT_DEADLINE_MS = 270_000;
 
-/** Max agent-loop iterations performed in one tick before yielding. */
+/** Default max agent-loop iterations per tick before yielding. */
 const ITER_PER_TICK = 8;
+
+/** Lead-gen sessions get a higher per-tick iteration budget (multi-tool retries, no rigid script). */
+const ITER_PER_TICK_LEAD_GEN = 14;
 
 /** Lock lease length. Must exceed worst-case tick duration. */
 const LOCK_TTL_SEC = 300;
@@ -152,6 +155,12 @@ async function runOneTickLocked(
     };
   }
 
+  const sessionPacksForBudget = (session.capability_packs || []) as CapabilityPack[];
+  const iterBudget = sessionPacksForBudget.includes("lead-gen-fr")
+    ? ITER_PER_TICK_LEAD_GEN
+    : ITER_PER_TICK;
+  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 6 : 5;
+
   // Journal the step (best-effort, non-fatal)
   const stepNum = (session.tick_count || 0) + 1;
   const stepId = randomUUID();
@@ -161,7 +170,7 @@ async function runOneTickLocked(
     step_num: stepNum,
     status: "running",
     attempt: (session.attempt_count || 0) + 1,
-    input: { iter_budget: ITER_PER_TICK },
+    input: { iter_budget: iterBudget },
   });
 
   // Mark session running + heartbeat
@@ -246,8 +255,8 @@ async function runOneTickLocked(
         systemPrompt,
         tools,
         model: (session.model as AgentModel) || "gemini-2.5-pro",
-        maxIterations: ITER_PER_TICK,
-        reflectEveryN: 5,
+        maxIterations: iterBudget,
+        reflectEveryN,
         onThinking: async (text) => {
           await db.from("agent_messages").insert({
             session_id: sessionId,
@@ -407,7 +416,7 @@ async function runOneTickLocked(
         endStatus = "completed";
         willContinue = false;
       } else if (raced.status === "max_iterations") {
-        // We only did ITER_PER_TICK iterations; more work likely left.
+        // Hit per-tick iteration cap; more work likely left — chain another tick.
         endStatus = "yielded";
         willContinue = true;
       }

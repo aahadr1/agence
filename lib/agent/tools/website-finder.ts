@@ -10,8 +10,18 @@ registerTool(
     parameters: {
       business_name: { type: "string", description: "Business name" },
       location: { type: "string", description: "City or region" },
-      website_url: { type: "string", description: "Candidate URL to verify (optional)", required: false },
-      google_maps_url: { type: "string", description: "Google Maps listing URL (optional)", required: false },
+      website_url: {
+        type: "string",
+        description:
+          "Website URL from Maps or elsewhere when you already have one — pass through for verification (optional)",
+        required: false,
+      },
+      google_maps_url: {
+        type: "string",
+        description:
+          "Strongly recommended whenever available after google_maps_search: the place's Maps URL improves matching and avoids false 'no website' conclusions (optional but prefer passing it).",
+        required: false,
+      },
     },
     required: ["business_name", "location"],
     costEstimateCents: 3,

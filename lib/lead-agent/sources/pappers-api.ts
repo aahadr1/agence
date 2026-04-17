@@ -97,10 +97,43 @@ function cityFromLocation(location: string): string {
     .trim();
 }
 
+/** How well the Maps / user address hint matches the Pappers siège (disambiguates homonyms). */
+function addressHintScore(
+  addressHint: string | null | undefined,
+  siege: PappersSiege | undefined,
+): number {
+  if (!addressHint?.trim() || !siege) return 0;
+  const hint = normalizeName(addressHint);
+  const line = normalizeName(
+    [
+      siege.adresse_ligne_1,
+      siege.adresse_ligne_2,
+      siege.code_postal,
+      siege.ville,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+  if (!line) return 0;
+  const tokens = hint.split(" ").filter((t) => t.length > 2);
+  if (tokens.length === 0) return 0;
+  let hits = 0;
+  for (const t of tokens) {
+    if (line.includes(t)) hits++;
+  }
+  // Postal code alone is weak; need at least 2 token hits for a bonus
+  if (hits >= 4) return 45;
+  if (hits >= 3) return 35;
+  if (hits >= 2) return 22;
+  if (hits >= 1) return 8;
+  return 0;
+}
+
 function matchScore(
   businessName: string,
   location: string,
-  result: PappersEntreprise
+  result: PappersEntreprise,
+  addressHint?: string | null,
 ): number {
   const normBiz = normalizeName(businessName);
   const normResult = normalizeName(result.denomination || "");
@@ -137,6 +170,8 @@ function matchScore(
     }
     score += Math.round((matched / bizWords.length) * 60);
   }
+
+  score += addressHintScore(addressHint, result.siege);
 
   return score;
 }
@@ -198,6 +233,79 @@ async function fetchDirigeants(
   }
 }
 
+/** Full company sheet when SIREN is already known — skips fuzzy name search. */
+async function fetchEntrepriseBySiren(
+  siren: string,
+  apiKey: string,
+  log: (msg: string) => void
+): Promise<PappersEntreprise | null> {
+  const clean = siren.replace(/\s/g, "");
+  if (!/^\d{9}$/.test(clean)) {
+    log(`[Pappers API] Invalid SIREN "${siren}" (need 9 digits)`);
+    return null;
+  }
+  try {
+    const url =
+      `https://api.pappers.fr/v2/entreprise` +
+      `?siren=${encodeURIComponent(clean)}` +
+      `&api_token=${encodeURIComponent(apiKey)}`;
+
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(12_000),
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      log(`[Pappers API] entreprise/${clean} HTTP ${res.status}`);
+      return null;
+    }
+    const data = (await res.json()) as PappersEntreprise;
+    if (!data?.siren && !data?.denomination) {
+      log(`[Pappers API] Empty entreprise payload for ${clean}`);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log(`[Pappers API] entreprise fetch failed: ${msg.slice(0, 80)}`);
+    return null;
+  }
+}
+
+function buildPappersResult(
+  e: PappersEntreprise,
+  dirigeants: PappersDirigeantInfo[],
+  log: (msg: string) => void,
+  scoreNote: string,
+): PappersResult {
+  const owner = dirigeants[0] ?? null;
+  const s = e.siege;
+  const address = s
+    ? [s.adresse_ligne_1, s.adresse_ligne_2, s.code_postal, s.ville]
+        .filter(Boolean)
+        .join(", ")
+    : null;
+
+  const result: PappersResult = {
+    owner_name: owner?.name ?? null,
+    owner_role: owner?.role ?? null,
+    siren: e.siren || null,
+    company_type: e.forme_juridique || null,
+    creation_date: e.date_creation || null,
+    employee_count: formatEmployeeCount(e.tranche_effectif),
+    address: address || null,
+    naf_code: e.code_naf
+      ? `${e.code_naf}${e.libelle_code_naf ? ` — ${e.libelle_code_naf}` : ""}`
+      : null,
+    capital: e.capital != null ? `${e.capital.toLocaleString("fr-FR")} €` : null,
+    all_dirigeants: dirigeants,
+  };
+
+  log(
+    `[Pappers API] ✓ ${result.owner_name || "—"} | ${result.company_type || "—"} | SIREN: ${result.siren || "—"} | ${dirigeants.length} dirigeant(s) (${scoreNote})`,
+  );
+  return result;
+}
+
 function dirigeantToInfo(d: PappersDirigeant): PappersDirigeantInfo | null {
   const name = [d.prenom, d.nom].filter(Boolean).join(" ");
   if (!name) return null;
@@ -208,10 +316,18 @@ function dirigeantToInfo(d: PappersDirigeant): PappersDirigeantInfo | null {
 // Main export
 // ---------------------------------------------------------------------------
 
+export interface PappersSearchOptions {
+  /** Street + postal + city from Google Maps — strongly reduces wrong-company picks */
+  address_hint?: string | null;
+  /** 9-digit SIREN when known — bypasses fuzzy search entirely */
+  siren?: string | null;
+}
+
 export async function searchPappersApi(
   businessName: string,
   location: string,
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  options?: PappersSearchOptions | null,
 ): Promise<PappersResult | null> {
   const apiKey = process.env.PAPPERS_API_KEY;
   if (!apiKey) {
@@ -219,11 +335,35 @@ export async function searchPappersApi(
     return null;
   }
 
+  const addressHint = options?.address_hint?.trim() || null;
+  const sirenOpt = options?.siren?.trim() || null;
+
+  // ── Direct SIREN path (authoritative) ──────────────────────────────
+  if (sirenOpt) {
+    const e = await fetchEntrepriseBySiren(sirenOpt, apiKey, log);
+    if (!e) {
+      log(`[Pappers API] No company for SIREN ${sirenOpt}`);
+    } else {
+      let dirigeants = (e.dirigeants || [])
+        .map(dirigeantToInfo)
+        .filter(Boolean) as PappersDirigeantInfo[];
+      if (dirigeants.length === 0 && e.siren) {
+        const detailDirs = await fetchDirigeants(e.siren, apiKey, log);
+        dirigeants = detailDirs
+          .map(dirigeantToInfo)
+          .filter(Boolean) as PappersDirigeantInfo[];
+      }
+      return buildPappersResult(e, dirigeants, log, "direct SIREN");
+    }
+  }
+
   const city = cityFromLocation(location);
   const queries = [
     city ? `${businessName} ${city}` : businessName,
     businessName,
   ].filter((q, i, a) => a.indexOf(q) === i);
+
+  const minScore = addressHint ? 38 : 25;
 
   for (const query of queries) {
     try {
@@ -254,58 +394,47 @@ export async function searchPappersApi(
       }
 
       const scored = results
-        .map((r) => ({ r, score: matchScore(businessName, location, r) }))
+        .map((r) => ({
+          r,
+          score: matchScore(businessName, location, r, addressHint),
+        }))
         .sort((a, b) => b.score - a.score);
 
       const best = scored[0];
-      if (best.score < 25) {
-        log(`[Pappers API] Best match score too low (${best.score}) for "${query}"`);
+      if (best.score < minScore) {
+        log(
+          `[Pappers API] Best match score too low (${best.score} < ${minScore}) for "${query}"`,
+        );
         continue;
       }
 
       const e = best.r;
 
       // Build dirigeant list from search results first
-      let dirigeants = (e.dirigeants || []).map(dirigeantToInfo).filter(Boolean) as PappersDirigeantInfo[];
+      let dirigeants = (e.dirigeants || [])
+        .map(dirigeantToInfo)
+        .filter(Boolean) as PappersDirigeantInfo[];
 
       // If search results have no dirigeants, fetch from the detail endpoint
       if (dirigeants.length === 0 && e.siren) {
         log(`[Pappers API] No dirigeants in search — fetching detail for SIREN ${e.siren}`);
         const detailDirs = await fetchDirigeants(e.siren, apiKey, log);
-        dirigeants = detailDirs.map(dirigeantToInfo).filter(Boolean) as PappersDirigeantInfo[];
+        dirigeants = detailDirs
+          .map(dirigeantToInfo)
+          .filter(Boolean) as PappersDirigeantInfo[];
         if (dirigeants.length > 0) {
-          log(`[Pappers API] Detail returned ${dirigeants.length} dirigeant(s): ${dirigeants[0].name}`);
+          log(
+            `[Pappers API] Detail returned ${dirigeants.length} dirigeant(s): ${dirigeants[0].name}`,
+          );
         }
       }
 
-      const owner = dirigeants[0] ?? null;
-
-      const s = e.siege;
-      const address = s
-        ? [s.adresse_ligne_1, s.adresse_ligne_2, s.code_postal, s.ville]
-            .filter(Boolean)
-            .join(", ")
-        : null;
-
-      const result: PappersResult = {
-        owner_name: owner?.name ?? null,
-        owner_role: owner?.role ?? null,
-        siren: e.siren || null,
-        company_type: e.forme_juridique || null,
-        creation_date: e.date_creation || null,
-        employee_count: formatEmployeeCount(e.tranche_effectif),
-        address: address || null,
-        naf_code: e.code_naf
-          ? `${e.code_naf}${e.libelle_code_naf ? ` — ${e.libelle_code_naf}` : ""}`
-          : null,
-        capital: e.capital != null ? `${e.capital.toLocaleString("fr-FR")} €` : null,
-        all_dirigeants: dirigeants,
-      };
-
-      log(
-        `[Pappers API] ✓ ${result.owner_name || "—"} | ${result.company_type || "—"} | SIREN: ${result.siren || "—"} | ${dirigeants.length} dirigeant(s) (score ${best.score})`
+      return buildPappersResult(
+        e,
+        dirigeants,
+        log,
+        `fuzzy search score ${best.score}`,
       );
-      return result;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`[Pappers API] ✗ ${msg.slice(0, 80)}`);
