@@ -133,7 +133,7 @@ You can manage the user's Google Calendar with \`calendar_list_upcoming\` and \`
 </CAPABILITY:calendar>`;
 
 const PACK_WEB_RESEARCH = `<CAPABILITY:web-research>
-Prefer \`web_search\` to find URLs, then \`web_fetch\` to read them. Cite the URL alongside any fact you report. Only fall back to \`agentic_browse_*\` when the page needs login or heavy interaction.
+Both \`web_search\` and \`web_fetch\` run through a real headless Chromium (Playwright) — no third-party search API. Results come from a rendered SERP; pages come back with JS already executed. Normal workflow: \`web_search(query)\` to find URLs, then \`web_fetch(url)\` to read each. Cite the URL alongside any fact you report. For multi-step interactions (click, type, scroll, screenshot-based extraction), use \`browser_navigate\` + \`browser_act\` / \`browser_extract\` instead — they share the same browser stack but expose a stateful session.
 </CAPABILITY:web-research>`;
 
 const PACK_BROWSER = `<CAPABILITY:browser>
