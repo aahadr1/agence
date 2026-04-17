@@ -18,4 +18,16 @@ import "./scratchpad";
 import "./save-lead";
 import "./ask-user";
 
+// Agent v3 generic tools (always registered)
+import "./todo";
+import "./plan";
+import "./reflection";
+import "./memory";
+import "./approval";
+import "./web_fetch";
+import "./web_search";
+import "./agentic-browse";
+import "./gmail";
+import "./calendar";
+
 export { getAllToolNames, getToolDefinitions, executeTool } from "../tool-registry";

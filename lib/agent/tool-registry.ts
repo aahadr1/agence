@@ -5,6 +5,30 @@
 
 import type { AgentContext, ToolDefinition, ToolResult } from "./types";
 
+async function hasConnection(
+  userId: string,
+  provider: string,
+): Promise<boolean> {
+  try {
+    const { createClient } = await import("@supabase/supabase-js");
+    const db = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { persistSession: false } },
+    );
+    const { data } = await db
+      .from("user_connections")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("provider", provider)
+      .limit(1)
+      .maybeSingle();
+    return !!data?.id;
+  } catch {
+    return false;
+  }
+}
+
 export type ToolExecuteFn = (
   args: Record<string, unknown>,
   context: AgentContext
@@ -61,6 +85,21 @@ export async function executeTool(
 
   const start = Date.now();
   try {
+    if (tool.definition.requiredConnection) {
+      const ok = await hasConnection(
+        context.userId,
+        tool.definition.requiredConnection,
+      );
+      if (!ok) {
+        return {
+          name,
+          result: null,
+          error: `Missing connection: ${tool.definition.requiredConnection}. Ask the user to connect in Settings → Connections.`,
+          durationMs: Date.now() - start,
+          costCents: 0,
+        };
+      }
+    }
     const result = await tool.execute(args, context);
     return {
       name,

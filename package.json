@@ -17,6 +17,7 @@
     "worker:2": "tsx workers/lead-enricher.ts --concurrency 2"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -49,6 +50,7 @@
     "@upstash/redis": "^1.37.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "googleapis": "^171.4.0",
     "inngest": "^4.2.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.577.0",

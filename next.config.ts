@@ -32,6 +32,9 @@ const nextConfig: NextConfig = {
     "/api/business-analyzer/analyze": [
       "./node_modules/@sparticuz/chromium/bin/**/*",
     ],
+    "/api/inngest": [
+      "./node_modules/@sparticuz/chromium/bin/**/*",
+    ],
   },
   serverExternalPackages: ["@sparticuz/chromium", "playwright-core"],
 };

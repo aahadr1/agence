@@ -50,6 +50,7 @@ export const missionExecute = inngest.createFunction(
 
       const context: AgentContext = {
         missionId,
+        sessionId: missionId,
         orgId: mission.org_id,
         userId: mission.user_id,
         scratchpad: new Map(),
@@ -57,6 +58,8 @@ export const missionExecute = inngest.createFunction(
         budgetCapCents: mission.budget_cap_cents || null,
         iterationCount: 0,
         maxIterations: 50,
+        capabilityPacks: ["lead-gen-fr", "web-research"],
+        inputTokensSoFar: 0,
       };
 
       const toolNames = ROLE_TOOLS.orchestrator;

@@ -14,20 +14,22 @@ import {
   type Part,
   type GenerateContentResult,
 } from "@google/generative-ai";
-import type { AgentModel, ToolDefinition } from "@/lib/agent/types";
+import type { ToolDefinition } from "@/lib/agent/types";
 
-const MODEL_MAP: Record<AgentModel, string> = {
+export type GeminiModel = "gemini-2.5-pro" | "gemini-2.5-flash";
+
+const MODEL_MAP: Record<GeminiModel, string> = {
   "gemini-2.5-pro": "gemini-2.5-pro",
   "gemini-2.5-flash": "gemini-2.5-flash",
 };
 
-const COST_PER_M_INPUT: Record<AgentModel, number> = {
-  "gemini-2.5-pro": 250,   // $2.50 per M input tokens = 250 cents
-  "gemini-2.5-flash": 15,  // $0.15 per M input tokens = 15 cents
+const COST_PER_M_INPUT: Record<GeminiModel, number> = {
+  "gemini-2.5-pro": 250,
+  "gemini-2.5-flash": 15,
 };
-const COST_PER_M_OUTPUT: Record<AgentModel, number> = {
-  "gemini-2.5-pro": 1000,  // $10 per M output tokens
-  "gemini-2.5-flash": 60,  // $0.60 per M output tokens
+const COST_PER_M_OUTPUT: Record<GeminiModel, number> = {
+  "gemini-2.5-pro": 1000,
+  "gemini-2.5-flash": 60,
 };
 
 let _client: GoogleGenerativeAI | null = null;
@@ -41,12 +43,12 @@ function getClient(): GoogleGenerativeAI {
   return _client;
 }
 
-export function getModel(model: AgentModel) {
+export function getModel(model: GeminiModel) {
   return getClient().getGenerativeModel({ model: MODEL_MAP[model] });
 }
 
 export function estimateCostCents(
-  model: AgentModel,
+  model: GeminiModel,
   inputTokens: number,
   outputTokens: number
 ): number {
@@ -116,7 +118,7 @@ export interface GeminiCallResult {
  * Single call to Gemini with function calling support.
  */
 export async function callGemini(opts: {
-  model: AgentModel;
+  model: GeminiModel;
   systemPrompt: string;
   history: Content[];
   tools?: ToolDefinition[];
