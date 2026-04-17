@@ -48,7 +48,13 @@ interface AgentState {
   history: AgentMessage[];
   consecutiveErrors: number;
   lastReflectionIter: number;
+  /** Nudges fired since the last successful tool call. Resets on any tool
+   *  result with `error === undefined`. Used as a circuit-breaker to avoid
+   *  looping forever when the model can't self-correct. */
+  nudgesSinceToolSuccess: number;
 }
+
+const MAX_NUDGES_BEFORE_YIELD = 3;
 
 export async function runAgentLoop(
   config: AgentConfig,
@@ -62,6 +68,7 @@ export async function runAgentLoop(
     history: [...priorHistory],
     consecutiveErrors: 0,
     lastReflectionIter: 0,
+    nudgesSinceToolSuccess: 0,
   };
 
   const allToolCalls: ToolResult[] = [];
@@ -146,7 +153,13 @@ export async function runAgentLoop(
 
     // ---- No tool calls → decide: genuine done OR model-emitted pseudo-code ----
     if (result.functionCalls.length === 0) {
-      const pseudo = detectPseudoToolCall(result.text);
+      // Circuit breaker: after N nudges with no successful tool call in between,
+      // accept the model's message as final. Avoids infinite loops when the
+      // model cannot self-correct (e.g. unrecoverable tool-arg format issue).
+      const canStillNudge =
+        state.nudgesSinceToolSuccess < MAX_NUDGES_BEFORE_YIELD;
+
+      const pseudo = canStillNudge ? detectPseudoToolCall(result.text) : null;
       if (pseudo) {
         const nudge =
           `You just emitted a tool reference as text ("${pseudo}") instead of actually invoking a tool.` +
@@ -159,10 +172,11 @@ export async function runAgentLoop(
         });
         await config.onNudge?.(nudge, "pseudo_tool_call");
         state.consecutiveErrors++;
+        state.nudgesSinceToolSuccess++;
         continue;
       }
 
-      if (looksLikeIntentWithoutAction(result.text)) {
+      if (canStillNudge && looksLikeIntentWithoutAction(result.text)) {
         const nudge =
           "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, say so explicitly and summarize — don't just describe an action.";
         state.history.push({
@@ -171,26 +185,29 @@ export async function runAgentLoop(
         });
         await config.onNudge?.(nudge, "intent_without_action");
         state.consecutiveErrors++;
+        state.nudgesSinceToolSuccess++;
         continue;
       }
 
       // Last line of defense: if there's still open work (pending todos,
       // awaiting approvals handled separately), don't let the model silently
-      // give up. Force it to either execute the next step or explicitly
-      // acknowledge abandonment.
-      if (config.checkOpenWork) {
+      // give up. BUT only if we haven't already hit the nudge budget — and
+      // only if the model hasn't just delivered a substantial final message
+      // (which is probably the real answer the user wants).
+      if (canStillNudge && config.checkOpenWork && !looksLikeFinalSummary(result.text)) {
         try {
           const check = await config.checkOpenWork();
           if (check.open) {
             const nudge =
               `You stopped but there is still open work: ${check.summary || "pending todos remain"}. ` +
-              "Continue now by invoking the next tool you need. If you genuinely cannot proceed, call `ask_user` for clarification, or mark the blocked todos as cancelled with `todo_update` and then summarize. Do not stop silently.";
+              "Continue by either executing the next tool, calling `todo_update` to close completed todos (id accepts UUID, index, or content substring), or calling `todo_finalize` if the whole task is delivered. Do not stop silently.";
             state.history.push({
               role: "user",
               parts: [{ type: "text", text: nudge }],
             });
             await config.onNudge?.(nudge, "open_work_remaining");
             state.consecutiveErrors++;
+            state.nudgesSinceToolSuccess++;
             continue;
           }
         } catch {
@@ -214,8 +231,14 @@ export async function runAgentLoop(
       await config.onToolResult?.(toolResult);
 
       // Update error streak
-      if (toolResult.error) state.consecutiveErrors++;
-      else state.consecutiveErrors = 0;
+      if (toolResult.error) {
+        state.consecutiveErrors++;
+      } else {
+        state.consecutiveErrors = 0;
+        // A successful tool call clears the nudge budget so future
+        // corrections remain available.
+        state.nudgesSinceToolSuccess = 0;
+      }
 
       // Special handling: request_approval pauses the loop
       if (fc.name === "request_approval" && !toolResult.error) {
@@ -336,6 +359,27 @@ function looksLikeIntentWithoutAction(
     if (re.test(t)) hits++;
   }
   return hits >= 1;
+}
+
+/**
+ * Heuristic: does the text look like a completed, substantial final answer?
+ * Used to avoid nudging "open work" when the agent has, in fact, delivered
+ * a polished summary (e.g. a list of qualified leads). Criteria:
+ *  - long enough (>= 400 chars)
+ *  - AND contains at least one "structure" signal: numbered list, bullet
+ *    list, markdown heading, or a "final / conclusion / liste" keyword.
+ */
+function looksLikeFinalSummary(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 400) return false;
+  const signals = [
+    /(^|\n)\s*\d+\.\s+\S/, // numbered list item
+    /(^|\n)\s*[-*]\s+\S/, // bullet list item
+    /(^|\n)#{1,3}\s+\S/, // markdown heading
+    /\b(liste\s+finale|final\s+list|synth[eè]se|en\s+résum[eé]|conclusion)\b/i,
+  ];
+  return signals.some((re) => re.test(t));
 }
 
 function safeStringify(value: unknown): string {

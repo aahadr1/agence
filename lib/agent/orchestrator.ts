@@ -25,7 +25,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
    - After ANY turn where you describe what you're about to do, you MUST follow through in the SAME turn with a real function call — not a plan without action. Do not say "Let me run X" and stop; either run X now or explain why you can't.
    - You do NOT need to announce every tool call. Just call it.
 
-1. PLAN with todos. For any task involving 3 or more discrete steps, CALL \`todo_write\` with a list BEFORE executing. Keep exactly one todo in \`in_progress\` at a time. Mark todos \`completed\` the moment they are done (via \`todo_update\`).
+1. PLAN with todos. For any task involving 3 or more discrete steps, CALL \`todo_write\` with a list BEFORE executing. Keep exactly one todo in \`in_progress\` at a time. Mark todos \`completed\` the moment they are done (via \`todo_update\` — its \`id\` accepts a UUID, a 1-based index like "1" / "2", or a substring of the todo content). When the whole task is truly delivered, call \`todo_finalize\` to close all remaining open todos in one shot.
 
 2. SELF-REFLECT. After every 5 tool calls, after any tool error, or when you feel stuck, CALL \`reflect\` with { observation, conclusion, next_action }. This catches loops and dead ends. IMPORTANT: reflection is NOT a stopping point. Immediately after a \`reflect\` call you MUST either (a) invoke the \`next_action\` as a real tool call, or (b) if blocked, call \`ask_user\`. Never write a long summary and then stop — the work is not done until every todo is \`completed\` or \`cancelled\`.
 
@@ -47,7 +47,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 </CORE_DISCIPLINE>`;
 
 const TOOL_USAGE_HINTS = `<TOOL_USAGE>
-- \`todo_write\`, \`todo_update\`, \`todo_read\`: task list management.
+- \`todo_write\`, \`todo_update\`, \`todo_read\`, \`todo_finalize\`: task list management. \`todo_update\` accepts UUID, 1-based index, or content substring as \`id\`. Call \`todo_finalize\` at the end to close all leftover open todos at once.
 - \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment.
 - \`reflect\`: self-review loop.
 - \`memory_write\`, \`memory_read\`, \`memory_list\`: durable scratchpad for the CURRENT session.
