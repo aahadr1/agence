@@ -303,6 +303,27 @@ async function runOneTickLocked(
             metadata: { nudge: true, reason },
           });
         },
+        checkOpenWork: async () => {
+          const { data: todos } = await db
+            .from("agent_todos")
+            .select("content, status")
+            .eq("session_id", sessionId)
+            .in("status", ["pending", "in_progress"])
+            .limit(20);
+          if (todos && todos.length > 0) {
+            const preview = todos
+              .slice(0, 5)
+              .map((t) => `• ${t.content} (${t.status})`)
+              .join("\n");
+            const more =
+              todos.length > 5 ? `\n…and ${todos.length - 5} more` : "";
+            return {
+              open: true,
+              summary: `${todos.length} todo(s) still open:\n${preview}${more}`,
+            };
+          }
+          return { open: false };
+        },
       },
       context,
       executeTool,

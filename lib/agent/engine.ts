@@ -173,6 +173,30 @@ export async function runAgentLoop(
         continue;
       }
 
+      // Last line of defense: if there's still open work (pending todos,
+      // awaiting approvals handled separately), don't let the model silently
+      // give up. Force it to either execute the next step or explicitly
+      // acknowledge abandonment.
+      if (config.checkOpenWork) {
+        try {
+          const check = await config.checkOpenWork();
+          if (check.open) {
+            const nudge =
+              `You stopped but there is still open work: ${check.summary || "pending todos remain"}. ` +
+              "Continue now by invoking the next tool you need. If you genuinely cannot proceed, call `ask_user` for clarification, or mark the blocked todos as cancelled with `todo_update` and then summarize. Do not stop silently.";
+            state.history.push({
+              role: "user",
+              parts: [{ type: "text", text: nudge }],
+            });
+            await config.onNudge?.(nudge, "open_work_remaining");
+            state.consecutiveErrors++;
+            continue;
+          }
+        } catch {
+          // soft-fail the check; proceed to completion
+        }
+      }
+
       finalMessage = result.text || "Done.";
       return buildResult(finalMessage, "completed");
     }
@@ -281,9 +305,15 @@ function detectPseudoToolCall(text: string | null | undefined): string | null {
 }
 
 const INTENT_PATTERNS: RegExp[] = [
+  // Announcing an imminent action
   /\b(maintenant|now|je\s+vais|je\s+lance|let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to|on\s+va|on\s+commence|on\s+lance)\b/i,
   /\b(commence|commencer|launching|starting|going\s+to\s+(?:run|call|use|execute|invoke))\b/i,
   /\b(first\s+step|premi[eè]re?\s+[eé]tape|étape\s*1|step\s*1)\b/i,
+  // Describing remaining/next work
+  /\b(prochaine?\s+(?:action|[eé]tape|chose)|next\s+(?:action|step|move))\b/i,
+  /\b(il\s+me\s+(?:reste|manque)|i\s+(?:still|need\s+to)|still\s+(?:need|have)\s+to|remaining|restant|à\s+faire|to\s+do)\b/i,
+  /\b(je\s+dois|i\s+must|i\s+should|il\s+faut)\b/i,
+  /\b(continu\w+|reprendre|resume|keep\s+going)\b/i,
 ];
 
 /**

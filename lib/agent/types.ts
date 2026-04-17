@@ -96,6 +96,12 @@ export interface AgentConfig {
   onApprovalRequest?: (a: AgentApprovalRequest) => void | Promise<void>;
   /** Fired when the engine injects a hidden corrective nudge (pseudo-code detected, etc.) */
   onNudge?: (text: string, reason: string) => void | Promise<void>;
+  /**
+   * Called when the model produces no tool call to decide whether the session
+   * is truly done. If it returns { open: true, summary }, the engine injects a
+   * nudge with the summary and continues the loop instead of marking complete.
+   */
+  checkOpenWork?: () => Promise<{ open: boolean; summary?: string }>;
 }
 
 export type SubAgentRole =

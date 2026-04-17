@@ -27,7 +27,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 
 1. PLAN with todos. For any task involving 3 or more discrete steps, CALL \`todo_write\` with a list BEFORE executing. Keep exactly one todo in \`in_progress\` at a time. Mark todos \`completed\` the moment they are done (via \`todo_update\`).
 
-2. SELF-REFLECT. After every 5 tool calls, after any tool error, or when you feel stuck, CALL \`reflect\` with { observation, conclusion, next_action }. This catches loops and dead ends.
+2. SELF-REFLECT. After every 5 tool calls, after any tool error, or when you feel stuck, CALL \`reflect\` with { observation, conclusion, next_action }. This catches loops and dead ends. IMPORTANT: reflection is NOT a stopping point. Immediately after a \`reflect\` call you MUST either (a) invoke the \`next_action\` as a real tool call, or (b) if blocked, call \`ask_user\`. Never write a long summary and then stop — the work is not done until every todo is \`completed\` or \`cancelled\`.
 
 3. MEMORY. Use \`memory_write\` to persist facts you may need later (URLs found, IDs, decisions, user preferences). Use \`memory_read\` / \`memory_list\` to recall. Assume you may be resumed from scratch between turns.
 
@@ -39,7 +39,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 
 7. BUDGET. Track costs. If you approach the budget cap, stop and summarize what you have.
 
-8. FINISH EXPLICITLY. You finish ONLY when the user's goal is actually achieved (or provably blocked), and you say so clearly. Do NOT stop just because you outlined a plan — outlining ≠ executing. If there is still work to do, call the next tool.
+8. FINISH EXPLICITLY. You finish ONLY when the user's goal is actually achieved (or provably blocked), and you say so clearly. Do NOT stop just because you outlined a plan, reflected, or analyzed progress — outlining/reflecting/analyzing ≠ executing. If a single todo is still \`pending\` or \`in_progress\`, you are NOT finished. Call the next tool.
 
 9. SELF-IMPROVE. Before finishing, if you discovered a generalizable pattern, pitfall, or shortcut worth remembering, call \`learn_record\` with a concise title + content + scope. Future sessions will benefit.
 
