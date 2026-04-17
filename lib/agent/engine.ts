@@ -87,7 +87,8 @@ export async function runAgentLoop(
       context.totalCostCents >= context.budgetCapCents
     ) {
       finalMessage = "Budget cap reached. Stopping agent loop.";
-      await config.onMessage?.(finalMessage);
+      // Don't surface internal terminator as an assistant message — the
+      // ticker already journals the outcome and updates session status.
       return buildResult(finalMessage, "budget_exhausted");
     }
 
@@ -256,10 +257,9 @@ export async function runAgentLoop(
     }
   }
 
-  // Max iterations reached
+  // Max iterations reached — yield to the next tick silently.
   finalMessage =
     finalMessage || "Maximum iterations reached. Stopping agent loop.";
-  await config.onMessage?.(finalMessage);
   return buildResult(finalMessage, "max_iterations");
 
   // -------------------------------------------------------------------------
