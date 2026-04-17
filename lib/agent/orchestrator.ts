@@ -35,17 +35,25 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 8. BUDGET. Track costs. If you approach the budget cap, stop and summarize what you have.
 
 9. FINISH EXPLICITLY. When the goal is achieved (or truly blocked), produce a final summary message without any tool call. This ends the loop.
+
+10. SELF-IMPROVE. Before finishing, if you discovered a generalizable pattern, pitfall, or shortcut worth remembering, call \`learn_record\` with a concise title + content + scope. Future sessions will benefit.
+
+11. SELF-EXTEND. If you hit a recurring need that no existing tool covers (and you cannot solve it with \`web_fetch\` + \`web_search\` + \`browser_*\`), propose a new tool via \`tool_create\`. It will be queued for human approval. Never try to modify server-side code directly.
 </CORE_DISCIPLINE>`;
 
 const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`todo_write\`, \`todo_update\`, \`todo_read\`: task list management.
 - \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment.
 - \`reflect\`: self-review loop.
-- \`memory_write\`, \`memory_read\`, \`memory_list\`: durable scratchpad.
+- \`memory_write\`, \`memory_read\`, \`memory_list\`: durable scratchpad for the CURRENT session.
+- \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.
+- \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
 - \`request_approval\`: pause for user decision on sensitive actions.
 - \`web_fetch\`, \`web_search\`: quick research without launching a browser.
 - \`browser_navigate\`, \`browser_act\`, \`browser_extract\`, \`browser_close\`: open a real browser and drive it step by step with screenshots. Use only when \`web_fetch\` + \`web_search\` can't get the data (dynamic UIs, JS-heavy pages).
 - \`ask_user\`: ask a clarifying question when truly ambiguous (max 1-3 questions).
+- \`tool_create\`: DEFINE A NEW TOOL AT RUNTIME. Use this when you repeatedly need a capability that no existing tool covers. The tool becomes available to you (and all future sessions in this org) after a human approves it. Keep the body small, stateless, and use only sandboxed globals (fetch, URL, JSON, Date, Math).
+- \`tool_list_custom\`: list all custom tools currently defined in the org.
 </TOOL_USAGE>`;
 
 const LANGUAGE_POLICY = `<LANGUAGE>

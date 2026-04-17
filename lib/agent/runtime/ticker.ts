@@ -1,0 +1,502 @@
+/**
+ * Autonomous runtime ticker.
+ *
+ * A "tick" is a bounded unit of agent work executed inside a single serverless
+ * invocation. Each tick:
+ *   1. Acquires a Postgres-level lock on the session (prevents double-runs).
+ *   2. Loads session state + prior history from Supabase.
+ *   3. Runs `runAgentLoop` with a TIGHT budget (time + iterations).
+ *   4. Persists outputs (messages, reflections, cost).
+ *   5. Decides whether to schedule another tick or stop.
+ *
+ * If the tick succeeds but the agent isn't done yet, we self-chain via an
+ * outbound HTTP call to /api/agent/tick. If we crash, the cron recovery job
+ * notices the stale `last_tick_at` and relaunches.
+ *
+ * This module REPLACES the old Inngest-based runner.
+ */
+
+import { randomUUID } from "node:crypto";
+import type {
+  AgentContext,
+  AgentModel,
+  CapabilityPack,
+  ToolDefinition,
+} from "@/lib/agent/types";
+import { acquireLock, releaseLock, type SessionLock } from "./lock";
+import { withRetry, isLikelyTransient, sleep } from "./retry";
+import { scheduleNextTick } from "./schedule";
+import { getAgentDb } from "@/lib/agent/tools/_db";
+import type { AgentMessage } from "@/lib/ai/llm-router";
+
+// -----------------------------------------------------------------------------
+// Configuration
+// -----------------------------------------------------------------------------
+
+/**
+ * Hard deadline for one tick. Vercel's default is 300s (we set maxDuration=300
+ * on the route too); we stop 30s earlier to guarantee we can cleanly hand off
+ * to the next tick without getting killed mid-write.
+ */
+const TICK_SOFT_DEADLINE_MS = 270_000;
+
+/** Max agent-loop iterations performed in one tick before yielding. */
+const ITER_PER_TICK = 8;
+
+/** Lock lease length. Must exceed worst-case tick duration. */
+const LOCK_TTL_SEC = 300;
+
+/** Max automatic retries of a failing tick before we mark session as failed. */
+const MAX_TICK_RETRIES = 3;
+
+// -----------------------------------------------------------------------------
+// Session row shape
+// -----------------------------------------------------------------------------
+
+interface SessionRow {
+  id: string;
+  org_id: string;
+  user_id: string;
+  status: string;
+  model: string;
+  capability_packs: string[];
+  domain_instructions: string | null;
+  budget_cap_cents: number | null;
+  cost_cents: number;
+  tick_count: number;
+  attempt_count: number;
+  last_error: string | null;
+}
+
+// -----------------------------------------------------------------------------
+// Public entry point
+// -----------------------------------------------------------------------------
+
+export interface TickResult {
+  sessionId: string;
+  status: string;
+  didWork: boolean;
+  willContinue: boolean;
+  iterations: number;
+  costCents: number;
+  errorMessage?: string;
+}
+
+/**
+ * Run one tick for a session. If the session is done (completed / failed /
+ * awaiting_approval), returns quickly without doing work.
+ */
+export async function tickSession(sessionId: string): Promise<TickResult> {
+  const lock = await acquireLock(sessionId, LOCK_TTL_SEC);
+  if (!lock) {
+    // Someone else is running it right now. That's fine — we return.
+    return {
+      sessionId,
+      status: "locked_by_other",
+      didWork: false,
+      willContinue: false,
+      iterations: 0,
+      costCents: 0,
+    };
+  }
+
+  try {
+    return await runOneTickLocked(sessionId, lock);
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Internal: one locked tick
+// -----------------------------------------------------------------------------
+
+async function runOneTickLocked(
+  sessionId: string,
+  _lock: SessionLock,
+): Promise<TickResult> {
+  const db = getAgentDb();
+  const startedAt = Date.now();
+
+  const { data: session } = await db
+    .from("agent_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .maybeSingle<SessionRow>();
+
+  if (!session) {
+    return {
+      sessionId,
+      status: "missing",
+      didWork: false,
+      willContinue: false,
+      iterations: 0,
+      costCents: 0,
+      errorMessage: "session not found",
+    };
+  }
+
+  // Terminal states: don't touch.
+  if (
+    ["completed", "failed", "cancelled", "awaiting_approval"].includes(
+      session.status,
+    )
+  ) {
+    return {
+      sessionId,
+      status: session.status,
+      didWork: false,
+      willContinue: false,
+      iterations: 0,
+      costCents: 0,
+    };
+  }
+
+  // Journal the step (best-effort, non-fatal)
+  const stepNum = (session.tick_count || 0) + 1;
+  const stepId = randomUUID();
+  await db.from("agent_session_steps").insert({
+    id: stepId,
+    session_id: sessionId,
+    step_num: stepNum,
+    status: "running",
+    attempt: (session.attempt_count || 0) + 1,
+    input: { iter_budget: ITER_PER_TICK },
+  });
+
+  // Mark session running + heartbeat
+  await db
+    .from("agent_sessions")
+    .update({
+      status: "running",
+      last_tick_at: new Date().toISOString(),
+      tick_count: stepNum,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", sessionId);
+
+  let iterationsDone = 0;
+  let endStatus: TickResult["status"] = "running";
+  let pendingApprovalId: string | undefined;
+  let errorMessage: string | undefined;
+  let didWork = false;
+  let willContinue = true;
+
+  try {
+    // Lazy-load heavy deps
+    const { runAgentLoop } = await import("@/lib/agent/engine");
+    const { buildSystemPrompt, getToolNamesForCapabilities } = await import(
+      "@/lib/agent/orchestrator"
+    );
+    const { executeTool, getToolDefinitions } = await import(
+      "@/lib/agent/tools"
+    );
+    const { registerCustomToolsForOrg } = await import(
+      "@/lib/agent/runtime/custom-tools"
+    );
+    const { injectLearnings } = await import(
+      "@/lib/agent/runtime/learnings"
+    );
+
+    // Load any custom (user-defined, approved) tools for this org
+    const customToolNames = await registerCustomToolsForOrg(session.org_id);
+
+    const packs = (session.capability_packs || []) as CapabilityPack[];
+    const baseSystem = buildSystemPrompt({
+      capabilities: packs,
+      domainInstructions: session.domain_instructions || undefined,
+    });
+    const systemPrompt = await injectLearnings(baseSystem, {
+      orgId: session.org_id,
+      scopes: packs,
+    });
+
+    const toolNames = [
+      ...getToolNamesForCapabilities(packs),
+      ...customToolNames,
+      // Always expose the meta-tools for self-improvement / self-extension
+      "learn_record",
+      "learn_recall",
+      "tool_create",
+      "tool_list_custom",
+    ];
+    const tools: ToolDefinition[] = getToolDefinitions(toolNames);
+
+    // Resume: load prior history from DB so the LLM sees everything so far
+    const priorHistory = await loadHistory(sessionId);
+    const userMessage =
+      stepNum === 1 ? await fetchInitialPrompt(sessionId) : undefined;
+
+    const context: AgentContext = {
+      missionId: sessionId,
+      sessionId,
+      orgId: session.org_id,
+      userId: session.user_id,
+      scratchpad: new Map(),
+      totalCostCents: session.cost_cents || 0,
+      budgetCapCents: session.budget_cap_cents,
+      iterationCount: 0,
+      maxIterations: ITER_PER_TICK,
+      capabilityPacks: packs,
+      inputTokensSoFar: 0,
+    };
+
+    const loopPromise = runAgentLoop(
+      {
+        systemPrompt,
+        tools,
+        model: (session.model as AgentModel) || "gemini-2.5-pro",
+        maxIterations: ITER_PER_TICK,
+        reflectEveryN: 5,
+        onThinking: async (text) => {
+          await db.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "thinking",
+            content: text,
+          });
+        },
+        onMessage: async (text) => {
+          await db.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "assistant",
+            content: text,
+          });
+        },
+        onToolCall: async (name, params) => {
+          await db.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "system",
+            content: `→ ${name}`,
+            metadata: { tool: name, params },
+          });
+        },
+        onToolResult: async (toolResult) => {
+          await db.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "system",
+            content: toolResult.error
+              ? `${toolResult.name} failed: ${toolResult.error}`
+              : `${toolResult.name} ok (${toolResult.durationMs}ms)`,
+            metadata: {
+              tool: toolResult.name,
+              error: toolResult.error || null,
+              duration_ms: toolResult.durationMs,
+            },
+          });
+        },
+        onReflection: async (r) => {
+          await db.from("agent_reflections").insert({
+            session_id: sessionId,
+            iteration: r.iteration,
+            observation: r.observation,
+            conclusion: r.conclusion,
+            next_action: r.nextAction,
+          });
+        },
+      },
+      context,
+      executeTool,
+      userMessage,
+      priorHistory,
+    );
+
+    // Race against soft deadline so we can cleanly hand off
+    const timeout = new Promise<"__deadline__">((resolve) =>
+      setTimeout(() => resolve("__deadline__"), TICK_SOFT_DEADLINE_MS),
+    );
+    const raced = await Promise.race([loopPromise, timeout]);
+
+    if (raced === "__deadline__") {
+      // The loop is still running in the background; we cannot cleanly abort
+      // it, but we'll let it finish writing its last tool call (stateless
+      // onMessage/onToolResult just insert rows). The next tick will resume
+      // based on DB state.
+      endStatus = "yielded";
+      iterationsDone = context.iterationCount;
+      didWork = iterationsDone > 0;
+      willContinue = true;
+    } else {
+      iterationsDone = raced.iterations;
+      didWork = iterationsDone > 0;
+      pendingApprovalId = raced.pendingApprovalId;
+
+      if (raced.status === "awaiting_approval") {
+        endStatus = "awaiting_approval";
+        willContinue = false;
+      } else if (raced.status === "budget_exhausted") {
+        endStatus = "paused";
+        willContinue = false;
+      } else if (raced.status === "completed") {
+        endStatus = "completed";
+        willContinue = false;
+      } else if (raced.status === "max_iterations") {
+        // We only did ITER_PER_TICK iterations; more work likely left.
+        endStatus = "yielded";
+        willContinue = true;
+      }
+    }
+
+    await db
+      .from("agent_sessions")
+      .update({
+        status:
+          endStatus === "yielded"
+            ? "running"
+            : endStatus === "completed"
+              ? "completed"
+              : endStatus === "awaiting_approval"
+                ? "awaiting_approval"
+                : endStatus === "paused"
+                  ? "paused"
+                  : "running",
+        cost_cents: Math.round(context.totalCostCents),
+        last_tick_at: new Date().toISOString(),
+        last_error: null,
+        attempt_count: 0,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId);
+
+    await db
+      .from("agent_session_steps")
+      .update({
+        status: "done",
+        output: {
+          iterations: iterationsDone,
+          status: endStatus,
+          pending_approval_id: pendingApprovalId || null,
+        },
+        duration_ms: Date.now() - startedAt,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", stepId);
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("[agent.tick] error:", errorMessage);
+
+    const attemptCount = (session.attempt_count || 0) + 1;
+    const retryable = isLikelyTransient(err) && attemptCount <= MAX_TICK_RETRIES;
+
+    await db
+      .from("agent_session_steps")
+      .update({
+        status: "failed",
+        error: errorMessage,
+        duration_ms: Date.now() - startedAt,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", stepId);
+
+    await db
+      .from("agent_sessions")
+      .update({
+        status: retryable ? "running" : "failed",
+        last_error: errorMessage,
+        attempt_count: attemptCount,
+        next_retry_at: retryable
+          ? new Date(Date.now() + Math.min(30_000, 2000 * attemptCount ** 2))
+              .toISOString()
+          : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId);
+
+    // Also log a visible error message so the user sees what happened
+    await db.from("agent_messages").insert({
+      session_id: sessionId,
+      role: "error",
+      content: retryable
+        ? `Tick error (will retry): ${errorMessage}`
+        : `Tick error (giving up after ${MAX_TICK_RETRIES} attempts): ${errorMessage}`,
+    });
+
+    willContinue = retryable;
+    endStatus = retryable ? "retrying" : "failed";
+  }
+
+  // Chain next tick if the session still has work. Use a small delay when
+  // retrying to avoid hammering a flaky dependency.
+  if (willContinue) {
+    const delayMs =
+      endStatus === "retrying"
+        ? Math.min(15_000, 2000 * ((session.attempt_count || 0) + 1))
+        : 100;
+    await scheduleNextTick(sessionId, { delayMs });
+  }
+
+  return {
+    sessionId,
+    status: endStatus,
+    didWork,
+    willContinue,
+    iterations: iterationsDone,
+    costCents: 0,
+    errorMessage,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// History loader (reconstructs AgentMessage[] from agent_messages rows)
+// -----------------------------------------------------------------------------
+
+async function loadHistory(sessionId: string): Promise<AgentMessage[]> {
+  const db = getAgentDb();
+  const { data } = await db
+    .from("agent_messages")
+    .select("role, content, metadata, created_at")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  if (!data || data.length === 0) return [];
+
+  const messages: AgentMessage[] = [];
+  for (const row of data) {
+    // We only rebuild a lightweight history from user/assistant text.
+    // Tool call/result details are not replayed here (they're already
+    // in `output` journal for debugging). The LLM gets a text-level summary.
+    if (row.role === "user") {
+      messages.push({
+        role: "user",
+        parts: [{ type: "text", text: row.content }],
+      });
+    } else if (row.role === "assistant") {
+      messages.push({
+        role: "assistant",
+        parts: [{ type: "text", text: row.content }],
+      });
+    } else if (row.role === "system") {
+      // Condense tool traces into a single user-side note every ~10 rows
+      // (keeps context light). For now we skip them from LLM history.
+    }
+  }
+  return messages;
+}
+
+async function fetchInitialPrompt(sessionId: string): Promise<string> {
+  const db = getAgentDb();
+  const { data } = await db
+    .from("agent_messages")
+    .select("content")
+    .eq("session_id", sessionId)
+    .eq("role", "user")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return data?.content || "Hello";
+}
+
+// -----------------------------------------------------------------------------
+// Wrappers with retry (used by the HTTP route handlers)
+// -----------------------------------------------------------------------------
+
+export async function tickSessionWithRetry(
+  sessionId: string,
+): Promise<TickResult> {
+  return withRetry(() => tickSession(sessionId), {
+    maxAttempts: 2,
+    baseDelayMs: 500,
+  });
+}
+
+export { sleep };

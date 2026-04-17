@@ -1,33 +1,9 @@
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-async function dispatchContinue(sessionId: string, userMessage: string) {
-  if (process.env.INNGEST_EVENT_KEY) {
-    try {
-      const { inngest } = await import("@/lib/inngest/client");
-      await inngest.send({
-        name: "agent/session.continue",
-        data: { sessionId, userMessage },
-      });
-      return;
-    } catch (e) {
-      console.warn("[agent] inngest.send failed, falling back inline:", e);
-    }
-  }
-  after(async () => {
-    try {
-      const { runSession } = await import(
-        "@/lib/inngest/functions/session-run"
-      );
-      await runSession(sessionId, { userMessage });
-    } catch (e) {
-      console.error("[agent] inline runSession failed:", e);
-    }
-  });
-}
 
 export async function POST(
   req: Request,
@@ -54,6 +30,14 @@ export async function POST(
   if (insErr)
     return NextResponse.json({ error: insErr.message }, { status: 500 });
 
-  await dispatchContinue(id, body.content.trim());
+  // If the session was in a terminal pause (completed / awaiting_approval /
+  // paused), bump it back to running so the ticker picks it up.
+  await service
+    .from("agent_sessions")
+    .update({ status: "running", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .in("status", ["completed", "paused", "awaiting_approval"]);
+
+  await scheduleNextTick(id, { delayMs: 0 });
   return NextResponse.json({ ok: true });
 }

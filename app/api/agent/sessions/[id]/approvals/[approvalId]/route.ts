@@ -1,45 +1,9 @@
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
-
-async function dispatchApprovalResponse(
-  sessionId: string,
-  approvalId: string,
-  decision: "approve" | "reject",
-  comment: string | null,
-) {
-  if (process.env.INNGEST_EVENT_KEY) {
-    try {
-      const { inngest } = await import("@/lib/inngest/client");
-      await inngest.send({
-        name: "agent/approval.responded",
-        data: { sessionId, approvalId, decision, comment },
-      });
-      return;
-    } catch (e) {
-      console.warn("[agent] inngest.send failed, falling back inline:", e);
-    }
-  }
-  const userMessage = `The user ${
-    decision === "approve" ? "APPROVED" : "REJECTED"
-  } the pending action${comment ? ` with comment: ${comment}` : ""}. ${
-    decision === "approve"
-      ? "Proceed."
-      : "Do NOT execute that action. Acknowledge and continue with alternatives."
-  }`;
-  after(async () => {
-    try {
-      const { runSession } = await import(
-        "@/lib/inngest/functions/session-run"
-      );
-      await runSession(sessionId, { userMessage });
-    } catch (e) {
-      console.error("[agent] inline runSession failed:", e);
-    }
-  });
-}
+export const maxDuration = 60;
 
 export async function POST(
   req: Request,
@@ -75,19 +39,36 @@ export async function POST(
   if (error)
     return NextResponse.json({ error: error.message }, { status: 500 });
 
-  await service.from("agent_messages").insert({
-    session_id: id,
-    role: "approval_response",
-    content: status,
-    metadata: { approval_id: approvalId, comment: body.comment || null },
-  });
+  // Surface the decision to the agent as a user-style message so the LLM
+  // sees it in its next tick.
+  const decisionPrompt = `The user ${
+    body.decision === "approve" ? "APPROVED" : "REJECTED"
+  } the pending action${body.comment ? ` with comment: ${body.comment}` : ""}. ${
+    body.decision === "approve"
+      ? "Proceed."
+      : "Do NOT execute that action. Acknowledge and continue with alternatives."
+  }`;
 
-  await dispatchApprovalResponse(
-    id,
-    approvalId,
-    body.decision,
-    body.comment || null,
-  );
+  await service.from("agent_messages").insert([
+    {
+      session_id: id,
+      role: "approval_response",
+      content: status,
+      metadata: { approval_id: approvalId, comment: body.comment || null },
+    },
+    {
+      session_id: id,
+      role: "user",
+      content: decisionPrompt,
+    },
+  ]);
 
+  // Move session back to running so the ticker picks it up
+  await service
+    .from("agent_sessions")
+    .update({ status: "running", updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  await scheduleNextTick(id, { delayMs: 0 });
   return NextResponse.json({ ok: true });
 }

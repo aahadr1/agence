@@ -25,6 +25,17 @@
     "app/api/generate-website/review/route.ts": { "maxDuration": 60 },
     "app/api/business-analyzer/analyze/route.ts": { "maxDuration": 300 },
     "app/api/lead-generator/search/route.ts": { "maxDuration": 300 },
-    "app/api/lead-generator/enrich/route.ts": { "maxDuration": 300 }
-  }
+    "app/api/lead-generator/enrich/route.ts": { "maxDuration": 300 },
+    "app/api/agent/tick/route.ts": { "maxDuration": 300 },
+    "app/api/agent/cron/recover/route.ts": { "maxDuration": 60 },
+    "app/api/agent/sessions/route.ts": { "maxDuration": 300 },
+    "app/api/agent/sessions/[id]/messages/route.ts": { "maxDuration": 300 },
+    "app/api/agent/sessions/[id]/approvals/[approvalId]/route.ts": { "maxDuration": 300 }
+  },
+  "crons": [
+    {
+      "path": "/api/agent/cron/recover",
+      "schedule": "* * * * *"
+    }
+  ]
 }

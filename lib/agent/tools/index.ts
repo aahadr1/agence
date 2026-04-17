@@ -30,4 +30,8 @@ import "./agentic-browse";
 import "./gmail";
 import "./calendar";
 
+// Self-improvement & self-extension
+import "./learn";
+import "./tool-creator";
+
 export { getAllToolNames, getToolDefinitions, executeTool } from "../tool-registry";

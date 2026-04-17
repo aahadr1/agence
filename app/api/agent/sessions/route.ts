@@ -1,39 +1,10 @@
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
+import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-/**
- * Dispatch the agent run. Tries Inngest first (durable, retries). If Inngest
- * isn't configured or send fails, falls back to running the session inline
- * via `after()` — no durability/retries, but works out of the box.
- */
-async function dispatchStart(sessionId: string) {
-  if (process.env.INNGEST_EVENT_KEY) {
-    try {
-      const { inngest } = await import("@/lib/inngest/client");
-      await inngest.send({
-        name: "agent/session.start",
-        data: { sessionId },
-      });
-      return;
-    } catch (e) {
-      console.warn("[agent] inngest.send failed, falling back inline:", e);
-    }
-  }
-  after(async () => {
-    try {
-      const { runSession } = await import(
-        "@/lib/inngest/functions/session-run"
-      );
-      await runSession(sessionId);
-    } catch (e) {
-      console.error("[agent] inline runSession failed:", e);
-    }
-  });
-}
 
 export async function GET() {
   const supabase = await createClient();
@@ -108,7 +79,7 @@ export async function POST(req: Request) {
       content: body.prompt.trim(),
     });
 
-    await dispatchStart(session.id);
+    await scheduleNextTick(session.id, { delayMs: 0 });
 
     return NextResponse.json({ session }, { status: 201 });
   } catch (e) {
