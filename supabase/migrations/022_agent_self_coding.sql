@@ -1,10 +1,12 @@
 -- Migration 022 — agent self-coding audit log.
 -- Tracks every PR the agent authored so we can rate-limit, audit, and
 -- link sessions ↔ PRs in the UI.
+--
+-- Depends on: 010_organization_foundation (organizations, is_org_member)
 
 CREATE TABLE IF NOT EXISTS public.agent_code_commits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id UUID NOT NULL REFERENCES public.orgs(id) ON DELETE CASCADE,
+  org_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
   user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   session_id UUID REFERENCES public.agent_sessions(id) ON DELETE SET NULL,
   branch_name TEXT NOT NULL,
@@ -36,13 +38,8 @@ ALTER TABLE public.agent_code_commits ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "agent_code_commits_select_members" ON public.agent_code_commits;
 CREATE POLICY "agent_code_commits_select_members"
   ON public.agent_code_commits FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.org_members m
-      WHERE m.org_id = agent_code_commits.org_id
-        AND m.user_id = auth.uid()
-    )
-  );
+  TO authenticated
+  USING (public.is_org_member(org_id));
 
 -- Only service_role writes
 DROP POLICY IF EXISTS "agent_code_commits_service_all" ON public.agent_code_commits;
