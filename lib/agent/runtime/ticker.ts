@@ -293,6 +293,16 @@ async function runOneTickLocked(
             next_action: r.nextAction,
           });
         },
+        onNudge: async (text, reason) => {
+          // Persisted as a hidden system row so the next tick's loadHistory
+          // can replay it, without polluting the user-visible chat.
+          await db.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "system",
+            content: text,
+            metadata: { nudge: true, reason },
+          });
+        },
       },
       context,
       executeTool,
@@ -452,9 +462,10 @@ async function loadHistory(sessionId: string): Promise<AgentMessage[]> {
 
   const messages: AgentMessage[] = [];
   for (const row of data) {
-    // We only rebuild a lightweight history from user/assistant text.
-    // Tool call/result details are not replayed here (they're already
-    // in `output` journal for debugging). The LLM gets a text-level summary.
+    // Rebuild a lightweight history from user/assistant text plus any
+    // persisted "nudges" (hidden corrections we injected when the model
+    // went off-rails). Tool call/result details are not replayed here —
+    // the agent relies on memory_* + todo_read for cross-tick state.
     if (row.role === "user") {
       messages.push({
         role: "user",
@@ -466,8 +477,14 @@ async function loadHistory(sessionId: string): Promise<AgentMessage[]> {
         parts: [{ type: "text", text: row.content }],
       });
     } else if (row.role === "system") {
-      // Condense tool traces into a single user-side note every ~10 rows
-      // (keeps context light). For now we skip them from LLM history.
+      const meta = (row.metadata || {}) as Record<string, unknown>;
+      if (meta.nudge === true) {
+        messages.push({
+          role: "user",
+          parts: [{ type: "text", text: row.content }],
+        });
+      }
+      // other system rows (tool traces) are intentionally skipped here
     }
   }
   return messages;

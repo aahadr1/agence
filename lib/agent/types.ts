@@ -94,6 +94,8 @@ export interface AgentConfig {
   onMessage?: (text: string) => void | Promise<void>;
   onReflection?: (r: AgentReflection) => void | Promise<void>;
   onApprovalRequest?: (a: AgentApprovalRequest) => void | Promise<void>;
+  /** Fired when the engine injects a hidden corrective nudge (pseudo-code detected, etc.) */
+  onNudge?: (text: string, reason: string) => void | Promise<void>;
 }
 
 export type SubAgentRole =

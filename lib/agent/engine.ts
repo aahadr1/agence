@@ -143,8 +143,36 @@ export async function runAgentLoop(
       await config.onMessage?.(result.text);
     }
 
-    // ---- No tool calls → loop done ----
+    // ---- No tool calls → decide: genuine done OR model-emitted pseudo-code ----
     if (result.functionCalls.length === 0) {
+      const pseudo = detectPseudoToolCall(result.text);
+      if (pseudo) {
+        const nudge =
+          `You just emitted a tool reference as text ("${pseudo}") instead of actually invoking a tool.` +
+          ` That text does NOT execute anything.` +
+          ` Re-do this turn: call the tool you intended via the function-calling API.` +
+          ` Do NOT wrap tool calls in code fences or <tool_code> blocks.`;
+        state.history.push({
+          role: "user",
+          parts: [{ type: "text", text: nudge }],
+        });
+        await config.onNudge?.(nudge, "pseudo_tool_call");
+        state.consecutiveErrors++;
+        continue;
+      }
+
+      if (looksLikeIntentWithoutAction(result.text)) {
+        const nudge =
+          "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, say so explicitly and summarize — don't just describe an action.";
+        state.history.push({
+          role: "user",
+          parts: [{ type: "text", text: nudge }],
+        });
+        await config.onNudge?.(nudge, "intent_without_action");
+        state.consecutiveErrors++;
+        continue;
+      }
+
       finalMessage = result.text || "Done.";
       return buildResult(finalMessage, "completed");
     }
@@ -231,6 +259,54 @@ export async function runAgentLoop(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Detect when the model wrote tool code as *text* instead of actually invoking
+ * a tool via the function-calling API. Common Gemini failure mode.
+ * Returns a short excerpt on match, null otherwise.
+ */
+function detectPseudoToolCall(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const s = text;
+  // <tool_code>...</tool_code> blocks
+  const m1 = s.match(/<tool_code>[\s\S]{0,200}/i);
+  if (m1) return m1[0].slice(0, 80);
+  // ```tool_code ... ```
+  const m2 = s.match(/```(?:tool_code|python|js|ts|javascript|typescript)?[\s\S]{0,30}?(?:print\s*\(|await\s+)\w+\(/i);
+  if (m2) return m2[0].slice(0, 80);
+  // Bare `print(toolname(` anywhere — the classic Gemini-emits-python pattern
+  const m3 = s.match(/\bprint\s*\(\s*[a-z_][a-z0-9_]*\s*\(/i);
+  if (m3) return m3[0].slice(0, 80);
+  return null;
+}
+
+const INTENT_PATTERNS: RegExp[] = [
+  /\b(maintenant|now|je\s+vais|je\s+lance|let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to|on\s+va|on\s+commence|on\s+lance)\b/i,
+  /\b(commence|commencer|launching|starting|going\s+to\s+(?:run|call|use|execute|invoke))\b/i,
+  /\b(first\s+step|premi[eè]re?\s+[eé]tape|étape\s*1|step\s*1)\b/i,
+];
+
+/**
+ * Detect an "I will do X" style closing where the model describes its next
+ * action but never actually calls a tool. We treat this as a mistake (the
+ * model should either call the tool or genuinely summarize and stop).
+ */
+function looksLikeIntentWithoutAction(
+  text: string | null | undefined,
+): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 10) return false;
+  // Very short final replies like "OK, done." are fine — skip
+  if (t.length < 40 && /\b(done|ok|okay|termin[eé]|voilà|vu)\b/i.test(t)) {
+    return false;
+  }
+  let hits = 0;
+  for (const re of INTENT_PATTERNS) {
+    if (re.test(t)) hits++;
+  }
+  return hits >= 1;
+}
 
 function safeStringify(value: unknown): string {
   if (typeof value === "string") return value;
