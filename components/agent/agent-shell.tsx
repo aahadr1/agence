@@ -31,16 +31,16 @@ import { Composer, type ComposerHandle } from "./composer";
 
 const CAPABILITY_PRESETS: CapabilityPreset[] = [
   {
+    id: "lead-gen",
+    label: "Lead Gen FR",
+    packs: ["lead-gen-fr", "web-research"],
+    description: "Prospection B2B en France (Pappers, GMB, Societe.com, save_lead)",
+  },
+  {
     id: "assistant",
     label: "Assistant général",
     packs: ["web-research"],
     description: "Recherche web + tâches générales",
-  },
-  {
-    id: "lead-gen",
-    label: "Lead Gen FR",
-    packs: ["lead-gen-fr", "web-research"],
-    description: "Prospection B2B en France",
   },
   {
     id: "email-ops",
@@ -300,6 +300,21 @@ export function AgentShell() {
     active?.status === "pending" ||
     active?.status === "awaiting_approval";
 
+  // Keyword-based preset hint: when the user is about to start a NEW
+  // session and their prompt obviously asks for lead generation but the
+  // currently-selected preset has no lead-gen tools, surface a gentle
+  // nudge. Without this, the agent silently falls back to web_search
+  // and hallucinates Pappers / Societe.com results (Nancy incident).
+  const presetMismatchWarning = useMemo(() => {
+    if (active) return null; // only when creating a new session
+    if (!input.trim()) return null;
+    const hasLeadGen = preset.packs.includes("lead-gen-fr");
+    if (hasLeadGen) return null;
+    const LEAD_KEYWORDS =
+      /\b(lead|leads|prospect|prospects|prospection|cold\s*(call|email)|b2b|restaurant|restaurants|cabinet|cabinets|entreprise|entreprises|dirigeant|dirigeants|pappers|societe\.?com|gmb|google\s*my\s*business|siren|siret)\b/i;
+    return LEAD_KEYWORDS.test(input) ? true : null;
+  }, [active, input, preset]);
+
   return (
     <div
       className={cn(
@@ -400,6 +415,29 @@ export function AgentShell() {
             </button>
           )}
         </div>
+
+        {presetMismatchWarning && (
+          <div className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] text-amber-700 dark:text-amber-300">
+            <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
+              <span>
+                Votre demande ressemble à de la prospection mais le preset actif
+                est <strong>{preset.label}</strong> (sans outils lead-gen).
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const leadPreset = CAPABILITY_PRESETS.find(
+                    (p) => p.id === "lead-gen",
+                  );
+                  if (leadPreset) setPreset(leadPreset);
+                }}
+                className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium hover:bg-amber-500/20"
+              >
+                Passer à Lead Gen FR
+              </button>
+            </div>
+          </div>
+        )}
 
         <Composer
           ref={composerRef}

@@ -91,12 +91,20 @@ export async function runAgentLoop(
   /** Optional: pre-existing history (used when resuming after approval) */
   priorHistory: AgentMessage[] = [],
 ): Promise<RunAgentResult> {
+  // Seed `finalSummaryDelivered` from prior history. When a tick hits
+  // max_iterations after a final answer has already been produced, the
+  // next tick must NOT treat the session as fresh — otherwise an
+  // open_work nudge will fire and the model typically interprets it as
+  // "start over" (literal "Bonjour ! J'ai bien compris votre demande …"
+  // restart loop we saw in the Nancy lead-gen incident).
+  const priorFinalSummary = priorHistoryHasFinalSummary(priorHistory);
+
   const state: AgentState = {
     history: [...priorHistory],
     consecutiveErrors: 0,
     lastReflectionIter: 0,
     nudgesSinceToolSuccess: 0,
-    finalSummaryDelivered: false,
+    finalSummaryDelivered: priorFinalSummary,
     openWorkNudgeCount: 0,
     totalNudges: 0,
     successesSinceTodoTouch: 0,
@@ -268,9 +276,14 @@ export async function runAgentLoop(
 
             if (canStillNudge && !signingOff) {
               state.openWorkNudgeCount++;
+              // IMPORTANT: the nudge wording matters. Earlier phrasings
+              // ("You stopped but there is still open work …") were
+              // misinterpreted by Gemini as "redo the whole task", which
+              // produced the Nancy-style restart loop. Keep this short,
+              // concrete, and NEVER instruct a re-plan.
               const nudge =
-                `You stopped but there is still open work: ${check.summary || "pending todos remain"}. ` +
-                "Either execute the next tool, call `todo_update` (use a 1-based index like \"1\" or the alias \"current\"), or call `todo_finalize` if the whole task is already delivered. Do not stop silently.";
+                `Open todos remain (${check.summary || "see list"}). ` +
+                "Do ONE of these, then continue: (a) call the next tool for the current in-progress todo, (b) call `todo_update` with a 1-based index (\"1\", \"2\", …) to advance status, or (c) call `todo_finalize` if the deliverable is already complete. Do NOT re-greet, re-plan, or call `todo_write` — the plan already exists.";
               pushNudge(state, nudge);
               await config.onNudge?.(nudge, "open_work_remaining");
               state.consecutiveErrors++;
@@ -284,6 +297,41 @@ export async function runAgentLoop(
 
       finalMessage = result.text || "Done.";
       return buildResult(finalMessage, "completed");
+    }
+
+    // ---- Restart-loop guard ----
+    // If a final summary was already delivered earlier (in this tick or a
+    // previous one carried via priorHistory), and the model is now trying to
+    // "start over" with a fresh greeting + a wipe-and-rewrite of the todo
+    // list (todo_write deletes all existing todos), we treat that as a
+    // stuck-in-a-loop signal. The right move is to finalize and stop — NOT
+    // to let the model re-run the whole task against a fresh todo list.
+    //
+    // Concrete trigger we saw (Nancy lead-gen incident): after delivering
+    // "Voici la liste des 10 leads …", the next tick picked up, nudged
+    // "open work remaining", and Gemini responded with "Bonjour ! J'ai
+    // bien compris votre demande. Je vais rechercher …" followed by a
+    // fresh todo_write. Four full restart cycles ensued.
+    if (
+      state.finalSummaryDelivered &&
+      looksLikeRestart(result.text, result.functionCalls)
+    ) {
+      if (config.finalizeOpenWork) {
+        try {
+          const summary = await config.finalizeOpenWork();
+          if (summary) {
+            await config.onNudge?.(
+              `Auto-finalized leftover todos: ${summary}`,
+              "restart_loop_detected",
+            );
+          }
+        } catch (e) {
+          console.warn("[engine] auto-finalize on restart failed:", e);
+        }
+      }
+      // Use the last known final text from history, not the restart greeting.
+      const priorFinal = lastFinalSummaryText(state.history) || "Done.";
+      return buildResult(priorFinal, "completed");
     }
 
     // ---- Execute tool calls ----
@@ -528,6 +576,85 @@ function looksLikeFinalSummary(text: string | null | undefined): boolean {
     /\b(liste\s+finale|final\s+list|synth[eè]se|en\s+résum[eé]|conclusion)\b/i,
   ];
   return signals.some((re) => re.test(t));
+}
+
+/**
+ * Scan a bounded tail of the priorHistory to seed `finalSummaryDelivered`
+ * at tick start. Prevents the cross-tick restart loop where the next tick
+ * woke up fresh, saw a stale "open todos" nudge, and re-greeted the user
+ * ("Bonjour ! J'ai bien compris votre demande …") instead of closing out.
+ *
+ * We look at the last ~8 assistant text messages — enough to catch recent
+ * work without paying for a full scan of a long history.
+ */
+function priorHistoryHasFinalSummary(history: AgentMessage[]): boolean {
+  if (history.length === 0) return false;
+  let scanned = 0;
+  for (let i = history.length - 1; i >= 0 && scanned < 8; i--) {
+    const msg = history[i];
+    if (msg.role !== "assistant") continue;
+    const text = msg.parts
+      .filter((p) => p.type === "text")
+      .map((p) => ("text" in p ? p.text : ""))
+      .join("\n");
+    if (text.trim()) {
+      scanned++;
+      if (looksLikeFinalSummary(text)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Return the text of the most recent assistant message that looks like a
+ * final summary, or null if none. Used when we short-circuit a restart
+ * loop so the user sees the last good answer rather than the greeting
+ * that triggered the abort.
+ */
+function lastFinalSummaryText(history: AgentMessage[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg.role !== "assistant") continue;
+    const text = msg.parts
+      .filter((p) => p.type === "text")
+      .map((p) => ("text" in p ? p.text : ""))
+      .join("\n");
+    if (looksLikeFinalSummary(text)) return text;
+  }
+  return null;
+}
+
+const RESTART_GREETING_RE =
+  /^(?:\s*)(?:bonjour|hello|hi|salut|hey)\s*[!.,\s]+/i;
+const RESTART_INTENT_PATTERNS = [
+  /j'?ai\s+(bien\s+)?compris\s+(votre\s+demande|la\s+mission)/i,
+  /i\s+understand\s+(your\s+request|the\s+mission)/i,
+  /c'?est\s+une\s+mission\s+(très\s+)?claire/i,
+  /voici\s+mon\s+plan\s+d'?action/i,
+  /here'?s\s+my\s+plan/i,
+  /je\s+vais\s+(vous\s+)?(trouver|rechercher|constituer|me\s+mettre)/i,
+];
+
+/**
+ * Detects a "restart" turn: the model is greeting + re-planning + about to
+ * wipe the todo list, after it has already delivered a final answer. This
+ * is the Nancy-style loop ("Bonjour ! Voici mon plan …" × 4).
+ *
+ * Conservative: we require BOTH a greeting OR a plan-intent phrase AND a
+ * todo_write tool call, so we never misfire on the legitimate first turn
+ * of a brand new task.
+ */
+function looksLikeRestart(
+  text: string | null | undefined,
+  calls: ReadonlyArray<{ name: string }>,
+): boolean {
+  const hasTodoWrite = calls.some((c) => c.name === "todo_write");
+  if (!hasTodoWrite) return false;
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 20) return false;
+  if (RESTART_GREETING_RE.test(t)) return true;
+  return RESTART_INTENT_PATTERNS.some((re) => re.test(t));
 }
 
 function safeStringify(value: unknown): string {
