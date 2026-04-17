@@ -11,11 +11,13 @@ registerTool(
       body: { type: "string", description: "Plain-text body" },
       cc: {
         type: "array",
+        items: { type: "string" },
         description: "Optional CC recipients",
         required: false,
       },
       bcc: {
         type: "array",
+        items: { type: "string" },
         description: "Optional BCC recipients",
         required: false,
       },

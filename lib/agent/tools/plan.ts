@@ -18,8 +18,9 @@ registerTool(
       },
       steps: {
         type: "array",
+        items: { type: "string" },
         description:
-          "Ordered list of plan steps. Each: { label, description, estimatedMinutes?: number }",
+          "Ordered list of plan step descriptions (one short sentence per step, 3-10 total).",
       },
     },
     required: ["goal", "steps"],
@@ -69,7 +70,11 @@ registerTool(
     parameters: {
       reason: { type: "string", description: "Why you're revising" },
       goal: { type: "string", description: "Updated goal" },
-      steps: { type: "array", description: "Updated ordered steps" },
+      steps: {
+        type: "array",
+        items: { type: "string" },
+        description: "Updated ordered step descriptions (one sentence each)",
+      },
     },
     required: ["reason", "goal", "steps"],
     costEstimateCents: 0,

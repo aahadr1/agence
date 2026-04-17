@@ -27,6 +27,7 @@ registerTool(
       },
       attendees: {
         type: "array",
+        items: { type: "string" },
         description: "Optional list of attendee emails",
         required: false,
       },

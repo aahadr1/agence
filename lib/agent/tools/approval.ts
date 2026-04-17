@@ -85,6 +85,7 @@ registerTool(
       question: { type: "string", description: "The question to ask" },
       options: {
         type: "array",
+        items: { type: "string" },
         description: "Optional suggested answer choices",
         required: false,
       },

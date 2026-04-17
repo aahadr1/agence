@@ -26,8 +26,9 @@ registerTool(
     parameters: {
       items: {
         type: "array",
+        items: { type: "string" },
         description:
-          "Ordered list of todos. Each item: { content: string, status: pending|in_progress|completed|cancelled }",
+          "Ordered list of todo descriptions (one sentence each). Status is inferred as 'pending' for new items. Use todo_update to change statuses.",
       },
     },
     required: ["items"],
@@ -43,21 +44,31 @@ registerTool(
       throw new Error("todo_write requires an active session");
     }
 
-    type Item = { content: string; status?: Status };
+    type Item = string | { content?: string; status?: Status };
     const items = rawItems as Item[];
 
     // Replace strategy: delete existing + insert fresh with positions
     await db.from("agent_todos").delete().eq("session_id", context.sessionId);
 
-    const rows = items.map((it, idx) => ({
-      session_id: context.sessionId,
-      content: String(it.content || "").slice(0, 500),
-      status:
-        it.status && VALID_STATUS.has(it.status)
-          ? it.status
-          : ("pending" as Status),
-      position: idx,
-    }));
+    const rows = items.map((it, idx) => {
+      if (typeof it === "string") {
+        return {
+          session_id: context.sessionId,
+          content: it.slice(0, 500),
+          status: "pending" as Status,
+          position: idx,
+        };
+      }
+      return {
+        session_id: context.sessionId,
+        content: String(it.content || "").slice(0, 500),
+        status:
+          it.status && VALID_STATUS.has(it.status)
+            ? it.status
+            : ("pending" as Status),
+        position: idx,
+      };
+    });
 
     const { data, error } = await db
       .from("agent_todos")

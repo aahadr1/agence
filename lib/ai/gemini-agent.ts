@@ -69,11 +69,26 @@ export function toFunctionDeclarations(
   return tools.map((tool) => {
     const properties: Record<string, unknown> = {};
     for (const [key, param] of Object.entries(tool.parameters)) {
-      properties[key] = {
-        type: param.type.toUpperCase(),
+      const typeUpper = param.type.toUpperCase();
+      const schema: Record<string, unknown> = {
+        type: typeUpper,
         description: param.description,
         ...(param.enum ? { enum: param.enum } : {}),
       };
+      // Gemini REQUIRES `items` on every ARRAY schema. Default to string
+      // items if the tool author forgot to specify them — safer than
+      // crashing the whole agent run with a 400.
+      if (typeUpper === "ARRAY") {
+        const itemType =
+          (param.items && (param.items as { type?: string }).type) || "string";
+        schema.items = { type: itemType.toUpperCase() };
+      }
+      // Gemini rejects OBJECT schemas without at least an empty `properties`
+      // field. Provide a permissive default if absent.
+      if (typeUpper === "OBJECT") {
+        schema.properties = {};
+      }
+      properties[key] = schema;
     }
     return {
       name: tool.name,
