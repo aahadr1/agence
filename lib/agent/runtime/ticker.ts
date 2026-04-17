@@ -341,6 +341,35 @@ async function runOneTickLocked(
           if (n === 0) return null;
           return `${n} leftover todo(s) auto-closed`;
         },
+        todoSnapshot: async () => {
+          // Compact snapshot used both by the forced reflection and the
+          // periodic "todo hygiene" reminder. Only returns a string when
+          // there's at least one todo — empty string means "skip".
+          const { data: rows } = await db
+            .from("agent_todos")
+            .select("content, status, position")
+            .eq("session_id", sessionId)
+            .order("position", { ascending: true })
+            .limit(30);
+          if (!rows || rows.length === 0) return "";
+          const lines = rows.map((t, i) => {
+            const mark =
+              t.status === "completed"
+                ? "✓"
+                : t.status === "in_progress"
+                  ? "►"
+                  : t.status === "cancelled"
+                    ? "✗"
+                    : "·";
+            const idx = i + 1;
+            const content =
+              t.content.length > 100
+                ? t.content.slice(0, 97) + "…"
+                : t.content;
+            return `${idx}. ${mark} [${t.status}] ${content}`;
+          });
+          return lines.join("\n");
+        },
       },
       context,
       executeTool,

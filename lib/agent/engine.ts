@@ -63,7 +63,20 @@ interface AgentState {
   /** Global nudge budget for the whole tick — protects against pathological
    *  loops even when a tool call resets the per-stage counter. */
   totalNudges: number;
+  /** Successful tool calls since the agent last touched its todo list via
+   *  todo_write / todo_update / todo_update_batch / todo_finalize. Used to
+   *  fire a periodic "remember to update your todos" reminder — Gemini in
+   *  particular tends to forget after long tool runs. */
+  successesSinceTodoTouch: number;
 }
+
+const TODO_REMINDER_AFTER_SUCCESSES = 5;
+const TODO_TOUCH_TOOLS = new Set<string>([
+  "todo_write",
+  "todo_update",
+  "todo_update_batch",
+  "todo_finalize",
+]);
 
 const MAX_NUDGES_BEFORE_YIELD = 3;
 /** Hard cap on nudges per tick. Once reached we accept the model's message
@@ -86,6 +99,7 @@ export async function runAgentLoop(
     finalSummaryDelivered: false,
     openWorkNudgeCount: 0,
     totalNudges: 0,
+    successesSinceTodoTouch: 0,
   };
 
   const allToolCalls: ToolResult[] = [];
@@ -216,46 +230,52 @@ export async function runAgentLoop(
         continue;
       }
 
-      // Last line of defense: if there's still open work (pending todos,
-      // awaiting approvals handled separately), don't let the model silently
-      // give up. BUT only if we haven't already hit the nudge budget — and
-      // only if the model hasn't just delivered a substantial final message
-      // (which is probably the real answer the user wants).
-      if (canStillNudge && config.checkOpenWork && !thisTurnIsFinalSummary) {
+      // Open-work handling. Two very different cases:
+      //   A. This turn IS a final summary OR a polite sign-off OR we've
+      //      already delivered a final summary earlier. In that case the
+      //      agent is done — we just need to tidy up leftover todos so the
+      //      UI doesn't show "1/5" on a session that's actually finished.
+      //      We silently auto-finalize via the caller-supplied hook.
+      //   B. This turn is NOT a final summary. Then open work really means
+      //      the model dropped the ball — nudge it to continue (subject to
+      //      the nudge budget).
+      const signingOff =
+        thisTurnIsFinalSummary ||
+        state.finalSummaryDelivered ||
+        looksLikeSignOff(result.text);
+
+      if (config.checkOpenWork) {
         try {
           const check = await config.checkOpenWork();
           if (check.open) {
-            // If we've already delivered a final summary AND the open work is
-            // just leftover todos, auto-finalize them so the session can close
-            // instead of looping. The caller supplies `finalizeOpenWork` for
-            // this; if unavailable we fall back to a single extra nudge.
-            if (
-              state.finalSummaryDelivered &&
-              state.openWorkNudgeCount >= 1 &&
-              config.finalizeOpenWork
-            ) {
+            if (signingOff && config.finalizeOpenWork) {
+              // Tidy up: the user's deliverable is in hand, close leftover
+              // todos so the session ends cleanly. No nudge, no loop.
               try {
                 const summary = await config.finalizeOpenWork();
-                finalMessage = result.text || "Done.";
-                await config.onNudge?.(
-                  `Auto-finalized leftover todos: ${summary || "cleared open work"}`,
-                  "auto_finalize",
-                );
-                return buildResult(finalMessage, "completed");
+                if (summary) {
+                  await config.onNudge?.(
+                    `Auto-finalized leftover todos: ${summary}`,
+                    "auto_finalize",
+                  );
+                }
               } catch (e) {
-                // fall through to the plain nudge if finalize fails
                 console.warn("[engine] auto-finalize failed:", e);
               }
+              finalMessage = result.text || "Done.";
+              return buildResult(finalMessage, "completed");
             }
 
-            state.openWorkNudgeCount++;
-            const nudge =
-              `You stopped but there is still open work: ${check.summary || "pending todos remain"}. ` +
-              "Either execute the next tool, call `todo_update` (use a 1-based index like \"1\" or the alias \"current\"), or call `todo_finalize` if the whole task is already delivered. Do not stop silently.";
-            pushNudge(state, nudge);
-            await config.onNudge?.(nudge, "open_work_remaining");
-            state.consecutiveErrors++;
-            continue;
+            if (canStillNudge && !signingOff) {
+              state.openWorkNudgeCount++;
+              const nudge =
+                `You stopped but there is still open work: ${check.summary || "pending todos remain"}. ` +
+                "Either execute the next tool, call `todo_update` (use a 1-based index like \"1\" or the alias \"current\"), or call `todo_finalize` if the whole task is already delivered. Do not stop silently.";
+              pushNudge(state, nudge);
+              await config.onNudge?.(nudge, "open_work_remaining");
+              state.consecutiveErrors++;
+              continue;
+            }
           }
         } catch {
           // soft-fail the check; proceed to completion
@@ -285,6 +305,13 @@ export async function runAgentLoop(
         // A successful tool call clears the nudge budget so future
         // corrections remain available.
         state.nudgesSinceToolSuccess = 0;
+        // Track todo-hygiene: any touch of the todo list resets the
+        // reminder counter; other successes increment it.
+        if (TODO_TOUCH_TOOLS.has(fc.name)) {
+          state.successesSinceTodoTouch = 0;
+        } else {
+          state.successesSinceTodoTouch++;
+        }
       }
 
       // Special handling: request_approval pauses the loop
@@ -310,6 +337,37 @@ export async function runAgentLoop(
     }
 
     state.history.push({ role: "user", parts: toolResultParts });
+
+    // Todo-hygiene reminder: if the agent has been running non-todo tools
+    // for a while, append a short todo-state snapshot to the last tool
+    // result so it re-enters working memory. This fixes the Nancy bug where
+    // Gemini delivered the final list but never advanced the todo list
+    // past position 2/5.
+    if (
+      state.successesSinceTodoTouch >= TODO_REMINDER_AFTER_SUCCESSES &&
+      config.todoSnapshot
+    ) {
+      try {
+        const snapshot = await config.todoSnapshot();
+        if (snapshot && snapshot.trim().length > 0) {
+          state.history.push({
+            role: "user",
+            parts: [
+              {
+                type: "text",
+                text:
+                  "[todo hygiene reminder — reply only if action is needed]\n" +
+                  snapshot +
+                  "\nIf any of the open todos above are already done, close them with `todo_update_batch` in your next turn (before starting new work). If the next phase has begun, mark the new current todo `in_progress`.",
+              },
+            ],
+          });
+          state.successesSinceTodoTouch = 0;
+        }
+      } catch {
+        // soft-fail — reminders are best-effort
+      }
+    }
 
     // Pause if approval requested
     if (approvalRequestId) {
@@ -558,18 +616,31 @@ async function runForcedReflection(
   context: AgentContext,
   dueToError: boolean,
 ) {
+  // Optional todo snapshot so the reflection is grounded in actual state.
+  let todoBlock = "";
+  if (config.todoSnapshot) {
+    try {
+      const snap = await config.todoSnapshot();
+      if (snap && snap.trim().length > 0) {
+        todoBlock = `\n\nCurrent todos:\n${snap}`;
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
   const nudge = dueToError
     ? [
         "You hit repeated tool errors. Pause and reflect (for yourself only, NOT as a user-facing message).",
         "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
         `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
-        "Keep each field under 2 short sentences. After this reflection, the next turn will resume tool use.",
+        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." + todoBlock,
       ].join(" ")
     : [
         "Pause and reflect internally (not shown to the user).",
         "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
         `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
-        "Keep each field under 2 short sentences. After this reflection the next turn will resume tool use.",
+        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." + todoBlock,
       ].join(" ");
 
   state.history.push({

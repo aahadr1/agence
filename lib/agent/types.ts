@@ -109,6 +109,12 @@ export interface AgentConfig {
    * Should return a short human-readable summary of what was closed.
    */
   finalizeOpenWork?: () => Promise<string | null>;
+  /**
+   * Called by the engine before forced reflection / periodic reminders so it
+   * can inject a compact snapshot of the current todo list. Returning an
+   * empty string disables the snapshot for that turn.
+   */
+  todoSnapshot?: () => Promise<string>;
 }
 
 export type SubAgentRole =
