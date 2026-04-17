@@ -54,6 +54,12 @@ const CAPABILITY_PRESETS: CapabilityPreset[] = [
     packs: ["browser", "web-research"],
     description: "Tout + navigateur headless",
   },
+  {
+    id: "self-coding",
+    label: "Self-coding",
+    packs: ["self-coding", "web-research"],
+    description: "L'agent peut ouvrir des PR GitHub pour s'étendre",
+  },
 ];
 
 const SUGGESTIONS: Record<string, string[]> = {
@@ -72,6 +78,10 @@ const SUGGESTIONS: Record<string, string[]> = {
   autonomous: [
     "Ouvre societe.com, trouve la fiche d'Apple France et extrais les infos clefs.",
     "Navigue sur LinkedIn et prépare une liste de 10 CTO fintech à Paris.",
+  ],
+  "self-coding": [
+    "Crée un nouvel outil `slugify` qui transforme un texte en slug URL-safe.",
+    "Ajoute un outil `currency_convert` qui utilise une API publique de taux de change.",
   ],
 };
 

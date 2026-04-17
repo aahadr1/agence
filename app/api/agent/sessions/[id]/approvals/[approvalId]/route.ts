@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
+import { applyApprovedProposal } from "@/lib/agent/tools/repo";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -27,6 +28,15 @@ export async function POST(
 
   const service = await createServiceClient();
   const status = body.decision === "approve" ? "approved" : "rejected";
+
+  // Fetch the approval row so we can branch on the approval `kind` below.
+  const { data: approvalRow } = await service
+    .from("agent_approvals")
+    .select("id, action, metadata")
+    .eq("id", approvalId)
+    .eq("session_id", id)
+    .maybeSingle();
+
   const { error } = await service
     .from("agent_approvals")
     .update({
@@ -39,15 +49,31 @@ export async function POST(
   if (error)
     return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Surface the decision to the agent as a user-style message so the LLM
-  // sees it in its next tick.
+  // If this approval is for a self-coding proposal, actually push the branch
+  // and open the PR now that we have a green light.
+  let sideEffectNote = "";
+  const approvalKind = (approvalRow?.metadata as { kind?: string })?.kind;
+  if (body.decision === "approve" && approvalKind === "repo_push_pr") {
+    const commitId = (approvalRow?.metadata as { commit_id?: string })?.commit_id;
+    if (commitId) {
+      try {
+        const pr = await applyApprovedProposal(commitId);
+        sideEffectNote = ` A PR was opened: #${pr.pr_number} (${pr.pr_url}).`;
+      } catch (e) {
+        sideEffectNote = ` WARNING: I tried to open the PR but it failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`;
+      }
+    }
+  }
+
   const decisionPrompt = `The user ${
     body.decision === "approve" ? "APPROVED" : "REJECTED"
   } the pending action${body.comment ? ` with comment: ${body.comment}` : ""}. ${
     body.decision === "approve"
       ? "Proceed."
       : "Do NOT execute that action. Acknowledge and continue with alternatives."
-  }`;
+  }${sideEffectNote}`;
 
   await service.from("agent_messages").insert([
     {
