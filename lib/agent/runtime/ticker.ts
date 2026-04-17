@@ -324,6 +324,23 @@ async function runOneTickLocked(
           }
           return { open: false };
         },
+        finalizeOpenWork: async () => {
+          // Auto-close any leftover pending/in_progress todos after a final
+          // summary has already been delivered. This is the engine's
+          // graceful escape hatch for the post-delivery nudge spiral.
+          const { data } = await db
+            .from("agent_todos")
+            .update({
+              status: "completed",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("session_id", sessionId)
+            .in("status", ["pending", "in_progress"])
+            .select("id, content");
+          const n = data?.length || 0;
+          if (n === 0) return null;
+          return `${n} leftover todo(s) auto-closed`;
+        },
       },
       context,
       executeTool,

@@ -102,6 +102,13 @@ export interface AgentConfig {
    * nudge with the summary and continues the loop instead of marking complete.
    */
   checkOpenWork?: () => Promise<{ open: boolean; summary?: string }>;
+  /**
+   * Called by the engine to auto-close any leftover pending/in_progress todos
+   * after a final summary has already been delivered. The engine uses this as
+   * a graceful escape hatch instead of nudging the model forever.
+   * Should return a short human-readable summary of what was closed.
+   */
+  finalizeOpenWork?: () => Promise<string | null>;
 }
 
 export type SubAgentRole =
@@ -165,4 +172,5 @@ export type CapabilityPack =
   | "email"
   | "calendar"
   | "web-research"
-  | "browser";
+  | "browser"
+  | "self-coding";

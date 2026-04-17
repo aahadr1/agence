@@ -8,6 +8,7 @@ const REASON_LABEL: Record<string, string> = {
   pseudo_tool_call: "outil écrit en texte",
   intent_without_action: "annonce sans action",
   open_work_remaining: "travail non terminé",
+  auto_finalize: "clôture automatique",
   course_correction: "auto-correction",
 };
 

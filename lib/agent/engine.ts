@@ -52,9 +52,23 @@ interface AgentState {
    *  result with `error === undefined`. Used as a circuit-breaker to avoid
    *  looping forever when the model can't self-correct. */
   nudgesSinceToolSuccess: number;
+  /** True once the model has produced a long, structured final-summary-style
+   *  message. Used to suppress post-delivery nudge spirals (the "I remain at
+   *  your disposal" / "mission accomplished" ping-pong observed in prod). */
+  finalSummaryDelivered: boolean;
+  /** How many times we've nudged specifically for "open work remaining". If
+   *  we've already delivered a final summary and the todos are still open,
+   *  second nudge auto-finalizes them instead of looping again. */
+  openWorkNudgeCount: number;
+  /** Global nudge budget for the whole tick — protects against pathological
+   *  loops even when a tool call resets the per-stage counter. */
+  totalNudges: number;
 }
 
 const MAX_NUDGES_BEFORE_YIELD = 3;
+/** Hard cap on nudges per tick. Once reached we accept the model's message
+ *  as final, regardless of other heuristics. */
+const MAX_TOTAL_NUDGES = 6;
 
 export async function runAgentLoop(
   config: AgentConfig,
@@ -69,6 +83,9 @@ export async function runAgentLoop(
     consecutiveErrors: 0,
     lastReflectionIter: 0,
     nudgesSinceToolSuccess: 0,
+    finalSummaryDelivered: false,
+    openWorkNudgeCount: 0,
+    totalNudges: 0,
   };
 
   const allToolCalls: ToolResult[] = [];
@@ -153,11 +170,19 @@ export async function runAgentLoop(
 
     // ---- No tool calls → decide: genuine done OR model-emitted pseudo-code ----
     if (result.functionCalls.length === 0) {
+      // Update "final delivery" flag once the model has produced a long,
+      // structured final-summary-style message. This is sticky: once true it
+      // stays true for the rest of the tick and suppresses post-delivery
+      // nudge spirals.
+      const thisTurnIsFinalSummary = looksLikeFinalSummary(result.text);
+      if (thisTurnIsFinalSummary) state.finalSummaryDelivered = true;
+
       // Circuit breaker: after N nudges with no successful tool call in between,
       // accept the model's message as final. Avoids infinite loops when the
       // model cannot self-correct (e.g. unrecoverable tool-arg format issue).
       const canStillNudge =
-        state.nudgesSinceToolSuccess < MAX_NUDGES_BEFORE_YIELD;
+        state.nudgesSinceToolSuccess < MAX_NUDGES_BEFORE_YIELD &&
+        state.totalNudges < MAX_TOTAL_NUDGES;
 
       const pseudo = canStillNudge ? detectPseudoToolCall(result.text) : null;
       if (pseudo) {
@@ -166,26 +191,28 @@ export async function runAgentLoop(
           ` That text does NOT execute anything.` +
           ` Re-do this turn: call the tool you intended via the function-calling API.` +
           ` Do NOT wrap tool calls in code fences or <tool_code> blocks.`;
-        state.history.push({
-          role: "user",
-          parts: [{ type: "text", text: nudge }],
-        });
+        pushNudge(state, nudge);
         await config.onNudge?.(nudge, "pseudo_tool_call");
         state.consecutiveErrors++;
-        state.nudgesSinceToolSuccess++;
         continue;
       }
 
-      if (canStillNudge && looksLikeIntentWithoutAction(result.text)) {
+      // Intent-without-action: the model described a next step but didn't
+      // invoke anything. DO NOT fire this nudge if:
+      //   - the model just signed off politely after a completed task
+      //   - OR we've already delivered a final summary earlier in this tick
+      //     (in that case the sign-off IS the whole point).
+      if (
+        canStillNudge &&
+        !state.finalSummaryDelivered &&
+        !looksLikeSignOff(result.text) &&
+        looksLikeIntentWithoutAction(result.text)
+      ) {
         const nudge =
-          "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, say so explicitly and summarize — don't just describe an action.";
-        state.history.push({
-          role: "user",
-          parts: [{ type: "text", text: nudge }],
-        });
+          "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, call `todo_finalize` and then write a single short final summary — do not keep announcing actions.";
+        pushNudge(state, nudge);
         await config.onNudge?.(nudge, "intent_without_action");
         state.consecutiveErrors++;
-        state.nudgesSinceToolSuccess++;
         continue;
       }
 
@@ -194,20 +221,40 @@ export async function runAgentLoop(
       // give up. BUT only if we haven't already hit the nudge budget — and
       // only if the model hasn't just delivered a substantial final message
       // (which is probably the real answer the user wants).
-      if (canStillNudge && config.checkOpenWork && !looksLikeFinalSummary(result.text)) {
+      if (canStillNudge && config.checkOpenWork && !thisTurnIsFinalSummary) {
         try {
           const check = await config.checkOpenWork();
           if (check.open) {
+            // If we've already delivered a final summary AND the open work is
+            // just leftover todos, auto-finalize them so the session can close
+            // instead of looping. The caller supplies `finalizeOpenWork` for
+            // this; if unavailable we fall back to a single extra nudge.
+            if (
+              state.finalSummaryDelivered &&
+              state.openWorkNudgeCount >= 1 &&
+              config.finalizeOpenWork
+            ) {
+              try {
+                const summary = await config.finalizeOpenWork();
+                finalMessage = result.text || "Done.";
+                await config.onNudge?.(
+                  `Auto-finalized leftover todos: ${summary || "cleared open work"}`,
+                  "auto_finalize",
+                );
+                return buildResult(finalMessage, "completed");
+              } catch (e) {
+                // fall through to the plain nudge if finalize fails
+                console.warn("[engine] auto-finalize failed:", e);
+              }
+            }
+
+            state.openWorkNudgeCount++;
             const nudge =
               `You stopped but there is still open work: ${check.summary || "pending todos remain"}. ` +
-              "Continue by either executing the next tool, calling `todo_update` to close completed todos (id accepts UUID, index, or content substring), or calling `todo_finalize` if the whole task is delivered. Do not stop silently.";
-            state.history.push({
-              role: "user",
-              parts: [{ type: "text", text: nudge }],
-            });
+              "Either execute the next tool, call `todo_update` (use a 1-based index like \"1\" or the alias \"current\"), or call `todo_finalize` if the whole task is already delivered. Do not stop silently.";
+            pushNudge(state, nudge);
             await config.onNudge?.(nudge, "open_work_remaining");
             state.consecutiveErrors++;
-            state.nudgesSinceToolSuccess++;
             continue;
           }
         } catch {
@@ -328,37 +375,80 @@ function detectPseudoToolCall(text: string | null | undefined): string | null {
 }
 
 const INTENT_PATTERNS: RegExp[] = [
-  // Announcing an imminent action
-  /\b(maintenant|now|je\s+vais|je\s+lance|let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to|on\s+va|on\s+commence|on\s+lance)\b/i,
-  /\b(commence|commencer|launching|starting|going\s+to\s+(?:run|call|use|execute|invoke))\b/i,
-  /\b(first\s+step|premi[eè]re?\s+[eé]tape|étape\s*1|step\s*1)\b/i,
+  // Announcing an imminent action (strong signal)
+  /\bje\s+vais\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|cr[eé]er|appeler|ex[eé]cuter|utiliser|consulter|analyser|continuer|mettre|examiner|passer|v[eé]rifier|essayer|regarder)\b/i,
+  /\b(?:let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to)\s+(?:now\s+)?(?:search|call|run|use|execute|invoke|check|analyze|look|find|try|continue|proceed)\b/i,
+  /\bon\s+va\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|analyser|essayer|continuer)\b/i,
+  /\b(commen[çc](?:e|ons|er)|launching|starting\s+(?:now|by))\b/i,
+  /\b(premi[eè]re?\s+[eé]tape|étape\s*1|first\s+step|step\s*1)\b/i,
   // Describing remaining/next work
   /\b(prochaine?\s+(?:action|[eé]tape|chose)|next\s+(?:action|step|move))\b/i,
-  /\b(il\s+me\s+(?:reste|manque)|i\s+(?:still|need\s+to)|still\s+(?:need|have)\s+to|remaining|restant|à\s+faire|to\s+do)\b/i,
-  /\b(je\s+dois|i\s+must|i\s+should|il\s+faut)\b/i,
+  /\b(il\s+me\s+(?:reste|manque)\s+\w+|i\s+still\s+need\s+to|still\s+have\s+to)\b/i,
+  /\b(je\s+dois\s+(?:maintenant\s+)?|i\s+must\s+now|i\s+should\s+now|il\s+faut\s+que\s+je)\b/i,
   /\b(continu\w+|reprendre|resume|keep\s+going)\b/i,
+];
+
+const SIGN_OFF_PATTERNS: RegExp[] = [
+  /\bn['’]h[eé]sitez\s+pas\b/i,
+  /\bje\s+reste\s+[àa]\s+(?:ta|votre)\s+disposition\b/i,
+  /\b[àa]\s+(?:votre|ta)\s+(?:disposition|service)\b/i,
+  /\bje\s+suis\s+(?:maintenant\s+)?(?:pr[eê]t|disponible)\b/i,
+  /\b(?:si\s+vous\s+avez|for)\s+(?:d['’]autres\s+demandes|any\s+other|other\s+questions)\b/i,
+  /\b(?:mission|t[âa]che|task|travail)\s+(?:est\s+)?(?:maintenant\s+)?(?:accomplie|termin[eé]e?|complete(?:d)?|done)\b/i,
+  /\b(?:c['’]est\s+)?(?:fini|done|terminé|termin[eé])\b/i,
+  /\bfeel\s+free\s+to\b/i,
+  /\blet\s+me\s+know\s+if\b/i,
 ];
 
 /**
  * Detect an "I will do X" style closing where the model describes its next
  * action but never actually calls a tool. We treat this as a mistake (the
  * model should either call the tool or genuinely summarize and stop).
+ *
+ * NOTE: This intentionally errs on the side of FALSE — a false nudge is
+ * highly disruptive (triggers a visible "Auto-correction" UI element).
+ * We now require 2+ matching signals and ignore the whole test for messages
+ * that also look like polite sign-offs.
  */
 function looksLikeIntentWithoutAction(
   text: string | null | undefined,
 ): boolean {
   if (!text) return false;
   const t = text.trim();
-  if (t.length < 10) return false;
-  // Very short final replies like "OK, done." are fine — skip
-  if (t.length < 40 && /\b(done|ok|okay|termin[eé]|voilà|vu)\b/i.test(t)) {
+  if (t.length < 20) return false;
+  // Skip polite sign-offs — detected separately and explicitly excluded
+  // in the engine before this function is called, but double-check anyway.
+  if (looksLikeSignOff(t)) return false;
+  // Very short "ok done" messages are fine — skip
+  if (t.length < 60 && /\b(done|ok|okay|termin[eé]|voilà|vu|parfait)\b/i.test(t)) {
     return false;
   }
   let hits = 0;
   for (const re of INTENT_PATTERNS) {
     if (re.test(t)) hits++;
+    if (hits >= 2) return true;
   }
-  return hits >= 1;
+  return false;
+}
+
+/**
+ * Polite sign-off / "end of task" patterns. When the model closes the
+ * session with these we treat the message as final, no matter what.
+ */
+function looksLikeSignOff(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length === 0) return false;
+  for (const re of SIGN_OFF_PATTERNS) {
+    if (re.test(t)) return true;
+  }
+  return false;
+}
+
+function pushNudge(state: AgentState, nudge: string) {
+  state.history.push({ role: "user", parts: [{ type: "text", text: nudge }] });
+  state.nudgesSinceToolSuccess++;
+  state.totalNudges++;
 }
 
 /**
@@ -454,8 +544,13 @@ function summarizeMessages(messages: AgentMessage[]): string {
 /**
  * Insert a "please reflect" nudge into history, then consume one turn of the
  * LLM without any tool calls (tools are excluded so the model is forced to
- * produce a reflection). The result is surfaced via onReflection + pushed back
- * into the history so the next iteration benefits from it.
+ * produce a reflection).
+ *
+ * IMPORTANT: the reflection output is NOT surfaced to the user as a chat
+ * message — it's delivered via the structured `onReflection` callback only.
+ * Otherwise we end up with noisy "OBSERVATION / CONCLUSION / NEXT ACTION"
+ * blocks polluting the conversation (the exact bug observed in the Nancy
+ * lead-gen session).
  */
 async function runForcedReflection(
   state: AgentState,
@@ -464,8 +559,18 @@ async function runForcedReflection(
   dueToError: boolean,
 ) {
   const nudge = dueToError
-    ? "You hit repeated tool errors. Before doing anything else, reflect: what went wrong, what should change, and what's the next concrete action?"
-    : "Pause and reflect: given the work done so far, are you on track? What have you learned, what's missing, what's the next concrete action?";
+    ? [
+        "You hit repeated tool errors. Pause and reflect (for yourself only, NOT as a user-facing message).",
+        "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
+        `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
+        "Keep each field under 2 short sentences. After this reflection, the next turn will resume tool use.",
+      ].join(" ")
+    : [
+        "Pause and reflect internally (not shown to the user).",
+        "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
+        `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
+        "Keep each field under 2 short sentences. After this reflection the next turn will resume tool use.",
+      ].join(" ");
 
   state.history.push({
     role: "user",
@@ -484,17 +589,57 @@ async function runForcedReflection(
     state.history.push({ role: "assistant", parts: result.assistantParts });
   }
 
-  if (result.text) {
-    await config.onMessage?.(result.text);
-  }
-
+  // Parse structured reflection fields; fall back gracefully when the model
+  // replied in prose instead of JSON.
+  const parsed = parseReflection(result.text);
   const reflection: AgentReflection = {
     iteration: context.iterationCount,
-    observation: result.thinking || "",
-    conclusion: result.text || "",
-    nextAction: "",
+    observation: parsed.observation || (result.thinking || "").slice(0, 2000),
+    conclusion: parsed.conclusion || (result.text || "").slice(0, 2000),
+    nextAction: parsed.nextAction,
   };
   await config.onReflection?.(reflection);
+}
+
+function parseReflection(
+  text: string | null | undefined,
+): { observation: string; conclusion: string; nextAction: string } {
+  if (!text) return { observation: "", conclusion: "", nextAction: "" };
+  // Strip common code-fence wrapping
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  // Try strict JSON first
+  try {
+    const obj = JSON.parse(cleaned) as Record<string, unknown>;
+    return {
+      observation: String(obj.observation ?? obj.Observation ?? "").slice(0, 2000),
+      conclusion: String(obj.conclusion ?? obj.Conclusion ?? "").slice(0, 2000),
+      nextAction: String(
+        obj.next_action ?? obj.nextAction ?? obj.NextAction ?? "",
+      ).slice(0, 1000),
+    };
+  } catch {
+    /* fall through to heuristic parse */
+  }
+  // Heuristic: pull OBSERVATION / CONCLUSION / ACTION sections the model used
+  // to emit organically.
+  const pick = (label: RegExp): string => {
+    const m = cleaned.match(label);
+    return m ? m[1].trim().slice(0, 2000) : "";
+  };
+  const observation = pick(
+    /observation[\s:\-]+([\s\S]*?)(?=\n\s*(?:conclusion|action|next)|$)/i,
+  );
+  const conclusion = pick(
+    /conclusion[\s:\-]+([\s\S]*?)(?=\n\s*(?:action|next)|$)/i,
+  );
+  const nextAction = pick(
+    /(?:next(?:_|\s)?action|action\s+suivante)[\s:\-]+([\s\S]*?)$/i,
+  );
+  return { observation, conclusion, nextAction: nextAction.slice(0, 1000) };
 }
 
 export function toolsFromRegistry(
