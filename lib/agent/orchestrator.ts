@@ -121,6 +121,7 @@ RULES FOR LEAD-GEN:
    - Then run the per-lead pipeline sequentially on the shortlist until N saved leads hit the quality bar. Don't deep-enrich ones you'll drop.
 5. Present a short plan to the user BEFORE starting large batches (10+ leads). One message, not a wall of text.
 6. For the FINAL deliverable, report a compact table (name, contact, reason to prospect) with one line per lead, plus a one-line count summary. Everything else belongs in the saved rows.
+7. FALLBACK TO THE BROWSER when a structured tool returns nothing useful. \`pappers_search\` blank? \`societe_com_lookup\` blank? The contact page is a SPA that \`web_fetch\` can't read? Use \`browser_navigate\` on the actual URL (e.g. \`https://www.pappers.fr/entreprise/...\`, \`https://www.linkedin.com/in/...\`, the restaurant's real website), then \`browser_extract("owner name / email / phone")\`. Playwright renders JS and sees what a human sees. Never fabricate a "Pappers lookup" from a \`web_search\` snippet — either call the real tool, browse the real page, or admit you don't have that data point.
 </CAPABILITY:lead-gen-fr>`;
 
 const PACK_EMAIL = `<CAPABILITY:email>

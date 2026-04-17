@@ -33,14 +33,15 @@ const CAPABILITY_PRESETS: CapabilityPreset[] = [
   {
     id: "lead-gen",
     label: "Lead Gen FR",
-    packs: ["lead-gen-fr", "web-research"],
-    description: "Prospection B2B en France (Pappers, GMB, Societe.com, save_lead)",
+    packs: ["lead-gen-fr", "browser", "web-research"],
+    description:
+      "Prospection B2B France (Pappers, GMB, Societe.com, save_lead) + navigateur Playwright en fallback",
   },
   {
     id: "assistant",
     label: "Assistant général",
-    packs: ["web-research"],
-    description: "Recherche web + tâches générales",
+    packs: ["browser", "web-research"],
+    description: "Recherche web + navigateur Playwright pour les pages dynamiques",
   },
   {
     id: "email-ops",
