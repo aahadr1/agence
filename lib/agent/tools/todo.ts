@@ -36,13 +36,23 @@ registerTool(
   {
     name: "todo_write",
     description:
-      "Replace the full todo list for the current session. Use BEFORE executing any task with 3+ discrete steps. Keep exactly one todo in_progress at a time. Pass the FULL list (not a delta).",
+      "Create or replace the full todo list for the current session. Use ONCE at the start of multi-step work (or after every item is completed/cancelled and you begin a genuinely new phase). While ANY todo is still pending or in_progress, do NOT call this again — use todo_read + todo_update / todo_update_batch instead (see CORE rule 12). If the USER explicitly asked in chat to discard progress and restart, pass replace_existing + reset_reason.",
     parameters: {
       items: {
         type: "array",
         items: { type: "string" },
         description:
           "Ordered list of todo descriptions (one sentence each). Status is inferred as 'pending' for new items. Use todo_update to change statuses.",
+      },
+      replace_existing: {
+        type: "boolean",
+        description:
+          "Set true ONLY when the user explicitly asked to throw away the current plan/todos and start over. Must be paired with reset_reason.",
+      },
+      reset_reason: {
+        type: "string",
+        description:
+          "When replace_existing is true: short verbatim-style summary of why the user requested a full reset (min ~20 chars). Otherwise omit.",
       },
     },
     required: ["items"],
@@ -56,6 +66,24 @@ registerTool(
     }
     if (!context.sessionId) {
       throw new Error("todo_write requires an active session");
+    }
+
+    const replace =
+      args.replace_existing === true &&
+      typeof args.reset_reason === "string" &&
+      String(args.reset_reason).trim().length >= 20;
+
+    const { data: openRows } = await db
+      .from("agent_todos")
+      .select("id")
+      .eq("session_id", context.sessionId)
+      .in("status", ["pending", "in_progress"])
+      .limit(1);
+
+    if (openRows && openRows.length > 0 && !replace) {
+      throw new Error(
+        "todo_write blocked: there are still open todos (pending or in_progress). Replacing the whole list mid-run destroys progress and causes restart loops. Call todo_read, then todo_update / todo_update_batch to adjust statuses, or todo_finalize when everything is truly done. Only if the USER explicitly asked to abandon the current work and replan from scratch, call todo_write again with replace_existing: true and reset_reason quoting their request.",
+      );
     }
 
     type Item = string | { content?: string; status?: Status };
