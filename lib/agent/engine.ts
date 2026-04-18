@@ -192,11 +192,16 @@ export async function runAgentLoop(
 
     // ---- No tool calls → decide: genuine done OR model-emitted pseudo-code ----
     if (result.functionCalls.length === 0) {
+      // Prose roadmaps ("1. Search … 2. Analyze …" + "I will start…") must NOT
+      // count as a final deliverable — otherwise we mark the session done with
+      // zero tools (common when checkOpenWork sees no todos yet).
+      const planningRoadmap = looksLikePlanningRoadmap(result.text);
       // Update "final delivery" flag once the model has produced a long,
       // structured final-summary-style message. This is sticky: once true it
       // stays true for the rest of the tick and suppresses post-delivery
       // nudge spirals.
-      const thisTurnIsFinalSummary = looksLikeFinalSummary(result.text);
+      const thisTurnIsFinalSummary =
+        !planningRoadmap && looksLikeFinalSummary(result.text);
       if (thisTurnIsFinalSummary) state.finalSummaryDelivered = true;
 
       // Circuit breaker: after N nudges with no successful tool call in between,
@@ -228,12 +233,16 @@ export async function runAgentLoop(
         canStillNudge &&
         !state.finalSummaryDelivered &&
         !looksLikeSignOff(result.text) &&
-        looksLikeIntentWithoutAction(result.text)
+        (looksLikeIntentWithoutAction(result.text) || planningRoadmap)
       ) {
-        const nudge =
-          "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, call `todo_finalize` and then write a single short final summary — do not keep announcing actions.";
+        const nudge = planningRoadmap
+          ? "You published a multi-step roadmap as plain text — that does not run anything and is not the dedicated plan UI. Either (a) call `plan_create` with { goal, steps } then `todo_write` and your first real tool in this same turn, or (b) skip `plan_create` and go straight to `todo_write` + tools (`web_search`, `google_maps_search`, …). Never end a turn with only prose when work remains."
+          : "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, call `todo_finalize` and then write a single short final summary — do not keep announcing actions.";
         pushNudge(state, nudge);
-        await config.onNudge?.(nudge, "intent_without_action");
+        await config.onNudge?.(
+          nudge,
+          planningRoadmap ? "planning_roadmap_no_tools" : "intent_without_action",
+        );
         state.consecutiveErrors++;
         continue;
       }
@@ -482,10 +491,12 @@ function detectPseudoToolCall(text: string | null | undefined): string | null {
 
 const INTENT_PATTERNS: RegExp[] = [
   // Announcing an imminent action (strong signal)
-  /\bje\s+vais\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|cr[eé]er|appeler|ex[eé]cuter|utiliser|consulter|analyser|continuer|mettre|examiner|passer|v[eé]rifier|essayer|regarder)\b/i,
-  /\b(?:let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to)\s+(?:now\s+)?(?:search|call|run|use|execute|invoke|check|analyze|look|find|try|continue|proceed)\b/i,
+  /\bje\s+vais\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|cr[eé]er|appeler|ex[eé]cuter|utiliser|consulter|analyser|continuer|mettre|examiner|passer|v[eé]rifier|essayer|regarder|start|d[eé]marrer)\b/i,
+  /\b(?:let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to)\s+(?:now\s+)?(?:search|call|run|use|execute|invoke|check|analyze|look|find|try|continue|proceed|start|begin|launch)\b/i,
+  /\bi\s+am\s+going\s+to\s+start\b/i,
+  /\b(?:going\s+to\s+start|about\s+to\s+(?:start|begin|run|launch)|gonna\s+(?:start|run|search))\b/i,
   /\bon\s+va\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|analyser|essayer|continuer)\b/i,
-  /\b(commen[çc](?:e|ons|er)|launching|starting\s+(?:now|by))\b/i,
+  /\b(commen[çc](?:e|ons|er)|launching|starting\s+(?:now|by|the|with))\b/i,
   /\b(premi[eè]re?\s+[eé]tape|étape\s*1|first\s+step|step\s*1)\b/i,
   // Describing remaining/next work
   /\b(prochaine?\s+(?:action|[eé]tape|chose)|next\s+(?:action|step|move))\b/i,
@@ -558,6 +569,37 @@ function pushNudge(state: AgentState, nudge: string) {
 }
 
 /**
+ * Multi-step *roadmap* the model often emits instead of calling tools — looks
+ * like a deliverable because of numbered steps but is only intent. If we treat
+ * it as a final summary, the loop exits while `agent_todos` is still empty.
+ */
+function looksLikePlanningRoadmap(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 200) return false;
+  const hasNumberedSteps = /(^|\n)\s*\d+\.\s+\S/m.test(t);
+  if (!hasNumberedSteps) return false;
+  const roadmapIntent =
+    /\b(?:je\s+vais|j['']?ai\s+l['']?intention|nous\s+allons|on\s+va\s+(?:maintenant\s+)?(?:lancer|commencer)|i\s+am\s+going\s+to|i\s*'?ll\s+(?:start|begin)|let\s+me\s+(?:start|begin)|going\s+to\s+start|about\s+to\s+(?:start|begin|run|launch)|(?:launching|starting)\s+(?:the\s+)?(?:search|recherche|work))\b/i.test(
+      t,
+    );
+  const planLabels =
+    /\b(?:plan\s+d['']?action|mon\s+approche|mon\s+approach|my\s+approach|here\s+(?:is|'s)\s+(?:my\s+)?(?:plan|approach|strategy)|(?:voici|here\s+are)\s+(?:les\s+)?(?:étapes|steps|phases))\b/i.test(
+      t,
+    );
+  if (!roadmapIntent && !planLabels) return false;
+  // Real handoffs usually include concrete identifiers — exclude those
+  if (
+    /\|\s*[^\n|]+\s*\|/.test(t) ||
+    /\b(?:siren|siret)\s*[:s]?\s*\d{9,14}\b/i.test(t) ||
+    /@[a-z0-9.-]+\.[a-z]{2,}\b/i.test(t)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Heuristic: does the text look like a completed, substantial final answer?
  * Used to avoid nudging "open work" when the agent has, in fact, delivered
  * a polished summary (e.g. a list of qualified leads). Criteria:
@@ -599,7 +641,12 @@ function priorHistoryHasFinalSummary(history: AgentMessage[]): boolean {
       .join("\n");
     if (text.trim()) {
       scanned++;
-      if (looksLikeFinalSummary(text)) return true;
+      if (
+        looksLikeFinalSummary(text) &&
+        !looksLikePlanningRoadmap(text)
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -619,7 +666,8 @@ function lastFinalSummaryText(history: AgentMessage[]): string | null {
       .filter((p) => p.type === "text")
       .map((p) => ("text" in p ? p.text : ""))
       .join("\n");
-    if (looksLikeFinalSummary(text)) return text;
+    if (looksLikeFinalSummary(text) && !looksLikePlanningRoadmap(text))
+      return text;
   }
   return null;
 }

@@ -6,6 +6,33 @@
 import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
 
+function formatPlanMarkdown(goal: string, steps: unknown): string {
+  const lines = Array.isArray(steps)
+    ? steps.map((s, i) => `${i + 1}. ${String(s).trim()}`).join("\n")
+    : "";
+  return `**Objectif :** ${goal.trim()}\n\n${lines}`;
+}
+
+async function persistPlanChatMessage(
+  sessionId: string,
+  goal: string,
+  steps: unknown,
+  metadata: Record<string, unknown>,
+  revisionNote?: string,
+) {
+  const db = getAgentDb();
+  let content = formatPlanMarkdown(goal, steps);
+  const note = revisionNote?.trim();
+  if (note) content += `\n\n**Révision :** ${note.slice(0, 800)}`;
+  const { error } = await db.from("agent_messages").insert({
+    session_id: sessionId,
+    role: "plan",
+    content,
+    metadata,
+  });
+  if (error) console.error("[plan] agent_messages mirror failed:", error.message);
+}
+
 registerTool(
   {
     name: "plan_create",
@@ -99,12 +126,13 @@ registerTool(
 
     const version = (latest?.version || 0) + 1;
 
+    const goal = String(args.goal).slice(0, 500);
     const { data, error } = await db
       .from("agent_plans")
       .insert({
         session_id: context.sessionId,
         version,
-        goal: String(args.goal).slice(0, 500),
+        goal,
         steps: args.steps,
         revision_reason: String(args.reason).slice(0, 1000),
         is_current: true,
@@ -112,6 +140,19 @@ registerTool(
       .select("id, version, goal, steps, revision_reason")
       .single();
     if (error) throw new Error(`plan_revise failed: ${error.message}`);
+    const reason = String(args.reason).trim();
+    await persistPlanChatMessage(
+      context.sessionId,
+      goal,
+      args.steps,
+      {
+        kind: "plan_snapshot",
+        source: "plan_revise",
+        plan_version: data.version,
+        revision_reason: reason.slice(0, 500),
+      },
+      reason,
+    );
     return data;
   },
 );

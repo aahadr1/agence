@@ -77,7 +77,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 
 const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`todo_write\`, \`todo_update\`, \`todo_update_batch\`, \`todo_read\`, \`todo_finalize\`: task list management. \`todo_update\` accepts UUID, 1-based index, content substring, or aliases \`current\`/\`next\`; prefer 1-based indices. Use \`todo_update_batch\` to close the current todo and open the next one in one call (it takes \`{ updates: [{id, status}, …] }\`). Call \`todo_finalize\` at the end to close all leftover open todos at once — same turn as your final user-facing message.
-- \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment.
+- \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment (persisted + shown in the Plan UI). **Never** paste a numbered "phase 1–5" roadmap only in assistant text — call \`plan_create\` (or skip it and use \`todo_write\` + tools immediately). Prose plans do not execute.
 - \`reflect\`: self-review loop.
 - \`memory_write\`, \`memory_read\`, \`memory_list\`: durable scratchpad for the CURRENT session.
 - \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.

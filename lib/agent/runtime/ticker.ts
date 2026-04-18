@@ -335,6 +335,22 @@ async function runOneTickLocked(
               summary: `${todos.length} todo(s) still open:\n${preview}${more}`,
             };
           }
+          // Lead-gen (and similar multi-step packs): never treat "no rows" as
+          // "nothing to do" — the model often chats a roadmap then stops before
+          // todo_write, so checkOpenWork must still signal open work.
+          if (sessionPacksForBudget.includes("lead-gen-fr")) {
+            const { count, error } = await db
+              .from("agent_todos")
+              .select("id", { count: "exact", head: true })
+              .eq("session_id", sessionId);
+            if (!error && (count ?? 0) === 0) {
+              return {
+                open: true,
+                summary:
+                  "Aucune liste de todos — appelle `todo_write` puis les outils (`web_search`, `google_maps_search`, …). Ne termine pas sur un plan en prose seul.",
+              };
+            }
+          }
           return { open: false };
         },
         finalizeOpenWork: async () => {
@@ -555,6 +571,18 @@ async function loadHistory(sessionId: string): Promise<AgentMessage[]> {
       messages.push({
         role: "assistant",
         parts: [{ type: "text", text: row.content }],
+      });
+    } else if (row.role === "plan") {
+      messages.push({
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text:
+              "[Plan de session — exécuter avec les outils, ne pas seulement le redire en prose.]\n" +
+              row.content,
+          },
+        ],
       });
     } else if (row.role === "system") {
       const meta = (row.metadata || {}) as Record<string, unknown>;
