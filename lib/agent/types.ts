@@ -45,6 +45,8 @@ export interface AgentReflection {
   observation: string;
   conclusion: string;
   nextAction: string;
+  /** Non-empty when the model commits to a concrete strategy change mid-run */
+  strategyRevision?: string;
 }
 
 export interface AgentApprovalRequest {
@@ -120,6 +122,23 @@ export interface AgentConfig {
    * (model must still reply with JSON only — see engine).
    */
   reflectionLeadGenDepth?: boolean;
+  /**
+   * Called before auto-finalizing todos to verify whether the session's actual
+   * deliverable is ready (e.g. enough leads saved). If it returns false, the
+   * engine resets the "final summary" flag and nudges the agent to continue
+   * instead of closing out prematurely.
+   */
+  isDeliverableComplete?: () => Promise<boolean>;
+  /**
+   * Max consecutive nudges before yielding (per no-tool-call streak).
+   * Default: 3. Lead-gen sessions should use 5.
+   */
+  maxNudgesBeforeYield?: number;
+  /**
+   * Hard cap on total nudges per tick. Default: 6. Lead-gen sessions
+   * should use 10.
+   */
+  maxTotalNudges?: number;
 }
 
 export type SubAgentRole =

@@ -48,6 +48,8 @@ interface AgentState {
   history: AgentMessage[];
   consecutiveErrors: number;
   lastReflectionIter: number;
+  /** One-shot hint after first successful Maps discovery in this tick */
+  discoverySteeringDone: boolean;
   /** Nudges fired since the last successful tool call. Resets on any tool
    *  result with `error === undefined`. Used as a circuit-breaker to avoid
    *  looping forever when the model can't self-correct. */
@@ -78,10 +80,10 @@ const TODO_TOUCH_TOOLS = new Set<string>([
   "todo_finalize",
 ]);
 
-const MAX_NUDGES_BEFORE_YIELD = 3;
+const DEFAULT_MAX_NUDGES_BEFORE_YIELD = 3;
 /** Hard cap on nudges per tick. Once reached we accept the model's message
  *  as final, regardless of other heuristics. */
-const MAX_TOTAL_NUDGES = 6;
+const DEFAULT_MAX_TOTAL_NUDGES = 6;
 
 export async function runAgentLoop(
   config: AgentConfig,
@@ -103,6 +105,7 @@ export async function runAgentLoop(
     history: [...priorHistory],
     consecutiveErrors: 0,
     lastReflectionIter: 0,
+    discoverySteeringDone: false,
     nudgesSinceToolSuccess: 0,
     finalSummaryDelivered: priorFinalSummary,
     openWorkNudgeCount: 0,
@@ -207,9 +210,11 @@ export async function runAgentLoop(
       // Circuit breaker: after N nudges with no successful tool call in between,
       // accept the model's message as final. Avoids infinite loops when the
       // model cannot self-correct (e.g. unrecoverable tool-arg format issue).
+      const maxNudgesBeforeYield = config.maxNudgesBeforeYield ?? DEFAULT_MAX_NUDGES_BEFORE_YIELD;
+      const maxTotalNudges = config.maxTotalNudges ?? DEFAULT_MAX_TOTAL_NUDGES;
       const canStillNudge =
-        state.nudgesSinceToolSuccess < MAX_NUDGES_BEFORE_YIELD &&
-        state.totalNudges < MAX_TOTAL_NUDGES;
+        state.nudgesSinceToolSuccess < maxNudgesBeforeYield &&
+        state.totalNudges < maxTotalNudges;
 
       const pseudo = canStillNudge ? detectPseudoToolCall(result.text) : null;
       if (pseudo) {
@@ -256,10 +261,31 @@ export async function runAgentLoop(
       //   B. This turn is NOT a final summary. Then open work really means
       //      the model dropped the ball — nudge it to continue (subject to
       //      the nudge budget).
-      const signingOff =
+      const textLooksLikeDone =
         thisTurnIsFinalSummary ||
         state.finalSummaryDelivered ||
         looksLikeSignOff(result.text);
+
+      // CRITICAL: text heuristics alone are not enough to determine "done".
+      // If a deliverable-completeness check is configured, use it as a gate:
+      // the agent is only truly signing off when both (a) the text looks like
+      // a conclusion AND (b) the actual deliverable is present. This prevents
+      // premature closure when the agent emits a long reflection or progress
+      // message that triggers looksLikeFinalSummary but has produced no output.
+      let signingOff = textLooksLikeDone;
+      if (signingOff && config.isDeliverableComplete) {
+        try {
+          const deliverableReady = await config.isDeliverableComplete();
+          if (!deliverableReady) {
+            // The text LOOKS like a final summary but the actual work product
+            // is not ready. Reset the sticky flag and treat this as open work.
+            signingOff = false;
+            state.finalSummaryDelivered = false;
+          }
+        } catch {
+          // soft-fail: proceed with text-based heuristic
+        }
+      }
 
       if (config.checkOpenWork) {
         try {
@@ -301,6 +327,26 @@ export async function runAgentLoop(
           }
         } catch {
           // soft-fail the check; proceed to completion
+        }
+      }
+
+      // Never mark "completed" on prose-only turns if the host says the real
+      // deliverable (e.g. saved leads vs target) is still missing — even when
+      // todos are closed or checkOpenWork returned false.
+      if (config.isDeliverableComplete) {
+        try {
+          const deliverableReady = await config.isDeliverableComplete();
+          if (!deliverableReady) {
+            const nudge =
+              "Ton message ressemble à une conclusion, mais le livrable attendu n’est pas atteint (ex. pas assez de `save_lead` vs l’objectif du brief). Poursuis avec les outils, sauve des leads au fil de l’eau, puis `todo_finalize` seulement quand c’est réellement fini.";
+            pushNudge(state, nudge);
+            await config.onNudge?.(nudge, "deliverable_incomplete");
+            state.finalSummaryDelivered = false;
+            state.consecutiveErrors++;
+            continue;
+          }
+        } catch {
+          /* soft-fail */
         }
       }
 
@@ -347,7 +393,16 @@ export async function runAgentLoop(
     const toolResultParts: AgentMessagePart[] = [];
     let approvalRequestId: string | undefined;
 
-    for (const fc of result.functionCalls) {
+    // Check if any call is request_approval — must execute alone first
+    const approvalCall = result.functionCalls.find(
+      (fc) => fc.name === "request_approval",
+    );
+    const otherCalls = result.functionCalls.filter(
+      (fc) => fc.name !== "request_approval",
+    );
+
+    // Helper to process one tool call
+    const processToolCall = async (fc: (typeof result.functionCalls)[0]) => {
       await config.onToolCall?.(fc.name, fc.args);
       const toolResult = await executeTool(fc.name, fc.args, context);
       allToolCalls.push(toolResult);
@@ -359,11 +414,7 @@ export async function runAgentLoop(
         state.consecutiveErrors++;
       } else {
         state.consecutiveErrors = 0;
-        // A successful tool call clears the nudge budget so future
-        // corrections remain available.
         state.nudgesSinceToolSuccess = 0;
-        // Track todo-hygiene: any touch of the todo list resets the
-        // reminder counter; other successes increment it.
         if (TODO_TOUCH_TOOLS.has(fc.name)) {
           state.successesSinceTodoTouch = 0;
         } else {
@@ -381,19 +432,91 @@ export async function runAgentLoop(
         }
       }
 
-      // Serialize tool result for the model
       const content =
         toolResult.error ?? safeStringify(toolResult.result ?? null);
 
-      toolResultParts.push({
-        type: "tool_result",
+      return {
+        type: "tool_result" as const,
         toolUseId: fc.id,
         content,
         isError: !!toolResult.error,
-      });
+      };
+    };
+
+    // Execute request_approval first if present
+    if (approvalCall) {
+      toolResultParts.push(await processToolCall(approvalCall));
+      if (approvalRequestId) {
+        // Approval requested — still need to push result parts for the model
+        // but skip other tool calls (they'll run after approval).
+        state.history.push({ role: "user", parts: toolResultParts });
+        return {
+          finalMessage: "Awaiting user approval.",
+          history: state.history,
+          totalCostCents: context.totalCostCents,
+          totalInputTokens,
+          totalOutputTokens,
+          iterations: context.iterationCount,
+          toolCalls: allToolCalls,
+          status: "awaiting_approval",
+          pendingApprovalId: approvalRequestId,
+        };
+      }
+    }
+
+    // Execute remaining tool calls in parallel
+    if (otherCalls.length > 0) {
+      if (otherCalls.length === 1) {
+        // Single call — no overhead of Promise.allSettled
+        toolResultParts.push(await processToolCall(otherCalls[0]));
+      } else {
+        // Multiple independent tool calls — run in parallel (order of results
+        // matches order of otherCalls — required for tool_use / tool_result alignment).
+        const settled = await Promise.allSettled(
+          otherCalls.map((fc) => processToolCall(fc)),
+        );
+        for (let idx = 0; idx < settled.length; idx++) {
+          const s = settled[idx];
+          if (s.status === "fulfilled") {
+            toolResultParts.push(s.value);
+          } else {
+            console.error("[engine] parallel tool exec rejected:", s.reason);
+          }
+        }
+      }
     }
 
     state.history.push({ role: "user", parts: toolResultParts });
+
+    // One-shot discovery steering after first successful google_maps_search this tick
+    const batchHadMaps = result.functionCalls.some(
+      (fc) => fc.name === "google_maps_search",
+    );
+    if (batchHadMaps && !state.discoverySteeringDone) {
+      const tail = allToolCalls.slice(-result.functionCalls.length);
+      const mapsOk = tail.some(
+        (t) => t.name === "google_maps_search" && !t.error,
+      );
+      if (mapsOk) {
+        state.discoverySteeringDone = true;
+        state.history.push({
+          role: "user",
+          parts: [
+            {
+              type: "text",
+              text:
+                "[Discovery check — internal steering]\n" +
+                "Tu viens de recevoir des résultats Maps (ou équivalent). Avant du travail coûteux **par établissement** :\n" +
+                "1) Est-ce que tu as assez de candidats (vise **2–3×** la cible si incertain) ?\n" +
+                "2) **Pré-classe** avec les champs gratuits (website_url, has_website, avis, chaîne évidente) — évite d’auditer en profondeur la tête de liste « premium ».\n" +
+                "3) Enchaîne plusieurs **`website_finder` en parallèle** sur une shortlist, pas un audit long par tour.\n" +
+                "4) Optionnel : **`scratchpad_write`** pour une table de travail (statut par ligne).\n" +
+                "Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.",
+            },
+          ],
+        });
+      }
+    }
 
     // Todo-hygiene reminder: if the agent has been running non-todo tools
     // for a while, append a short todo-state snapshot to the last tool
@@ -426,20 +549,6 @@ export async function runAgentLoop(
       }
     }
 
-    // Pause if approval requested
-    if (approvalRequestId) {
-      return {
-        finalMessage: "Awaiting user approval.",
-        history: state.history,
-        totalCostCents: context.totalCostCents,
-        totalInputTokens,
-        totalOutputTokens,
-        iterations: context.iterationCount,
-        toolCalls: allToolCalls,
-        status: "awaiting_approval",
-        pendingApprovalId: approvalRequestId,
-      };
-    }
   }
 
   // Max iterations reached — yield to the next tick silently.
@@ -809,20 +918,25 @@ async function runForcedReflection(
       ? " LEAD-GEN DEPTH: Inside the JSON strings, briefly cover (a) legal-entity vs Maps address / cessée / homonym risk for work in flight, (b) whether any 'no website' claim still holds vs Maps website_url, (c) quality vs filling N weak rows. Each field may use up to 4 short sentences."
       : "";
 
+  const reflectionSchema = `{"observation": "...", "conclusion": "...", "next_action": "...", "strategy_revision": "...|null"}`;
+  const strategyRevisionHint = ` The \`strategy_revision\` field is CRITICAL: if your current approach is not working (wrong order, too slow, bad results), write a concrete strategy change here. If the current approach is fine, set it to null.`;
+
   const nudge = dueToError
     ? [
         "You hit repeated tool errors. Pause and reflect (for yourself only, NOT as a user-facing message).",
         "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
-        `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
+        reflectionSchema,
         "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." +
+          strategyRevisionHint +
           leadGenDepthBlock +
           todoBlock,
       ].join(" ")
     : [
         "Pause and reflect internally (not shown to the user).",
         "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
-        `{"observation": "...", "conclusion": "...", "next_action": "..."}`,
+        reflectionSchema,
         "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." +
+          strategyRevisionHint +
           leadGenDepthBlock +
           todoBlock,
       ].join(" ");
@@ -852,14 +966,36 @@ async function runForcedReflection(
     observation: parsed.observation || (result.thinking || "").slice(0, 2000),
     conclusion: parsed.conclusion || (result.text || "").slice(0, 2000),
     nextAction: parsed.nextAction,
+    strategyRevision: parsed.strategyRevision || undefined,
   };
   await config.onReflection?.(reflection);
+
+  const rev = parsed.strategyRevision?.trim();
+  if (rev && rev.length > 5 && !/^null$/i.test(rev)) {
+    state.history.push({
+      role: "user",
+      parts: [
+        {
+          type: "text",
+          text:
+            "[STRATEGY_REVISION — à appliquer pour la suite de cette session sauf si les faits contredisent]\n" +
+            rev.slice(0, 4000),
+        },
+      ],
+    });
+  }
 }
 
 function parseReflection(
   text: string | null | undefined,
-): { observation: string; conclusion: string; nextAction: string } {
-  if (!text) return { observation: "", conclusion: "", nextAction: "" };
+): {
+  observation: string;
+  conclusion: string;
+  nextAction: string;
+  strategyRevision: string;
+} {
+  if (!text)
+    return { observation: "", conclusion: "", nextAction: "", strategyRevision: "" };
   // Strip common code-fence wrapping
   const cleaned = text
     .trim()
@@ -869,12 +1005,14 @@ function parseReflection(
   // Try strict JSON first
   try {
     const obj = JSON.parse(cleaned) as Record<string, unknown>;
+    const sr = obj.strategy_revision ?? obj.strategyRevision ?? obj.StrategyRevision;
     return {
       observation: String(obj.observation ?? obj.Observation ?? "").slice(0, 2000),
       conclusion: String(obj.conclusion ?? obj.Conclusion ?? "").slice(0, 2000),
       nextAction: String(
         obj.next_action ?? obj.nextAction ?? obj.NextAction ?? "",
       ).slice(0, 1000),
+      strategyRevision: String(sr ?? "").slice(0, 4000),
     };
   } catch {
     /* fall through to heuristic parse */
@@ -894,7 +1032,15 @@ function parseReflection(
   const nextAction = pick(
     /(?:next(?:_|\s)?action|action\s+suivante)[\s:\-]+([\s\S]*?)$/i,
   );
-  return { observation, conclusion, nextAction: nextAction.slice(0, 1000) };
+  const strategyRevision = pick(
+    /strategy_revision[\s:\-]+([\s\S]*?)(?=\n\s*(?:next|observation|conclusion)|$)/i,
+  );
+  return {
+    observation,
+    conclusion,
+    nextAction: nextAction.slice(0, 1000),
+    strategyRevision: strategyRevision.slice(0, 4000),
+  };
 }
 
 export function toolsFromRegistry(

@@ -44,13 +44,47 @@ const TICK_SOFT_DEADLINE_MS = 270_000;
 const ITER_PER_TICK = 8;
 
 /** Lead-gen sessions get a higher per-tick iteration budget (multi-tool retries, no rigid script). */
-const ITER_PER_TICK_LEAD_GEN = 14;
+const ITER_PER_TICK_LEAD_GEN = 20;
+
+/** Hard cap on chained ticks per session (~20 × 270s ≈ 90 min wall time). */
+const MAX_TICKS_PER_SESSION = 30;
 
 /** Lock lease length. Must exceed worst-case tick duration. */
 const LOCK_TTL_SEC = 300;
 
 /** Max automatic retries of a failing tick before we mark session as failed. */
 const MAX_TICK_RETRIES = 3;
+
+async function countLeadsForAgentSession(
+  orgId: string,
+  sessionId: string,
+): Promise<number> {
+  const db = getAgentDb();
+  const { count, error } = await db
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .contains("enrichment_data", { agent_session_id: sessionId });
+  if (error) {
+    console.warn("[agent.tick] countLeadsForAgentSession:", error.message);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+/** Extract N from "30 leads", "liste de 20 professionnels", etc. */
+function parseLeadTargetFromUserPrompt(prompt: string): number | null {
+  const p = prompt.trim();
+  const m1 = p.match(
+    /\b(\d{1,3})\s*(?:leads?|prospects?|professionnels?|lignes?|candidats?)\b/i,
+  );
+  if (m1) return Math.min(500, Math.max(1, parseInt(m1[1], 10)));
+  const m2 = p.match(
+    /\b(?:liste|tableau)\s+(?:de|d['']|d')\s*(\d{1,3})\b/i,
+  );
+  if (m2) return Math.min(500, Math.max(1, parseInt(m2[1], 10)));
+  return null;
+}
 
 // -----------------------------------------------------------------------------
 // Session row shape
@@ -166,6 +200,33 @@ async function runOneTickLocked(
 
   // Journal the step (best-effort, non-fatal)
   const stepNum = (session.tick_count || 0) + 1;
+
+  if (stepNum > MAX_TICKS_PER_SESSION) {
+    await db
+      .from("agent_sessions")
+      .update({
+        status: "completed",
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId);
+    await db.from("agent_messages").insert({
+      session_id: sessionId,
+      role: "assistant",
+      content:
+        `Limite d’exécution automatique atteinte (${MAX_TICKS_PER_SESSION} ticks). ` +
+        `Les résultats partiels sont conservés ci-dessus — poursuis manuellement si besoin.`,
+    });
+    return {
+      sessionId,
+      status: "completed",
+      didWork: false,
+      willContinue: false,
+      iterations: 0,
+      costCents: 0,
+    };
+  }
+
   const stepId = randomUUID();
   await db.from("agent_session_steps").insert({
     id: stepId,
@@ -298,14 +359,39 @@ async function runOneTickLocked(
           });
         },
         onReflection: async (r) => {
+          const rev = r.strategyRevision?.trim();
+          const next =
+            rev && !/^null$/i.test(rev)
+              ? `${r.nextAction || ""}\n\n[Strategy revision]\n${rev}`.slice(0, 8000)
+              : r.nextAction;
           await db.from("agent_reflections").insert({
             session_id: sessionId,
             iteration: r.iteration,
             observation: r.observation,
             conclusion: r.conclusion,
-            next_action: r.nextAction,
+            next_action: next ?? null,
           });
         },
+        isDeliverableComplete: sessionPacksForBudget.includes("lead-gen-fr")
+          ? async () => {
+              const saved = await countLeadsForAgentSession(
+                session.org_id,
+                sessionId,
+              );
+              const prompt = await fetchInitialPrompt(sessionId);
+              const target = parseLeadTargetFromUserPrompt(prompt);
+              if (target != null) {
+                return saved >= target;
+              }
+              return saved >= 1;
+            }
+          : undefined,
+        maxNudgesBeforeYield: sessionPacksForBudget.includes("lead-gen-fr")
+          ? 5
+          : undefined,
+        maxTotalNudges: sessionPacksForBudget.includes("lead-gen-fr")
+          ? 10
+          : undefined,
         onNudge: async (text, reason) => {
           // Persisted as a hidden system row so the next tick's loadHistory
           // can replay it, without polluting the user-visible chat.

@@ -24,6 +24,12 @@ registerTool(
         type: "string",
         description: "The single next concrete action you will take",
       },
+      strategy_revision: {
+        type: "string",
+        description:
+          "Optional. If your sourcing or enrichment approach must change (bad signal, wrong channel, too slow), state the new strategy in 1–3 sentences. Omit if the current plan still fits.",
+        required: false,
+      },
     },
     required: ["observation", "conclusion", "next_action"],
     costEstimateCents: 0,
@@ -31,6 +37,15 @@ registerTool(
   async (args, context) => {
     const db = getAgentDb();
     if (!context.sessionId) throw new Error("reflect requires a session");
+    const rev = args.strategy_revision
+      ? String(args.strategy_revision).trim()
+      : "";
+    const nextBase = String(args.next_action).slice(0, 1000);
+    const nextStored =
+      rev && !/^null$/i.test(rev)
+        ? `${nextBase}\n\n[Strategy revision]\n${rev.slice(0, 3000)}`.slice(0, 8000)
+        : nextBase;
+
     const { data, error } = await db
       .from("agent_reflections")
       .insert({
@@ -38,7 +53,7 @@ registerTool(
         iteration: context.iterationCount,
         observation: String(args.observation).slice(0, 2000),
         conclusion: String(args.conclusion).slice(0, 2000),
-        next_action: String(args.next_action).slice(0, 1000),
+        next_action: nextStored,
       })
       .select("id, observation, conclusion, next_action, iteration")
       .single();
