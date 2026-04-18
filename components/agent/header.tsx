@@ -11,6 +11,9 @@ import {
   AlertCircle,
   ShieldQuestion,
   Clock,
+  Square,
+  Loader2,
+  Ban,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Session } from "./types";
@@ -18,6 +21,10 @@ import type { Session } from "./types";
 interface Props {
   session: Session | null;
   onToggleRail: () => void;
+  /** Affiche le bouton « Arrêter » (agent autonome en cours). */
+  canStopAgent?: boolean;
+  onStopAgent?: () => void;
+  stoppingAgent?: boolean;
 }
 
 const STATUS_META: Record<
@@ -56,7 +63,13 @@ const STATUS_META: Record<
   },
 };
 
-export function AgentHeader({ session, onToggleRail }: Props) {
+export function AgentHeader({
+  session,
+  onToggleRail,
+  canStopAgent,
+  onStopAgent,
+  stoppingAgent,
+}: Props) {
   const meta = session ? STATUS_META[session.status] : null;
   const Icon = meta?.icon;
 
@@ -103,6 +116,25 @@ export function AgentHeader({ session, onToggleRail }: Props) {
 
       {session && (
         <div className="flex items-center gap-2">
+          {canStopAgent && onStopAgent && (
+            <button
+              type="button"
+              onClick={onStopAgent}
+              disabled={stoppingAgent}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border border-red-500/40",
+                "bg-red-500/10 px-2.5 py-1 text-[11px] font-medium text-red-700 dark:text-red-300",
+                "hover:bg-red-500/20 disabled:pointer-events-none disabled:opacity-50",
+              )}
+            >
+              {stoppingAgent ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Square className="h-3 w-3 fill-current" />
+              )}
+              Arrêter
+            </button>
+          )}
           <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-0.5 text-[11px] text-[var(--muted-foreground)]">
             <Coins className="h-3 w-3" />
             <span className="font-mono">

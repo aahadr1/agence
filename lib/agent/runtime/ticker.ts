@@ -593,19 +593,32 @@ async function runOneTickLocked(
       }
     }
 
+    const { data: latestRow } = await db
+      .from("agent_sessions")
+      .select("status")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (latestRow?.status === "cancelled") {
+      willContinue = false;
+    }
+
+    const derivedStatus =
+      latestRow?.status === "cancelled"
+        ? "cancelled"
+        : endStatus === "yielded"
+          ? "running"
+          : endStatus === "completed"
+            ? "completed"
+            : endStatus === "awaiting_approval"
+              ? "awaiting_approval"
+              : endStatus === "paused"
+                ? "paused"
+                : "running";
+
     await db
       .from("agent_sessions")
       .update({
-        status:
-          endStatus === "yielded"
-            ? "running"
-            : endStatus === "completed"
-              ? "completed"
-              : endStatus === "awaiting_approval"
-                ? "awaiting_approval"
-                : endStatus === "paused"
-                  ? "paused"
-                  : "running",
+        status: derivedStatus,
         cost_cents: Math.round(context.totalCostCents),
         last_tick_at: new Date().toISOString(),
         last_error: null,
@@ -644,30 +657,47 @@ async function runOneTickLocked(
       })
       .eq("id", stepId);
 
+    const { data: rowAfterErr } = await db
+      .from("agent_sessions")
+      .select("status")
+      .eq("id", sessionId)
+      .maybeSingle();
+    const statusAfterErr =
+      rowAfterErr?.status === "cancelled"
+        ? "cancelled"
+        : retryable
+          ? "running"
+          : "failed";
+
     await db
       .from("agent_sessions")
       .update({
-        status: retryable ? "running" : "failed",
-        last_error: errorMessage,
+        status: statusAfterErr,
+        last_error: rowAfterErr?.status === "cancelled" ? null : errorMessage,
         attempt_count: attemptCount,
-        next_retry_at: retryable
-          ? new Date(Date.now() + Math.min(30_000, 2000 * attemptCount ** 2))
-              .toISOString()
-          : null,
+        next_retry_at:
+          rowAfterErr?.status === "cancelled"
+            ? null
+            : retryable
+              ? new Date(Date.now() + Math.min(30_000, 2000 * attemptCount ** 2))
+                  .toISOString()
+              : null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", sessionId);
 
-    // Also log a visible error message so the user sees what happened
-    await db.from("agent_messages").insert({
-      session_id: sessionId,
-      role: "error",
-      content: retryable
-        ? `Tick error (will retry): ${errorMessage}`
-        : `Tick error (giving up after ${MAX_TICK_RETRIES} attempts): ${errorMessage}`,
-    });
+    if (rowAfterErr?.status !== "cancelled") {
+      await db.from("agent_messages").insert({
+        session_id: sessionId,
+        role: "error",
+        content: retryable
+          ? `Tick error (will retry): ${errorMessage}`
+          : `Tick error (giving up after ${MAX_TICK_RETRIES} attempts): ${errorMessage}`,
+      });
+    }
 
-    willContinue = retryable;
+    willContinue =
+      rowAfterErr?.status === "cancelled" ? false : retryable;
     endStatus = retryable ? "retrying" : "failed";
   }
 

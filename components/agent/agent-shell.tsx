@@ -107,6 +107,7 @@ export function AgentShell() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const stickToBottom = useRef(true);
+  const [stoppingAgent, setStoppingAgent] = useState(false);
 
   // -------------------------- Data fetching --------------------------
 
@@ -303,6 +304,31 @@ export function AgentShell() {
     active?.status === "pending" ||
     active?.status === "awaiting_approval";
 
+  const canStopAgent = Boolean(
+    active &&
+      ["running", "pending", "planning", "paused", "awaiting_approval"].includes(
+        active.status,
+      ),
+  );
+
+  const handleStopAgent = useCallback(async () => {
+    if (!active || stoppingAgent) return;
+    setStoppingAgent(true);
+    try {
+      const res = await fetch(`/api/agent/sessions/${active.id}/cancel`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        console.warn("[agent] cancel failed:", j.error || res.statusText);
+      }
+      await fetchSession(active.id);
+      await fetchSessions();
+    } finally {
+      setStoppingAgent(false);
+    }
+  }, [active, stoppingAgent, fetchSession, fetchSessions]);
+
   // Keyword-based preset hint: when the user is about to start a NEW
   // session and their prompt obviously asks for lead generation but the
   // currently-selected preset has no lead-gen tools, surface a gentle
@@ -366,6 +392,9 @@ export function AgentShell() {
         <AgentHeader
           session={active}
           onToggleRail={() => setRailOpen((o) => !o)}
+          canStopAgent={canStopAgent}
+          onStopAgent={() => void handleStopAgent()}
+          stoppingAgent={stoppingAgent}
         />
 
         <div
