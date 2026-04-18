@@ -5,6 +5,7 @@
  *  - provider-neutral messages (Claude or Gemini)
  *  - periodic self-reflection (every N iterations or after consecutive errors)
  *  - approval-driven pause/resume (request_approval tool)
+ *  - clarification pause (ask_user tool — same tick stops until user replies)
  *  - context compaction when history grows too large
  *  - structured todos / plans / memory surfaced as dedicated tool calls
  *
@@ -36,7 +37,7 @@ export interface RunAgentResult {
   totalOutputTokens: number;
   iterations: number;
   toolCalls: ToolResult[];
-  status: "completed" | "awaiting_approval" | "budget_exhausted" | "max_iterations";
+  status: "completed" | "awaiting_approval" | "awaiting_user_input" | "budget_exhausted" | "max_iterations";
   pendingApprovalId?: string;
 }
 
@@ -418,8 +419,11 @@ export async function runAgentLoop(
     const approvalCall = result.functionCalls.find(
       (fc) => fc.name === "request_approval",
     );
+    const askUserCall = result.functionCalls.find(
+      (fc) => fc.name === "ask_user",
+    );
     const otherCalls = result.functionCalls.filter(
-      (fc) => fc.name !== "request_approval",
+      (fc) => fc.name !== "request_approval" && fc.name !== "ask_user",
     );
 
     // Helper to process one tool call
@@ -491,6 +495,20 @@ export async function runAgentLoop(
           status: "awaiting_approval",
           pendingApprovalId: approvalRequestId,
         };
+      }
+    }
+
+    // ask_user: run alone and end the tick so nudges / follow-up tool calls
+    // cannot fabricate an answer before the user replies (Strasbourg incident).
+    if (askUserCall) {
+      toolResultParts.push(await processToolCall(askUserCall));
+      const askTr = allToolCalls[allToolCalls.length - 1];
+      if (!askTr?.error) {
+        state.history.push({ role: "user", parts: toolResultParts });
+        return buildResult(
+          "En attente de la réponse de l'utilisateur.",
+          "awaiting_user_input",
+        );
       }
     }
 

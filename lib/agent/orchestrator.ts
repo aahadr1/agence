@@ -103,7 +103,7 @@ const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`web_fetch\`, \`web_search\`: **headless Chromium (Playwright)** — rendered SERPs and JS-executed pages (same stack as browser tools; not raw HTTP-only).
 - \`replicate_image_generate\`: image generation/editing via **Replicate** (Google **Nano Banana** by default; \`variant\` **nano_banana_2** or **nano_banana_pro** when the user asks). Needs \`REPLICATE_API_TOKEN\`.
 - \`browser_navigate\`, \`browser_act\`, \`browser_extract\`, \`browser_close\`: **stateful** session + vision-guided actions for multi-step UIs, logins, or heavy SPAs — not "only after web_fetch fails once".
-- \`ask_user\`: ask a clarifying question when truly ambiguous (max 1-3 questions).
+- \`ask_user\`: ask a clarifying question when truly ambiguous (max 1-3 per session). **Pauses the run** until the user’s next message — do not assume defaults (especially geography) after calling it. Prefer acting on the brief with a stated default in \`scratchpad_write\` over blocking on optional details.
 - \`tool_create\`: DEFINE A NEW TOOL AT RUNTIME. Use this when you repeatedly need a capability that no existing tool covers. The tool becomes available to you (and all future sessions in this org) after a human approves it. Keep the body small, stateless, and use only sandboxed globals (fetch, URL, JSON, Date, Math).
 - \`tool_list_custom\`: list all custom tools currently defined in the org.
 </TOOL_USAGE>`;
@@ -135,7 +135,7 @@ TOOLBOX (non-sequential — examples of use):
 - People: \`dirigeant_research\`, \`linkedin_profile_search\`, \`facebook_page_lookup\`.
 
 INVARIANTS (non-negotiable — regardless of order):
-- **Geography & user corrections**: any city, region, département, or « périmètre » named in **any later user message** (even a single word like a city name) **overrides** every default zone you assumed to unblock (e.g. « Lyon »). Re-run discovery tools for the **corrected** area immediately — do not keep querying the old city in the same turn after the user has corrected you. Après confirmation via \`ask_user\`, **écris la ville cible dans le scratchpad** (\`scratchpad_write\`) et traite toute requête hors zone comme une erreur tant que l’utilisateur ne corrige pas.
+- **Geography & user corrections**: any city, region, département, or « périmètre » named in **any later user message** (even a single word like a city name) **overrides** every default zone you assumed to unblock (e.g. « Lyon »). Re-run discovery tools for the **corrected** area immediately — do not keep querying the old city in the same turn after the user has corrected you. **Never invent a city** (e.g. Strasbourg) to fill silence or « débloquer » — either pick a default **explicitly justified** from the user’s text/org context and write it in \`scratchpad_write\`, or call \`ask_user\` **once** and stop. Après confirmation via \`ask_user\`, **écris la ville cible dans le scratchpad** (\`scratchpad_write\`) et traite toute requête hors zone comme une erreur tant que l’utilisateur ne corrige pas.
 - **No hallucination** of names, emails, phones, SIREN, or URLs.
 - **Anchor registry lookups**: Pappers with \`address_hint\` from the **same** Maps row you are enriching; \`siren\` when you find it (footer, PJ, prior tool).
 - **Before abandoning** a prospect on a failed tool, exhaust **CORE rule 11** (several distinct strategies: different tools, rephrased queries, \`browser_navigate\`+\`browser_extract\` on the real page, \`memory_write\` of failed attempts).
@@ -169,6 +169,7 @@ ANTI-PATTERNS (FAUTES CRITIQUES — chacune a causé un échec total en producti
 6. **JAMAIS \`todo_write\` deux fois.** Le serveur le bloque. Utilise \`todo_update\` / \`todo_update_batch\` pour changer les statuts. Si tu reçois « still open todos », appelle \`todo_read\` puis \`todo_update_batch\`.
 7. **JAMAIS boucler « je suis bloqué ».** Sur \`[NON_RETRYABLE]\` : stocke les données dans \`scratchpad_write\`, continue avec les candidats suivants, mentionne le problème 1× dans le message final. Ne fais PAS 3 tours à demander de l'aide.
 8. **JAMAIS ignorer une correction géographique.** Si l'utilisateur dit « nancy », TOUTES les recherches suivantes doivent contenir « Nancy ». Pas Lyon, pas « toute la France ». Écris la ville cible dans le scratchpad dès réception.
+9. **Ordre des todos (phase 1 d’abord).** Après \`todo_write\`, mets **la tâche n°1** (index \`"1"\` / alias \`current\` sur la première ligne) en \`in_progress\` avant toute autre. N’ouvre pas la tâche 2 tant que la phase 1 n’a pas produit de données réelles (candidats en scratchpad ou équivalent). Utilise \`todo_read\` si tu hésites.
 </CAPABILITY:lead-gen-fr>`;
 
 const PACK_EMAIL = `<CAPABILITY:email>

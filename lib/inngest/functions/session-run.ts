@@ -148,11 +148,13 @@ export async function runSession(
   const finalStatus =
     result.status === "awaiting_approval"
       ? "awaiting_approval"
-      : result.status === "budget_exhausted"
+      : result.status === "awaiting_user_input"
         ? "paused"
-        : result.status === "max_iterations"
+        : result.status === "budget_exhausted"
           ? "paused"
-          : "completed";
+          : result.status === "max_iterations"
+            ? "paused"
+            : "completed";
 
   await db
     .from("agent_sessions")

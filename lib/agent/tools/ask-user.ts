@@ -1,3 +1,8 @@
+/**
+ * Legacy missions (`missions` / `mission_messages`) — not imported from
+ * `tools/index.ts`. Agent V3 `ask_user` lives in `approval.ts` (session pause +
+ * mission fallback there).
+ */
 import { registerTool } from "../tool-registry";
 import { createClient } from "@supabase/supabase-js";
 

@@ -18,7 +18,6 @@ import "./scratchpad";
 import "./save-lead";
 import "./batch-website-check";
 import "./batch-save-leads";
-import "./ask-user";
 
 // Agent v3 generic tools (always registered)
 import "./todo";

@@ -155,7 +155,7 @@ export interface TickResult {
 
 /**
  * Run one tick for a session. If the session is done (completed / failed /
- * awaiting_approval), returns quickly without doing work.
+ * awaiting_approval / paused), returns quickly without doing work.
  */
 export async function tickSession(sessionId: string): Promise<TickResult> {
   const lock = await acquireLock(sessionId, LOCK_TTL_SEC);
@@ -207,9 +207,10 @@ async function runOneTickLocked(
     };
   }
 
-  // Terminal states: don't touch.
+  // Terminal states: don't touch. `paused` waits for user input (ask_user,
+  // budget pause) — do not self-chain another tick until they post a message.
   if (
-    ["completed", "failed", "cancelled", "awaiting_approval"].includes(
+    ["completed", "failed", "cancelled", "awaiting_approval", "paused"].includes(
       session.status,
     )
   ) {
@@ -635,6 +636,9 @@ async function runOneTickLocked(
 
       if (raced.status === "awaiting_approval") {
         endStatus = "awaiting_approval";
+        willContinue = false;
+      } else if (raced.status === "awaiting_user_input") {
+        endStatus = "paused";
         willContinue = false;
       } else if (raced.status === "budget_exhausted") {
         endStatus = "paused";

@@ -115,11 +115,19 @@ export const missionExecute = inngest.createFunction(
         costCents: agentResult.totalCostCents,
         iterations: agentResult.iterations,
         toolCalls: agentResult.toolCalls.length,
+        agentStatus: agentResult.status,
       };
     });
 
     await step.run("mark-completed", async () => {
-      const status = result.finalMessage.includes("paused") ? "paused" : "completed";
+      const agentStatus = (result as { agentStatus?: string }).agentStatus;
+      const paused =
+        agentStatus === "awaiting_user_input" ||
+        agentStatus === "awaiting_approval" ||
+        agentStatus === "budget_exhausted" ||
+        (typeof result.finalMessage === "string" &&
+          result.finalMessage.toLowerCase().includes("paused"));
+      const status = paused ? "paused" : "completed";
       await db
         .from("missions")
         .update({

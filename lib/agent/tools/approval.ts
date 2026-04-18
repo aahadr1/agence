@@ -80,7 +80,7 @@ registerTool(
   {
     name: "ask_user",
     description:
-      "Ask the user a clarifying question. Use sparingly (max 1-3 per session). Unlike request_approval, this doesn't pause the agent — the answer arrives as a user message. **When the user has already replied** in the chat (even a short word), read that reply as the answer — do not ask again for the same detail and do not assume a default (e.g. a random city) if they already named one.",
+      "Ask the user a clarifying question. Use sparingly (max 1-3 per session). **Pauses the agent** until the user sends their next chat message (same contract as waiting on approval). After calling this tool you must not invent answers (e.g. a city) or continue discovery in the same run — the engine stops until the user replies. **When the user has already replied** in the chat (even a short word), read that reply as the answer — do not ask again for the same detail.",
     parameters: {
       question: { type: "string", description: "The question to ask" },
       options: {
@@ -95,21 +95,70 @@ registerTool(
   },
   async (args, context) => {
     const db = getAgentDb();
-    if (context.sessionId) {
+    if (!context.sessionId)
+      throw new Error("ask_user requires a session");
+
+    const question = String(args.question);
+    const optArray = Array.isArray(args.options)
+      ? (args.options as unknown[])
+          .map((o) => String(o).trim())
+          .filter(Boolean)
+      : typeof args.options === "string"
+        ? (args.options as string)
+            .split(",")
+            .map((o) => o.trim())
+            .filter(Boolean)
+        : [];
+
+    const { data: agentSess } = await db
+      .from("agent_sessions")
+      .select("id")
+      .eq("id", context.sessionId)
+      .maybeSingle();
+
+    if (agentSess) {
       await db.from("agent_messages").insert({
         session_id: context.sessionId,
         role: "assistant",
-        content: String(args.question),
+        content: question,
         metadata: {
           kind: "ask_user",
-          options: args.options || null,
+          options: optArray.length ? optArray : null,
         },
       });
+
+      await db
+        .from("agent_sessions")
+        .update({ status: "paused", updated_at: new Date().toISOString() })
+        .eq("id", context.sessionId);
+    } else {
+      const missionId = context.missionId;
+      const { data: missionRow } = await db
+        .from("missions")
+        .select("id")
+        .eq("id", missionId)
+        .maybeSingle();
+      if (!missionRow) {
+        throw new Error(
+          "ask_user: id is neither an agent_sessions row nor a missions row",
+        );
+      }
+
+      await db.from("mission_messages").insert({
+        mission_id: missionId,
+        role: "assistant",
+        content: question,
+        metadata: optArray.length ? { options: optArray } : {},
+      });
+
+      await db.from("missions").update({ status: "paused" }).eq("id", missionId);
     }
+
     return {
       asked: true,
-      question: String(args.question),
-      options: args.options || null,
+      question,
+      options: optArray.length ? optArray : null,
+      message: "Question sent. Run paused until the user replies in chat.",
     };
   },
 );
