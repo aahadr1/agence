@@ -1,16 +1,11 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { registerTool } from "../tool-registry";
-import { createClient } from "@supabase/supabase-js";
-
-function getServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-}
+import { getAgentDb } from "./_db";
+import { ensureAgentLeadSearchId } from "../lead-search-stub";
 
 /** Only set leads.mission_id when candidate exists in public.missions (FK-safe). */
 export async function resolveMissionIdForLead(
-  db: ReturnType<typeof getServiceClient>,
+  db: SupabaseClient,
   candidate: string | undefined,
 ): Promise<string | null> {
   if (!candidate?.trim()) return null;
@@ -49,13 +44,19 @@ registerTool(
       revenue_bracket: { type: "string", description: "Revenue bracket", required: false },
       potential_score: { type: "number", description: "Score 0-100", required: false },
       confidence_score: { type: "number", description: "Data confidence 0-100", required: false },
+      website_presence: {
+        type: "string",
+        description:
+          "Optional: Maps vs site reality — one of maps_claim_no_site | finder_verified | contradiction | unknown",
+        required: false,
+      },
       notes: { type: "string", description: "Agent notes about this lead", required: false },
     },
     required: ["business_name"],
     costEstimateCents: 0,
   },
   async (args, context) => {
-    const db = getServiceClient();
+    const db = getAgentDb();
 
     const leadData: Record<string, unknown> = {
       business_name: args.business_name,
@@ -73,7 +74,7 @@ registerTool(
       "address", "phone", "email", "website_url", "rating", "review_count",
       "owner_name", "owner_email", "owner_phone", "owner_role", "linkedin_url",
       "siren", "company_type", "creation_date", "employee_count", "revenue_bracket",
-      "potential_score", "notes",
+      "potential_score", "confidence_score", "notes",
     ];
 
     for (const field of optionalFields) {
@@ -85,7 +86,12 @@ registerTool(
     if (args.website_url) leadData.has_website = true;
 
     if (!args.lead_id && context.sessionId) {
-      leadData.enrichment_data = { agent_session_id: context.sessionId };
+      const enrichment: Record<string, unknown> = {
+        agent_session_id: context.sessionId,
+      };
+      const wp = String(args.website_presence || "").trim();
+      if (wp) enrichment.website_presence = wp;
+      leadData.enrichment_data = enrichment;
     }
 
     if (args.lead_id) {
@@ -98,6 +104,24 @@ registerTool(
       if (error) throw new Error(`Update failed: ${error.message}`);
       return { lead_id: data.id, action: "updated" };
     }
+
+    if (!context.sessionId) {
+      throw new Error(
+        "save_lead (création) requiert une session agent active (sessionId).",
+      );
+    }
+    let searchId = context.leadSearchId;
+    if (!searchId) {
+      searchId = await ensureAgentLeadSearchId({
+        orgId: context.orgId,
+        userId: context.userId,
+        sessionId: context.sessionId,
+        nicheHint: null,
+        locationHint: (args.address as string) || null,
+      });
+      context.leadSearchId = searchId;
+    }
+    leadData.search_id = searchId;
 
     const { data, error } = await db
       .from("leads")

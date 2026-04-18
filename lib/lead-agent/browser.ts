@@ -512,6 +512,7 @@ export async function safeClose(
 /** True when Playwright died mid-call — a fresh browser often recovers. */
 export function isTransientPlaywrightFailure(e: unknown): boolean {
   const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  if (isPlaywrightResourceExhaustion(e)) return false;
   return (
     (msg.includes("browsercontext") && msg.includes("closed")) ||
     msg.includes("target closed") ||
@@ -520,6 +521,20 @@ export function isTransientPlaywrightFailure(e: unknown): boolean {
     msg.includes("execution context was destroyed") ||
     msg.includes("frame has been detached") ||
     msg.includes("net::err_aborted")
+  );
+}
+
+/** Disk-full / tmp exhaustion — retrying the same launch usually makes it worse. */
+export function isPlaywrightResourceExhaustion(e: unknown): boolean {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  return (
+    msg.includes("less than 64mb") ||
+    msg.includes("64mb of free space") ||
+    msg.includes("free space in temporary") ||
+    msg.includes("enospc") ||
+    msg.includes("no space left on device") ||
+    msg.includes("sigtrap") ||
+    msg.includes("resource temporarily unavailable")
   );
 }
 
@@ -541,6 +556,15 @@ export async function withBrowserSession<T>(
       return await runner(session);
     } catch (e) {
       lastErr = e;
+      if (isPlaywrightResourceExhaustion(e)) {
+        const msg =
+          e instanceof Error
+            ? e.message
+            : "Playwright: espace disque /tmp insuffisant ou processus tué (SIGTRAP).";
+        throw new Error(
+          `${msg} [BROWSER_RESOURCE_EXHAUSTED] Sur Vercel, limitez le parallélisme navigateur, augmentez /tmp (plan), ou définissez PLAYWRIGHT_BROWSERS_PATH vers un volume avec assez d’espace. Ne boucle pas 8× sur la même cause.`,
+        );
+      }
       if (i < max && isTransientPlaywrightFailure(e)) {
         const backoffMs = IS_SERVERLESS ? 900 + 700 * i : 500 * i;
         await sleep(backoffMs);

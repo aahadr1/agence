@@ -6,6 +6,7 @@
 import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
 import { resolveMissionIdForLead } from "./save-lead";
+import { ensureAgentLeadSearchId } from "../lead-search-stub";
 
 const MAX_BATCH = 25;
 
@@ -15,7 +16,7 @@ registerTool(
   {
     name: "batch_save_leads",
     description:
-      "Create up to 25 leads in one DB insert. Same fields as `save_lead` per row (business_name required each). Skips rows missing business_name. All rows get enrichment_data.agent_session_id for session-scoped deliverable counting.",
+      "Create up to 25 leads in one DB insert. Same fields as `save_lead` per row (business_name required each). Skips rows missing business_name. All rows share the session stub `search_id` and get enrichment_data.agent_session_id for deliverable counting. If you pass more than 25 rows, only the first 25 are processed — split into multiple calls.",
     parameters: {
       leads: {
         type: "array",
@@ -54,7 +55,20 @@ registerTool(
       "potential_score",
       "notes",
       "confidence_score",
+      "website_presence",
     ] as const;
+
+    let searchId = context.leadSearchId;
+    if (!searchId) {
+      searchId = await ensureAgentLeadSearchId({
+        orgId: context.orgId,
+        userId: context.userId,
+        sessionId: context.sessionId,
+        nicheHint: null,
+        locationHint: null,
+      });
+      context.leadSearchId = searchId;
+    }
 
     const rows: Record<string, unknown>[] = [];
     const skipped: string[] = [];
@@ -71,16 +85,26 @@ registerTool(
         continue;
       }
 
+      const enrichment: Record<string, unknown> = {
+        agent_session_id: context.sessionId,
+      };
+      const wp = row.website_presence;
+      if (typeof wp === "string" && wp.trim()) {
+        enrichment.website_presence = wp.trim();
+      }
+
       const leadData: Record<string, unknown> = {
         business_name: name,
         org_id: context.orgId,
         user_id: context.userId,
         source: "lead-agent-v2",
-        enrichment_data: { agent_session_id: context.sessionId },
+        search_id: searchId,
+        enrichment_data: enrichment,
       };
       if (missionFk) leadData.mission_id = missionFk;
 
       for (const field of optionalFields) {
+        if (field === "website_presence") continue;
         if (row[field] !== undefined && row[field] !== null) {
           leadData[field] = row[field];
         }

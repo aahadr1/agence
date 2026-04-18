@@ -10,6 +10,8 @@ export interface ToolParameter {
   required?: boolean;
 }
 
+export type ToolRiskLevel = "green" | "yellow" | "red";
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -20,6 +22,8 @@ export interface ToolDefinition {
   requiredConnection?: "google" | "slack" | "notion" | "github";
   /** If true, the tool performs a destructive or sensitive action — engine may force approval */
   destructive?: boolean;
+  /** Permission class for audit / hard blocks (see lib/agent/os/permissions.ts). */
+  riskLevel?: ToolRiskLevel;
 }
 
 export interface ToolResult {
@@ -63,6 +67,16 @@ export interface AgentContext {
   sessionId: string;
   orgId: string;
   userId: string;
+  /**
+   * Stub `lead_searches.id` for this session (set by the ticker on lead-gen ticks).
+   * `save_lead` / `batch_save_leads` fall back to `ensureAgentLeadSearchId` and cache here.
+   */
+  leadSearchId?: string;
+  /**
+   * When lead-gen-fr is active, blocks `todo_finalize` until enough CRM rows exist
+   * for this session (same rule as `checkOpenWork`).
+   */
+  leadGenFinalizeGate?: () => Promise<{ ok: boolean; message?: string }>;
   /** Same-tick cache; durable scratchpad uses `scratchpad_write` → agent_memory */
   scratchpad: Map<string, unknown>;
   totalCostCents: number;
@@ -203,4 +217,5 @@ export type CapabilityPack =
   | "calendar"
   | "web-research"
   | "browser"
-  | "self-coding";
+  | "self-coding"
+  | "agent-os";

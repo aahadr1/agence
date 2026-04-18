@@ -353,6 +353,52 @@ async function runOneTickLocked(
       inputTokensSoFar: 0,
     };
 
+    if (sessionPacksForBudget.includes("lead-gen-fr")) {
+      try {
+        const { ensureAgentLeadSearchId } = await import(
+          "@/lib/agent/lead-search-stub"
+        );
+        context.leadSearchId = await ensureAgentLeadSearchId({
+          orgId: session.org_id,
+          userId: session.user_id,
+          sessionId,
+          nicheHint: session.domain_instructions,
+          locationHint: null,
+        });
+      } catch (e) {
+        console.warn(
+          "[agent.tick] ensureAgentLeadSearchId:",
+          e instanceof Error ? e.message : e,
+        );
+      }
+      context.leadGenFinalizeGate = async () => {
+        const userPrompt = (await fetchInitialPrompt(sessionId)) || "";
+        if (
+          await leadGenDeliverableStillIncomplete(
+            session.org_id,
+            sessionId,
+            userPrompt,
+          )
+        ) {
+          const hint = userPrompt.trim()
+            ? await leadGenProgressSummaryFr(
+                session.org_id,
+                sessionId,
+                userPrompt,
+              )
+            : "**Livrable CRM** : au moins 1 lead sauvegardé requis.";
+          return {
+            ok: false,
+            message:
+              "`todo_finalize` refusé : le livrable CRM n’est pas atteint pour cette session. " +
+              "Enchaîne `save_lead` / `batch_save_leads` (ou `ask_user` si tu es bloqué), puis réessaie.\n\n" +
+              hint,
+          };
+        }
+        return { ok: true };
+      };
+    }
+
     const loopPromise = runAgentLoop(
       {
         systemPrompt,

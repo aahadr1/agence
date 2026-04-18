@@ -420,6 +420,15 @@ registerTool(
     if (!context.sessionId) {
       throw new Error("todo_finalize requires an active session");
     }
+    if (context.leadGenFinalizeGate) {
+      const gate = await context.leadGenFinalizeGate();
+      if (!gate.ok) {
+        throw new Error(
+          gate.message ||
+            "todo_finalize refusé : livrable CRM non atteint pour cette session.",
+        );
+      }
+    }
     const { data, error } = await db
       .from("agent_todos")
       .update({ status: "completed", updated_at: new Date().toISOString() })

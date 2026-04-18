@@ -1,5 +1,8 @@
 import { registerTool } from "../tool-registry";
-import { searchPappersApi } from "@/lib/lead-agent/sources/pappers-api";
+import {
+  isPappersApiError,
+  searchPappersApi,
+} from "@/lib/lead-agent/sources/pappers-api";
 
 registerTool(
   {
@@ -26,7 +29,7 @@ registerTool(
   },
   async (args) => {
     const log = (msg: string) => console.log(`[pappers_search] ${msg}`);
-    return await searchPappersApi(
+    const res = await searchPappersApi(
       args.business_name as string,
       args.location as string,
       log,
@@ -35,5 +38,13 @@ registerTool(
         siren: (args.siren as string) || null,
       },
     );
+    if (isPappersApiError(res)) {
+      if (res.code === "missing_api_key" || res.code === "unauthorized") {
+        throw new Error(
+          `${res.error} [NON_RETRYABLE] Ne relance pas pappers_search avec les mêmes paramètres : configure PAPPERS_API_KEY (tableau de bord Pappers) ou corrige la clé, puis poursuis avec Societe.com / recherche web.`,
+        );
+      }
+    }
+    return res;
   }
 );

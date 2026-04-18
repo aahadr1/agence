@@ -9,6 +9,7 @@
  */
 
 import type { CapabilityPack } from "./types";
+import { SPECIALIST_PROMPT_FRAGMENTS } from "./os/specialists";
 
 // ---------------------------------------------------------------------------
 // Base persona & discipline
@@ -118,15 +119,16 @@ OBJECTIVES (what "done" means — adapt how you get there):
 - Obtain **verifiable** establishment and/or decision-maker contact data; never invent.
 - Call \`save_lead\` (one row) or \`batch_save_leads\` (many rows, same iteration budget) as you lock prospects; the CRM only sees saved rows.
 - If the user asked for **N** leads, aim for **N** saved rows at usable quality. If fewer are realistically achievable, say so **explicitly in French** with reasons — do not ship a one-row table full of placeholders as if it were complete.
+- **Définition de fini** : une mission « N leads » = **N insertions CRM réussies** (\`save_lead\` / \`batch_save_leads\`) ou escalade \`ask_user\` si un outil reste KO après **une** tentative sur une erreur invariante (401, colonne DB, violation NOT NULL). Ne réessaie pas l’identique après \`[NON_RETRYABLE]\` dans le message d’erreur.
 
 TOOLBOX (non-sequential — examples of use):
 - Discovery: \`google_maps_search\` (request **max_results** high when you need a wide pool — up to 60), \`pages_jaunes_search\`, \`google_search\`.
-- Legal: \`pappers_search(business_name, location, address_hint?, siren?)\` — **always pass \`address_hint\`** (full Maps address) when you have it; pass \`siren\` when known. \`societe_com_lookup(business_name, location, address?)\` — pass Maps **address** when you have it.
+- Legal: \`pappers_search(business_name, location, address_hint?, siren?)\` — **always pass \`address_hint\`** (full Maps address) when you have it; pass \`siren\` when known. On **HTTP 401 / clé absente**, l’outil renvoie une erreur **NON_RETRYABLE** : ne relance pas \`pappers_search\` en boucle — configure la clé ou bascule Societe / web. \`societe_com_lookup(business_name, location, address_hint?)\` — passe l’adresse Maps complète en \`address_hint\` pour éviter les homonymes (autre ville).
 - Web / quality: \`batch_website_check(urls[])\` for cheap HTTP pre-checks on URLs you already have — then \`website_finder\`, \`website_audit\` only on survivors. \`website_finder(business_name, location, website_url?, google_maps_url?)\` — when Maps gives \`website_url\` or \`google_maps_url\`, pass them **before** concluding "no website". \`website_audit\`, \`contact_page_scraper\`, \`fb_ad_library_check\`.
 - People: \`dirigeant_research\`, \`linkedin_profile_search\`, \`facebook_page_lookup\`.
 
 INVARIANTS (non-negotiable — regardless of order):
-- **Geography & user corrections**: any city, region, département, or « périmètre » named in **any later user message** (even a single word like a city name) **overrides** every default zone you assumed to unblock (e.g. « Lyon »). Re-run discovery tools for the **corrected** area immediately — do not keep querying the old city in the same turn after the user has corrected you.
+- **Geography & user corrections**: any city, region, département, or « périmètre » named in **any later user message** (even a single word like a city name) **overrides** every default zone you assumed to unblock (e.g. « Lyon »). Re-run discovery tools for the **corrected** area immediately — do not keep querying the old city in the same turn after the user has corrected you. Après confirmation via \`ask_user\`, **écris la ville cible dans le scratchpad** (\`scratchpad_write\`) et traite toute requête hors zone comme une erreur tant que l’utilisateur ne corrige pas.
 - **No hallucination** of names, emails, phones, SIREN, or URLs.
 - **Anchor registry lookups**: Pappers with \`address_hint\` from the **same** Maps row you are enriching; \`siren\` when you find it (footer, PJ, prior tool).
 - **Before abandoning** a prospect on a failed tool, exhaust **CORE rule 11** (several distinct strategies: different tools, rephrased queries, \`browser_navigate\`+\`browser_extract\` on the real page, \`memory_write\` of failed attempts).
@@ -136,7 +138,7 @@ INVARIANTS (non-negotiable — regardless of order):
 - Required: \`business_name\`, \`notes\` (why they qualify + what is verified vs missing), \`confidence_score\`.
 - Minimum viable contact: **at least one** of — verified **establishment** phone or email (e.g. from Maps or site), OR verified **owner** phone/email from tools. If only establishment contact is verified, owner fields may be null **if** \`notes\` explain. NEVER fabricate to fill columns.
 
-DATA PRIORITY when sources conflict (tie-breaker, not execution order): Pappers > Societe.com > legal mentions > LinkedIn > Google Reviews > Facebook; recent > old.
+DATA PRIORITY when sources conflict (tie-breaker, not execution order): Pappers > Societe.com > legal mentions > LinkedIn > Google Reviews > Facebook; recent > old. **TPE sans SIREN fiable** : priorise \`dirigeant_research\`, \`google_search\`, \`pages_jaunes_search\` — tu peux quand même \`save_lead\` avec les contacts vérifiables.
 
 BATCH HEURISTIC (flexible):
 - Build a pool larger than N when useful; filter obvious exclusions early; deepen only promising rows — but you may **reorder** (e.g. legal ID first if the name is ambiguous, or audit first if the user only cares about "bad site").
@@ -145,7 +147,7 @@ FINAL MESSAGE:
 - Short French plan before big batches when helpful.
 - Final table in **French**, aligned with what was **saved**; if columns are missing, state it honestly rather than \`[non trouvé]\` spam without strategy.
 - **Before the table**: a short French block **« Vérifications / limites »** (what was cross-checked, what could not be verified, homonyms rejected) — shows depth, not just rows.
-- **Cross-check "no website"** only after Maps \`website_url\` + \`website_finder(..., google_maps_url=...)\`; never claim absence of site if Maps exposes a URL.
+- **Cross-check "no website"** : enchaînement **Maps → \`website_finder\`** (ou \`web_fetch\` sur l’URL Maps) **avant** de conclure « sans site ». Si Maps et le finder divergent, renseigne \`website_presence\` sur \`save_lead\` (\`maps_claim_no_site\` / \`finder_verified\` / \`contradiction\`).
 - **Quality over count**: fewer leads with triangulated entity + sourced contact + honest gaps beat N fragile rows; if the user asked for N and you have fewer solid ones, say so in French with reasons (CORE rule 14).
 - Encourage **tiers / rank**, a **one-line pitch angle** per lead, and explicit **confidence** where useful — align with the extended iteration budget for this pack.
 
@@ -171,6 +173,30 @@ You can drive a real browser (headless Chromium). Start with \`browser_navigate(
 
 **Session cookies (organisation):** Playwright injects automatically any cookies the user saved under **Identifiants navigateur** in the Agent UI (encrypted per org). If \`web_fetch\` or \`browser_navigate\` returns \`credential_required: true\`, \`blocked: true\`, or \`page_access.login_wall\`, tell the user (in French) which hostname to cover and that they can paste an export cookies JSON there — then retry the same URL after they confirm it is saved.
 </CAPABILITY:browser>`;
+
+const PACK_AGENT_OS = `<CAPABILITY:agent-os>
+**Agent OS** — plateforme agentique généraliste (superviseur + spécialistes implicites via outils).
+
+Rôles (guidage interne, pas des appels API séparés) :
+- **Superviseur** : ${SPECIALIST_PROMPT_FRAGMENTS.supervisor}
+- **Researcher** : ${SPECIALIST_PROMPT_FRAGMENTS.researcher}
+- **Operator** : ${SPECIALIST_PROMPT_FRAGMENTS.operator}
+- **Builder** : ${SPECIALIST_PROMPT_FRAGMENTS.builder}
+- **Analyst** : ${SPECIALIST_PROMPT_FRAGMENTS.analyst}
+- **Writer** : ${SPECIALIST_PROMPT_FRAGMENTS.writer}
+
+Outils façade (sorties JSON d’abord) :
+- \`browser_suite\` — search | open | click | type | extract | screenshot | markdown | links | close (délègue aux outils Playwright existants).
+- \`research_suite\` — search | rank_sources | compare_claims | build_citations.
+- \`workspace_list_files\`, \`workspace_read_file\`, \`workspace_search_code\` — lecture sûre du dépôt (pas de shell arbitraire).
+- \`os_record_source\`, \`os_save_artifact\`, \`os_record_decision\` — mémoire durable par session (sources, livrables, arbitrages).
+- \`workflow_enqueue\` — file une tâche longue via Inngest si configuré.
+- \`knowledge_retrieve\` — RAG interne (stub jusqu’à branchement embeddings).
+- \`mcp_invoke\` — MCP (stub / infra) — **red**, désactivé sans AGENT_ALLOW_RED_TOOLS=1.
+- \`workspace_run_command\` — **red**, bloqué sans AGENT_ALLOW_RED_TOOLS=1.
+
+Rappels : actions externes sensibles → \`request_approval\`. Ne pas exposer de chaîne de pensée brute ; tracer décisions via \`os_record_decision\`.
+</CAPABILITY:agent-os>`;
 
 const PACK_SELF_CODING = `<CAPABILITY:self-coding>
 You can extend the product by opening pull requests against your own repository. This is powerful but restricted.
@@ -201,6 +227,7 @@ const PACKS: Record<CapabilityPack, string> = {
   "web-research": PACK_WEB_RESEARCH,
   browser: PACK_BROWSER,
   "self-coding": PACK_SELF_CODING,
+  "agent-os": PACK_AGENT_OS,
 };
 
 // ---------------------------------------------------------------------------
@@ -308,6 +335,24 @@ export function getToolNamesForCapabilities(
       "repo_propose_change",
       "repo_check_pr",
       "repo_list_my_prs",
+    ],
+    "agent-os": [
+      "browser_suite",
+      "research_suite",
+      "workspace_list_files",
+      "workspace_read_file",
+      "workspace_search_code",
+      "os_record_source",
+      "os_save_artifact",
+      "os_record_decision",
+      "workflow_enqueue",
+      "mcp_invoke",
+      "workspace_run_command",
+      "knowledge_retrieve",
+      "browser_navigate",
+      "browser_act",
+      "browser_extract",
+      "browser_close",
     ],
   };
 

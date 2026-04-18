@@ -219,10 +219,16 @@ async function apiGet<T>(
   }
 }
 
+function hintPostalCode(hint: string): string | null {
+  const m = hint.match(/\b(\d{5})\b/);
+  return m ? m[1] : null;
+}
+
 function scoreSearchResult(
   businessName: string,
   location: string,
-  r: SearchResult
+  r: SearchResult,
+  addressHint?: string | null,
 ): number {
   const normBiz = normalizeName(businessName);
   const nom = normalizeName(r.nomcommercial || "");
@@ -247,6 +253,27 @@ function scoreSearchResult(
   }
 
   if (r.status === "active") score += 5;
+
+  if (dep && r.dep && dep !== r.dep) {
+    score = Math.min(score, 8);
+  }
+  if (city && city.length > 2 && cpville && !cpville.includes(city)) {
+    score = Math.min(score, 10);
+  }
+
+  if (addressHint?.trim()) {
+    const hint = addressHint.trim();
+    const hp = hintPostalCode(hint);
+    const cpNorm = stripAccents((r.cpville || "").toLowerCase()).replace(/\s/g, "");
+    if (hp && cpNorm && !cpNorm.includes(hp)) {
+      score = Math.min(score, 6);
+    }
+    const hintCity = cityFromLocation(hint);
+    if (hintCity && hintCity.length > 2 && cpville && !cpville.includes(hintCity)) {
+      score = Math.min(score, 6);
+    }
+  }
+
   return score;
 }
 
@@ -291,7 +318,8 @@ function buildAddress(il: InfoLegales): string | null {
 export async function searchSocieteComApi(
   businessName: string,
   location: string,
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  opts?: { address_hint?: string },
 ): Promise<SocieteComResult | SocieteApiError | null> {
   const token = getToken();
   if (!token) {
@@ -302,6 +330,7 @@ export async function searchSocieteComApi(
     );
   }
 
+  const addressHint = opts?.address_hint?.trim() || null;
   const city = cityFromLocation(location);
   const dep = depFromLocation(location);
   const clean = businessName
@@ -343,14 +372,16 @@ export async function searchSocieteComApi(
 
     for (const r of results) {
       if (!r.siren) continue;
-      const score = scoreSearchResult(businessName, location, r);
+      const score = scoreSearchResult(businessName, location, r, addressHint);
       if (!best || score > best.score) best = { r, score };
     }
 
-    if (best && best.score >= 28) break;
+    const earlyStop = addressHint ? 30 : 28;
+    if (best && best.score >= earlyStop) break;
   }
 
-  if (!best || best.score < 20) {
+  const minConfident = addressHint ? 22 : 20;
+  if (!best || best.score < minConfident) {
     log(`[Societe API] No confident match for "${businessName}" (best score ${best?.score ?? 0})`);
     return null;
   }

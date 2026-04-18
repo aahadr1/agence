@@ -125,6 +125,8 @@ export interface Lead {
   has_meta_ads: boolean | null;
   meta_ads_count: number | null;
   potential_score: number | null;
+  /** Agent / tool confidence 0–100 (migration 024) */
+  confidence_score: number | null;
   pain_points: PainPoint[] | null;
   recommended_offers: RecommendedOffer[] | null;
   enrichment_data: Record<string, unknown>;

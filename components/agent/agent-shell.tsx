@@ -29,6 +29,7 @@ import { StatusIndicator } from "./status-indicator";
 import { EmptyState } from "./empty-state";
 import { Composer, type ComposerHandle } from "./composer";
 import { BrowserCredentialsPanel } from "./browser-credentials-panel";
+import { OsContextPanel } from "./os-context-panel";
 
 const CAPABILITY_PRESETS: CapabilityPreset[] = [
   {
@@ -63,6 +64,13 @@ const CAPABILITY_PRESETS: CapabilityPreset[] = [
     packs: ["self-coding", "web-research"],
     description: "L'agent peut ouvrir des PR GitHub pour s'étendre",
   },
+  {
+    id: "agent-os",
+    label: "Agent OS",
+    packs: ["agent-os", "browser", "web-research", "self-coding"],
+    description:
+      "Superviseur + façades navigateur/recherche, workspace lecture, mémoire sources/artefacts, audit outils, MCP/workflow (stubs)",
+  },
 ];
 
 const SUGGESTIONS: Record<string, string[]> = {
@@ -85,6 +93,10 @@ const SUGGESTIONS: Record<string, string[]> = {
   "self-coding": [
     "Crée un nouvel outil `slugify` qui transforme un texte en slug URL-safe.",
     "Ajoute un outil `currency_convert` qui utilise une API publique de taux de change.",
+  ],
+  "agent-os": [
+    "Recherche synthétique sur X, cite 5 sources, enregistre-les et produis un rapport JSON puis markdown.",
+    "Liste les fichiers sous lib/agent, lis engine.ts et résume le flux d’exécution des outils.",
   ],
 };
 
@@ -409,6 +421,14 @@ export function AgentShell() {
               />
             )}
             {active && todos.length > 0 && <TodoTracker todos={todos} />}
+            {active && (
+              <OsContextPanel
+                sessionId={active.id}
+                enabled={Boolean(
+                  active.capability_packs?.includes("agent-os"),
+                )}
+              />
+            )}
 
           <div className="mx-auto w-full max-w-3xl px-4 py-5 lg:px-6">
             {!active && timeline.length === 0 && (

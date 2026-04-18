@@ -6,8 +6,15 @@ import {
   sessionContinue,
   approvalResponded,
 } from "@/lib/inngest/functions/session-run";
+import { agentOsLongTask } from "@/lib/inngest/functions/agent-os-long-task";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [missionExecute, sessionStart, sessionContinue, approvalResponded],
+  functions: [
+    missionExecute,
+    sessionStart,
+    sessionContinue,
+    approvalResponded,
+    agentOsLongTask,
+  ],
 });

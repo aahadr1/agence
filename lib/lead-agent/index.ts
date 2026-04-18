@@ -525,7 +525,9 @@ export async function runSixStepEnrichment(
 
     const [pappers, societeApi] = await Promise.all([
       searchPappersApi(lead.business_name, location, log),
-      searchSocieteComApi(lead.business_name, location, log),
+      searchSocieteComApi(lead.business_name, location, log, {
+        address_hint: lead.address || undefined,
+      }),
     ]);
 
     // Merge: Pappers first, Societe.com API fills gaps (esp. dirigeant PP when Pappers has none)
@@ -756,7 +758,9 @@ export async function runEnrichmentPhaseA(
 
   const [pappers, societeApi, httpCheck, ps] = await Promise.all([
     searchPappersApi(lead.business_name, location, log),
-    searchSocieteComApi(lead.business_name, location, log),
+    searchSocieteComApi(lead.business_name, location, log, {
+      address_hint: lead.address || undefined,
+    }),
     lead.has_website && lead.website_url
       ? quickHttpCheck(lead.website_url, log)
       : Promise.resolve(null),

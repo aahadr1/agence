@@ -11,6 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:agent:urls": "npx tsx scripts/verify-batch-url-classify.ts",
     "test:crm": "playwright test -c playwright.crm-v2.config.ts",
     "test:calendar": "playwright test -c playwright.calendar.config.ts",
     "worker": "tsx workers/lead-enricher.ts",
