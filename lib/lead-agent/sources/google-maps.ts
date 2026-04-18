@@ -1,5 +1,10 @@
 import type { Page } from "playwright-core";
-import { normalizeUrl, randomDelay, dismissConsent } from "../browser";
+import {
+  normalizeUrl,
+  randomDelay,
+  navigateForScrape,
+  type PageAccessDiagnostics,
+} from "../browser";
 import { classifyUrl } from "../../platform-registry";
 
 export interface MapsLead {
@@ -253,9 +258,91 @@ async function extractListItems(page: Page): Promise<ListItem[]> {
   });
 }
 
+/** Click a list row: prefer exact aria-label, then href, then role name, then scan place links. */
+async function clickMapsListItem(page: Page, item: ListItem): Promise<boolean> {
+  const aria = page
+    .locator(`a[aria-label="${CSS.escape(item.name)}"][href*="/maps/place/"]`)
+    .first();
+  if (await aria.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await aria.click();
+    return true;
+  }
+
+  if (item.href) {
+    const byHref = page.locator(`a[href="${CSS.escape(item.href)}"]`).first();
+    if (
+      (await byHref.count()) > 0 &&
+      (await byHref.isVisible({ timeout: 1500 }).catch(() => false))
+    ) {
+      await byHref.click();
+      return true;
+    }
+  }
+
+  const roleLink = page.getByRole("link", { name: item.name, exact: true }).first();
+  if (await roleLink.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await roleLink.click();
+    return true;
+  }
+
+  const needle = item.name.trim().toLowerCase();
+  const candidates = page.locator('a[href*="/maps/place/"]');
+  const n = await candidates.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const c = candidates.nth(i);
+    const label =
+      (await c.getAttribute("aria-label").catch(() => null))?.trim() ?? "";
+    const href = (await c.getAttribute("href").catch(() => null)) ?? "";
+    if (!href.includes("/maps/place/")) continue;
+    const hrefMatch =
+      Boolean(item.href) &&
+      (href === item.href || href.split("?")[0] === item.href.split("?")[0]);
+    const labelMatch = label.toLowerCase() === needle;
+    if (hrefMatch || labelMatch) {
+      if (await c.isVisible({ timeout: 800 }).catch(() => false)) {
+        await c.click();
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Main scraper
 // ---------------------------------------------------------------------------
+
+export interface MapsScrapeMeta {
+  blocked?: "captcha" | "auth_wall" | "navigation_failed";
+  credential_required?: boolean;
+  empty_reason?: "no_results" | "timeout" | "captcha" | "auth" | "navigation_failed";
+  suggested_user_action_fr?: string | null;
+  credential_hostname?: string;
+  navigation_message?: string;
+}
+
+export interface ScrapeGoogleMapsResult {
+  leads: MapsLead[];
+  meta: MapsScrapeMeta;
+}
+
+function buildBlockedMeta(
+  blocked: MapsScrapeMeta["blocked"],
+  diagnostic?: PageAccessDiagnostics,
+  navigationMessage?: string,
+): MapsScrapeMeta {
+  const captcha = blocked === "captcha";
+  const auth = blocked === "auth_wall";
+  return {
+    blocked,
+    credential_required: auth || Boolean(diagnostic?.login_wall),
+    empty_reason: captcha ? "captcha" : auth ? "auth" : "navigation_failed",
+    suggested_user_action_fr: diagnostic?.suggested_action_fr ?? null,
+    credential_hostname: diagnostic?.credential_hostname,
+    navigation_message: navigationMessage,
+  };
+}
 
 export async function scrapeGoogleMaps(
   page: Page,
@@ -265,43 +352,25 @@ export async function scrapeGoogleMaps(
   maxScrolls: number = 5,
   maxLeads: number = 30,
   deadline: number = Infinity
-): Promise<MapsLead[]> {
+): Promise<ScrapeGoogleMapsResult> {
   const leads: MapsLead[] = [];
+  const meta: MapsScrapeMeta = {};
   const mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
   log(`[Maps] Searching: "${query}"`);
 
-  try {
-    await page.goto(mapsUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-  } catch {
-    log(`[Maps] ✗ Navigation timeout for "${query}"`);
-    return leads;
-  }
-  await randomDelay(2000, 3000);
-
-  // Handle consent redirect
-  if (page.url().includes("consent.google.com")) {
-    log("[Maps] Handling consent...");
-    await dismissConsent(page);
-    try {
-      const acceptBtn = page.locator('button:has-text("Tout accepter"), button:has-text("Accept all")').first();
-      if (await acceptBtn.isVisible({ timeout: 2000 })) {
-        await acceptBtn.click();
-        await randomDelay(2000, 3000);
-      }
-    } catch {
-      try {
-        await page.goto(mapsUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-        await randomDelay(2000, 3000);
-      } catch {
-        return leads;
-      }
-    }
+  const nav = await navigateForScrape(page, mapsUrl, log, 20000);
+  if (!nav.ok) {
+    Object.assign(meta, buildBlockedMeta(nav.blocked, nav.diagnostic, nav.message));
+    log(`[Maps] ✗ Blocked (${nav.blocked}) for "${query}"`);
+    return { leads, meta };
   }
 
-  // Wait for results feed
+  let feedTimedOut = false;
   await page
     .waitForSelector('div[role="feed"], div[role="main"]', { timeout: 15000 })
-    .catch(() => {});
+    .catch(() => {
+      feedTimedOut = true;
+    });
   await randomDelay(1500, 2500);
 
   // Phase 1: Collect business names from list view (fast, no detail clicks)
@@ -450,7 +519,15 @@ export async function scrapeGoogleMaps(
     }
   }
 
-  return leads;
+  if (leads.length === 0 && !meta.blocked) {
+    if (feedTimedOut && allListItems.length === 0) {
+      meta.empty_reason = "timeout";
+    } else {
+      meta.empty_reason = "no_results";
+    }
+  }
+
+  return { leads, meta };
 }
 
 function makeLeadFromList(item: ListItem): MapsLead {

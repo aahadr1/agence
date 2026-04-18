@@ -4,6 +4,7 @@ import {
   safeGoto,
   normalizeUrl,
   randomDelay,
+  isCaptchaPage,
 } from "../browser";
 
 export interface GoogleSearchResult {
@@ -23,6 +24,10 @@ function city(location: string): string {
 
 function googleUrl(query: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=fr&num=10`;
+}
+
+function ddgSearchUrl(query: string): string {
+  return `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 }
 
 /**
@@ -61,12 +66,24 @@ export async function searchGoogle(
   for (const query of queries) {
     try {
       log(`[Google] "${query}"`);
-      const ok = await safeGoto(page, googleUrl(query), log);
+      let ok = await safeGoto(page, googleUrl(query), log);
+      let engine: "google" | "duckduckgo" = "google";
+      if (!ok || (await isCaptchaPage(page))) {
+        if (ok) log(`[Google] CAPTCHA on Google — falling back to DuckDuckGo`);
+        else log(`[Google] Google SERP failed — trying DuckDuckGo`);
+        ok = await safeGoto(page, ddgSearchUrl(query), log);
+        if (ok) engine = "duckduckgo";
+      }
       if (!ok) continue;
+
+      const serpLabel =
+        engine === "duckduckgo"
+          ? "DuckDuckGo HTML search results (French locale when available)"
+          : "Google Search results";
 
       const result = await screenshotAndAsk<GoogleSearchResult>(
         page,
-        `You are looking at Google Search results for the business "${businessName}" in ${location}.
+        `You are looking at ${serpLabel} for the business "${businessName}" in ${location}.
 
 Extract:
 {

@@ -14,7 +14,11 @@ export async function createCalendarEvent(
   },
 ) {
   const auth = await getGoogleAuthForUser(userId);
-  if (!auth) throw new Error("Google account not connected");
+  if (!auth) {
+    throw new Error(
+      "Google Calendar requires a connected Google account. Connect Google in the app settings, then retry.",
+    );
+  }
   const cal = google.calendar({ version: "v3", auth: auth.oauth });
   const res = await cal.events.insert({
     calendarId: "primary",
@@ -46,7 +50,11 @@ export async function listUpcomingEvents(
   opts: { max?: number; timeMinIso?: string } = {},
 ) {
   const auth = await getGoogleAuthForUser(userId);
-  if (!auth) throw new Error("Google account not connected");
+  if (!auth) {
+    throw new Error(
+      "Google Calendar requires a connected Google account. Connect Google in the app settings, then retry.",
+    );
+  }
   const cal = google.calendar({ version: "v3", auth: auth.oauth });
   const res = await cal.events.list({
     calendarId: "primary",

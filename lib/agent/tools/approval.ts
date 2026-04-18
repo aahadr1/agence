@@ -80,7 +80,7 @@ registerTool(
   {
     name: "ask_user",
     description:
-      "Ask the user a clarifying question. Use sparingly (max 1-3 per session). Unlike request_approval, this doesn't pause the agent — the answer arrives as a user message.",
+      "Ask the user a clarifying question. Use sparingly (max 1-3 per session). Unlike request_approval, this doesn't pause the agent — the answer arrives as a user message. **When the user has already replied** in the chat (even a short word), read that reply as the answer — do not ask again for the same detail and do not assume a default (e.g. a random city) if they already named one.",
     parameters: {
       question: { type: "string", description: "The question to ask" },
       options: {

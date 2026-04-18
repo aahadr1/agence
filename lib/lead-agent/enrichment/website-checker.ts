@@ -1,5 +1,11 @@
 import type { Page } from "playwright-core";
-import { screenshotToBase64, askGemini, normalizeUrl } from "../browser";
+import {
+  screenshotToBase64,
+  askGemini,
+  normalizeUrl,
+  navigateForScrape,
+  type PageAccessDiagnostics,
+} from "../browser";
 import type { WebsiteQuality } from "@/lib/types";
 
 interface WebsiteCheckResult {
@@ -10,6 +16,10 @@ interface WebsiteCheckResult {
   is_modern: boolean;
   is_just_social: boolean;
   notes: string;
+  credential_required?: boolean;
+  page_access?: PageAccessDiagnostics;
+  suggested_user_action_fr?: string | null;
+  credential_hostname?: string | null;
 }
 
 /**
@@ -49,11 +59,25 @@ export async function checkWebsite(
       };
     }
 
-    // Try to visit the website
-    const response = await page.goto(websiteUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 12000,
-    });
+    const nav = await navigateForScrape(page, websiteUrl, log, 12000);
+    if (!nav.ok) {
+      const diag = nav.diagnostic;
+      return {
+        quality: "dead",
+        score: 0,
+        is_dead: true,
+        is_mobile_friendly: false,
+        is_modern: false,
+        is_just_social: false,
+        notes: nav.message || `Blocked: ${nav.blocked}`,
+        credential_required: nav.blocked === "auth_wall",
+        page_access: diag,
+        suggested_user_action_fr: diag?.suggested_action_fr ?? null,
+        credential_hostname: diag?.credential_hostname,
+      };
+    }
+
+    const response = nav.response;
 
     if (!response || response.status() >= 400) {
       return {

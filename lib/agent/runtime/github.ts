@@ -20,7 +20,7 @@ export function getOctokit(): Octokit {
   const token = getGitHubToken();
   if (!token) {
     throw new Error(
-      "GITHUB_TOKEN is not set. Set it in the Vercel env to enable self-coding.",
+      "GITHUB_TOKEN is not set. Add a classic fine-grained PAT with repo scope in the deployment environment (Vercel) so self-coding tools can call the GitHub API.",
     );
   }
   _client = new Octokit({ auth: token, userAgent: "agence-self-coding/1.0" });

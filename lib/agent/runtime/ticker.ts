@@ -327,10 +327,17 @@ async function runOneTickLocked(
     ];
     const tools: ToolDefinition[] = getToolDefinitions(toolNames);
 
-    // Resume: load prior history from DB so the LLM sees everything so far
-    const priorHistory = await loadHistory(sessionId);
-    const userMessage =
-      stepNum === 1 ? await fetchInitialPrompt(sessionId) : undefined;
+    // Resume: load prior history from DB so the LLM sees everything so far.
+    // Do NOT pass fetchInitialPrompt again on tick 1 — it duplicates the first
+    // user row already returned by loadHistory() and can push later user
+    // replies ("nancy") away from the model's working focus.
+    const priorHistoryLoaded = await loadHistory(sessionId);
+    const followUpReinforcement =
+      await buildUserFollowUpReinforcement(sessionId);
+    const priorHistory = followUpReinforcement
+      ? [...priorHistoryLoaded, followUpReinforcement]
+      : priorHistoryLoaded;
+    const userMessage = undefined;
 
     const context: AgentContext = {
       missionId: session.mission_id ?? sessionId,
@@ -725,6 +732,64 @@ async function runOneTickLocked(
 // -----------------------------------------------------------------------------
 // History loader (reconstructs AgentMessage[] from agent_messages rows)
 // -----------------------------------------------------------------------------
+
+/**
+ * Short user replies after the last assistant message (or after the initial
+ * brief when no assistant exists yet) are easy to ignore once the model has
+ * committed to a default city. Re-append them as one high-salience user turn
+ * at the **end** of the reconstructed history every tick (DB order is truth).
+ */
+async function buildUserFollowUpReinforcement(
+  sessionId: string,
+): Promise<AgentMessage | null> {
+  const db = getAgentDb();
+
+  const { data: lastAsst } = await db
+    .from("agent_messages")
+    .select("created_at")
+    .eq("session_id", sessionId)
+    .eq("role", "assistant")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: firstUser } = await db
+    .from("agent_messages")
+    .select("created_at")
+    .eq("session_id", sessionId)
+    .eq("role", "user")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!firstUser?.created_at) return null;
+
+  const lastAsstMs = lastAsst?.created_at
+    ? new Date(lastAsst.created_at).getTime()
+    : null;
+  const firstUserMs = new Date(firstUser.created_at).getTime();
+
+  const cutoffTs =
+    lastAsstMs != null && lastAsstMs >= firstUserMs
+      ? lastAsst!.created_at
+      : firstUser.created_at;
+
+  const { data: followUps } = await db
+    .from("agent_messages")
+    .select("content")
+    .eq("session_id", sessionId)
+    .eq("role", "user")
+    .gt("created_at", cutoffTs)
+    .order("created_at", { ascending: true });
+
+  if (!followUps?.length) return null;
+
+  const text =
+    "[Instructions utilisateur après le message initial / après ta dernière réponse — **priorité absolue** (ville, région, périmètre, contraintes, corrections courtes). Cela **remplace** toute hypothèse implicite, y compris une zone par défaut pour « débloquer ».]\n\n" +
+    followUps.map((r, i) => `${i + 1}. ${r.content}`).join("\n");
+
+  return { role: "user", parts: [{ type: "text", text }] };
+}
 
 async function loadHistory(sessionId: string): Promise<AgentMessage[]> {
   const db = getAgentDb();

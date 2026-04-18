@@ -3,6 +3,8 @@ import {
   screenshotAndAsk,
   normalizeUrl,
   randomDelay,
+  navigateForScrape,
+  type PageAccessDiagnostics,
 } from "../browser";
 import type { WebsiteQuality } from "@/lib/types";
 
@@ -19,6 +21,10 @@ export interface DeepWebsiteCheckResult {
   has_contact_form: boolean;
   tech_notes: string;
   pain_summary: string;
+  credential_required?: boolean;
+  page_access?: PageAccessDiagnostics;
+  suggested_user_action_fr?: string | null;
+  credential_hostname?: string | null;
 }
 
 const SOCIAL_DOMAINS = [
@@ -63,10 +69,35 @@ export async function deepCheckWebsite(
 
     const has_https = websiteUrl.startsWith("https://");
 
-    const response = await page.goto(websiteUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 15000,
-    });
+    const nav = await navigateForScrape(page, websiteUrl, log, 15000);
+    if (!nav.ok) {
+      const diag = nav.diagnostic;
+      return {
+        quality: "dead",
+        score: 0,
+        is_dead: true,
+        is_mobile_friendly: false,
+        is_modern: false,
+        is_just_social: false,
+        has_https,
+        has_booking: false,
+        has_chatbot: false,
+        has_contact_form: false,
+        tech_notes: nav.message || nav.blocked,
+        pain_summary:
+          nav.blocked === "captcha"
+            ? "Page behind captcha — cannot audit"
+            : nav.blocked === "auth_wall"
+              ? "Page requires login — cannot audit"
+              : "Navigation failed — cannot audit",
+        credential_required: nav.blocked === "auth_wall",
+        page_access: diag,
+        suggested_user_action_fr: diag?.suggested_action_fr ?? null,
+        credential_hostname: diag?.credential_hostname,
+      };
+    }
+
+    const response = nav.response;
 
     if (!response || response.status() >= 400) {
       return {

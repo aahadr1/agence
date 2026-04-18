@@ -49,6 +49,10 @@ registerTool(
           has_chatbot: deep?.has_chatbot,
           is_just_social: deep?.is_just_social,
           pageSpeedScore: pageSpeed,
+          credential_required: deep?.credential_required,
+          page_access: deep?.page_access,
+          suggested_user_action_fr: deep?.suggested_user_action_fr,
+          credential_hostname: deep?.credential_hostname,
         };
       },
       { orgId: context.orgId, attempts: 8 },

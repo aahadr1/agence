@@ -3,6 +3,7 @@ import {
   type Browser,
   type BrowserContext,
   type Page,
+  type Response,
 } from "playwright-core";
 import chromiumBinary from "@sparticuz/chromium";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -334,6 +335,112 @@ export async function safeGoto(
     }
     log?.(`Navigation failed: ${msg.slice(0, 80)}`);
     return false;
+  }
+}
+
+/** Block reason from `navigateForScrape` when navigation did not yield a readable page. */
+export type NavigateForScrapeBlocked =
+  | "captcha"
+  | "auth_wall"
+  | "navigation_failed";
+
+export type NavigateForScrapeResult =
+  | { ok: true; response: Response | null }
+  | {
+      ok: false;
+      blocked: NavigateForScrapeBlocked;
+      diagnostic?: PageAccessDiagnostics;
+      message?: string;
+    };
+
+/**
+ * Single entry for scrape flows: goto, consent, Google consent interstitial,
+ * then captcha / login-wall detection so callers can return structured errors
+ * instead of empty DOM.
+ */
+export async function navigateForScrape(
+  page: Page,
+  url: string,
+  log?: (msg: string) => void,
+  timeoutMs = 20000,
+): Promise<NavigateForScrapeResult> {
+  const runGoto = async (target: string): Promise<Response | null> => {
+    const response = await page.goto(target, {
+      waitUntil: "domcontentloaded",
+      timeout: timeoutMs,
+    });
+    await randomDelay(1500, 2500);
+    await dismissConsent(page);
+    return response;
+  };
+
+  try {
+    let response = await runGoto(url);
+
+    if (page.url().includes("consent.google.com")) {
+      log?.("[nav] consent.google.com — accepting cookies and reloading target");
+      const acceptBtn = page
+        .locator(
+          'button:has-text("Tout accepter"), button:has-text("Accept all")',
+        )
+        .first();
+      try {
+        if (await acceptBtn.isVisible({ timeout: 2500 })) {
+          await acceptBtn.click();
+          await randomDelay(2000, 3000);
+        }
+      } catch {
+        /* */
+      }
+      await dismissConsent(page);
+      try {
+        response = await runGoto(url);
+      } catch (e2) {
+        const msg2 = e2 instanceof Error ? e2.message : String(e2);
+        if (
+          msg2.includes("closed") ||
+          msg2.includes("Target closed") ||
+          msg2.includes("Protocol error")
+        ) {
+          throw e2;
+        }
+        log?.(`[nav] reload after consent failed: ${msg2.slice(0, 80)}`);
+        return {
+          ok: false,
+          blocked: "navigation_failed",
+          message: msg2.slice(0, 120),
+        };
+      }
+    }
+
+    if (await isCaptchaPage(page)) {
+      const diagnostic = await diagnosePageAccess(page);
+      log?.("⚠ CAPTCHA detected");
+      return { ok: false, blocked: "captcha", diagnostic };
+    }
+
+    const diagnostic = await diagnosePageAccess(page);
+    if (diagnostic.login_wall) {
+      log?.("⚠ Login wall detected");
+      return { ok: false, blocked: "auth_wall", diagnostic };
+    }
+
+    return { ok: true, response };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (
+      msg.includes("closed") ||
+      msg.includes("Target closed") ||
+      msg.includes("Protocol error")
+    ) {
+      throw e;
+    }
+    log?.(`Navigation failed: ${msg.slice(0, 80)}`);
+    return {
+      ok: false,
+      blocked: "navigation_failed",
+      message: msg.slice(0, 120),
+    };
   }
 }
 

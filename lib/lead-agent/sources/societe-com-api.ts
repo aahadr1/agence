@@ -13,6 +13,58 @@ import type { SocieteComResult } from "./societe-com";
 
 const BASE = "https://api.societe.com/api/v1";
 
+export type SocieteApiErrorCode =
+  | "missing_api_key"
+  | "unauthorized"
+  | "rate_limited"
+  | "http_error";
+
+export interface SocieteApiError {
+  societe_com_api_error: true;
+  error: string;
+  code: SocieteApiErrorCode;
+  http_status?: number;
+}
+
+export function isSocieteComApiError(x: unknown): x is SocieteApiError {
+  return (
+    typeof x === "object" &&
+    x !== null &&
+    (x as SocieteApiError).societe_com_api_error === true
+  );
+}
+
+function societeApiErr(
+  error: string,
+  code: SocieteApiErrorCode,
+  httpStatus?: number,
+): SocieteApiError {
+  return {
+    societe_com_api_error: true,
+    error,
+    code,
+    http_status: httpStatus,
+  };
+}
+
+function societeHttpError(status: number): SocieteApiError | null {
+  if (status === 401 || status === 403) {
+    return societeApiErr(
+      `Societe.com API rejected the request (HTTP ${status}). Check SOCIETE_COM_API_KEY (or SOCIETE_API_KEY) and IP allowlist.`,
+      "unauthorized",
+      status,
+    );
+  }
+  if (status === 429) {
+    return societeApiErr(
+      "Societe.com API rate limit (HTTP 429). Retry later.",
+      "rate_limited",
+      status,
+    );
+  }
+  return null;
+}
+
 function getToken(): string | null {
   const t =
     process.env.SOCIETE_COM_API_KEY?.trim() ||
@@ -134,7 +186,7 @@ async function apiGet<T>(
   path: string,
   token: string,
   log: (msg: string) => void
-): Promise<T | null> {
+): Promise<T | SocieteApiError | null> {
   const url = `${BASE}${path}`;
   try {
     const res = await fetch(url, {
@@ -147,6 +199,8 @@ async function apiGet<T>(
     });
 
     if (!res.ok) {
+      const pe = societeHttpError(res.status);
+      if (pe) return pe;
       const text = await res.text().catch(() => "");
       log(`[Societe API] HTTP ${res.status} ${text.slice(0, 120)}`);
       return null;
@@ -238,11 +292,14 @@ export async function searchSocieteComApi(
   businessName: string,
   location: string,
   log: (msg: string) => void
-): Promise<SocieteComResult | null> {
+): Promise<SocieteComResult | SocieteApiError | null> {
   const token = getToken();
   if (!token) {
-    log("[Societe API] SOCIETE_COM_API_KEY not set — skipping API");
-    return null;
+    log("[Societe API] SOCIETE_COM_API_KEY / SOCIETE_API_KEY not set");
+    return societeApiErr(
+      "SOCIETE_COM_API_KEY (or SOCIETE_API_KEY) is not set. Add it in .env.local (Societe.com API PRO).",
+      "missing_api_key",
+    );
   }
 
   const city = cityFromLocation(location);
@@ -277,6 +334,7 @@ export async function searchSocieteComApi(
       token,
       log
     );
+    if (isSocieteComApiError(searchRes)) return searchRes;
     const results = searchRes?.data?.results || [];
     if (results.length === 0) {
       log(`[Societe API] No results for "${q}"`);
@@ -312,6 +370,9 @@ export async function searchSocieteComApi(
       log
     ),
   ]);
+
+  if (isSocieteComApiError(dirRes)) return dirRes;
+  if (isSocieteComApiError(legalRes)) return legalRes;
 
   const dirs = dirRes?.data?.dirigeants || [];
   const il = legalRes?.infolegales;

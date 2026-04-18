@@ -246,7 +246,17 @@ registerTool(
     costEstimateCents: 3,
   },
   async (args) => {
-    const token = getToken();
+    let token: string;
+    try {
+      token = getToken();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return {
+        error: "replicate_configuration",
+        message,
+        image_urls: [] as string[],
+      };
+    }
     const variant = normalizeVariant(args.variant);
     const { owner, name } = MODEL_BY_VARIANT[variant];
     const input = buildInput(args as Record<string, unknown>);

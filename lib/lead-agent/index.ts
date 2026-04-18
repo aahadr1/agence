@@ -9,9 +9,12 @@ import {
 } from "./browser";
 import { expandQueries } from "./query-expander";
 import { DEFAULT_EXPAND_TARGET } from "./search-context";
-import { scrapeGoogleMaps } from "./sources/google-maps";
+import { scrapeGoogleMaps, type MapsLead } from "./sources/google-maps";
 import { searchGoogle } from "./sources/google-search";
-import { searchPagesJaunes } from "./sources/pages-jaunes";
+import {
+  searchPagesJaunes,
+  hasPagesJaunesData,
+} from "./sources/pages-jaunes";
 import { searchFacebook } from "./sources/facebook";
 import { searchLinkedIn } from "./sources/linkedin";
 import {
@@ -19,7 +22,10 @@ import {
   fetchPageSpeedScore,
 } from "./enrichment/deep-website-check";
 import { checkFbAdLibrary } from "./sources/fb-ad-library";
-import { searchPappersApi } from "./sources/pappers-api";
+import {
+  searchPappersApi,
+  isPappersApiError,
+} from "./sources/pappers-api";
 import { quickHttpCheck } from "./enrichment/quick-http-check";
 import { computeLeadScore, generateSalesBrief } from "./enrichment/lead-scorer";
 import { scrapContactPage } from "./enrichment/contact-page-scraper";
@@ -29,7 +35,11 @@ import { researchDirigeant } from "./enrichment/dirigeant-researcher";
 import { analyzeProspect } from "./enrichment/prospect-analyzer";
 import { searchOwnerPhone } from "./enrichment/owner-search";
 import { searchSocieteCom } from "./sources/societe-com";
-import { searchSocieteComApi, hasSocieteComApiKey } from "./sources/societe-com-api";
+import {
+  searchSocieteComApi,
+  hasSocieteComApiKey,
+  isSocieteComApiError,
+} from "./sources/societe-com-api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -222,9 +232,9 @@ export async function runDiscovery(
           session = await launchBrowser();
         }
 
-        let mapsLeads;
+        let mapsLeads: MapsLead[];
         try {
-          mapsLeads = await scrapeGoogleMaps(
+          const mapsOut = await scrapeGoogleMaps(
             session.page,
             query,
             seenNames,
@@ -233,6 +243,15 @@ export async function runDiscovery(
             Math.max(20, targetMinLeads - allLeads.length + 8),
             deadline
           );
+          mapsLeads = mapsOut.leads;
+          if (mapsOut.meta.blocked) {
+            log(
+              `[Maps] blocked (${mapsOut.meta.blocked}): ${mapsOut.meta.navigation_message || mapsOut.meta.suggested_user_action_fr || ""}`.slice(
+                0,
+                120
+              )
+            );
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           log(`[Maps] ✗ ${msg.slice(0, 80)}`);
@@ -510,7 +529,9 @@ export async function runSixStepEnrichment(
     ]);
 
     // Merge: Pappers first, Societe.com API fills gaps (esp. dirigeant PP when Pappers has none)
-    if (pappers) {
+    if (isPappersApiError(pappers)) {
+      log(`[Pappers] ${pappers.error}`);
+    } else if (pappers) {
       lead.owner_name = lead.owner_name || pappers.owner_name;
       lead.owner_role = lead.owner_role || pappers.owner_role;
       lead.siren = lead.siren || pappers.siren;
@@ -519,7 +540,9 @@ export async function runSixStepEnrichment(
       lead.employee_count = lead.employee_count || pappers.employee_count;
       lead.address = lead.address || pappers.address;
     }
-    if (societeApi) {
+    if (isSocieteComApiError(societeApi)) {
+      log(`[Societe API] ${societeApi.error}`);
+    } else if (societeApi) {
       lead.owner_name = lead.owner_name || societeApi.owner_name;
       lead.owner_role = lead.owner_role || societeApi.owner_role;
       lead.siren = lead.siren || societeApi.siren;
@@ -541,8 +564,10 @@ export async function runSixStepEnrichment(
       }
     }
 
+    const societeOk =
+      societeApi && !isSocieteComApiError(societeApi) ? societeApi : null;
     const needSocieteBrowser =
-      !hasSocieteComApiKey() || !societeApi?.owner_name?.trim();
+      !hasSocieteComApiKey() || !societeOk?.owner_name?.trim();
 
     if (needSocieteBrowser) {
       const societeBrowser = await runStep("legal_data", STEP_TIMEOUT_LONG, (page) =>
@@ -628,7 +653,7 @@ export async function runSixStepEnrichment(
         lead.website_url = google.website_url;
       }
     }
-    if (pj) {
+    if (pj != null && hasPagesJaunesData(pj)) {
       lead.phone = lead.phone || pj.phone;
       lead.email = lead.email || pj.email;
       lead.address = lead.address || pj.address;
@@ -741,7 +766,14 @@ export async function runEnrichmentPhaseA(
   ]);
 
   // Merge Pappers data — primary source for legal/owner info
-  if (pappers) {
+  if (isPappersApiError(pappers)) {
+    log(`[Phase A] Pappers: ${pappers.error}`);
+    record(lead, "pappers_api", {
+      error: pappers.error,
+      code: pappers.code,
+      http_status: pappers.http_status,
+    });
+  } else if (pappers) {
     record(lead, "pappers_api", pappers);
     lead.owner_name = lead.owner_name || pappers.owner_name;
     lead.owner_role = lead.owner_role || pappers.owner_role;
@@ -762,7 +794,14 @@ export async function runEnrichmentPhaseA(
   }
 
   // Societe.com API — fills dirigeant when Pappers search has no PP data
-  if (societeApi) {
+  if (isSocieteComApiError(societeApi)) {
+    log(`[Phase A] Societe API: ${societeApi.error}`);
+    record(lead, "societe_api", {
+      error: societeApi.error,
+      code: societeApi.code,
+      http_status: societeApi.http_status,
+    });
+  } else if (societeApi) {
     record(lead, "societe_api", societeApi);
     lead.owner_name = lead.owner_name || societeApi.owner_name;
     lead.owner_role = lead.owner_role || societeApi.owner_role;
@@ -934,7 +973,20 @@ export async function runEnrichmentPhaseB(
     ]);
 
     record(lead, "google", google);
-    record(lead, "pages_jaunes", pj);
+    record(
+      lead,
+      "pages_jaunes",
+      pj != null && hasPagesJaunesData(pj)
+        ? {
+            phone: pj.phone,
+            email: pj.email,
+            address: pj.address,
+            website_url: pj.website_url,
+            owner_name: pj.owner_name,
+            category: pj.category,
+          }
+        : null,
+    );
 
     if (google) {
       if (google.has_real_website && google.website_url) {
@@ -950,7 +1002,7 @@ export async function runEnrichmentPhaseB(
       ctx.instagram_url = ctx.instagram_url || google.instagram_url;
       ctx.description = ctx.description || google.extra_description;
     }
-    if (pj) {
+    if (pj != null && hasPagesJaunesData(pj)) {
       ctx.phone = ctx.phone || pj.phone;
       ctx.email = ctx.email || pj.email;
       ctx.address = ctx.address || pj.address;

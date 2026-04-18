@@ -6,6 +6,8 @@ import {
   normalizeUrl,
   randomDelay,
   dismissConsent,
+  diagnosePageAccess,
+  type PageAccessDiagnostics,
 } from "../browser";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,10 @@ export interface DirigeantResult {
   linkedin_summary: string | null;
   linkedin_headline: string | null;
   related_contacts: RelatedContact[];
+  credential_required?: boolean;
+  page_access?: PageAccessDiagnostics;
+  suggested_user_action_fr?: string | null;
+  credential_hostname?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,20 +331,30 @@ Only return a name if you are confident it is the person running "${businessName
 // Sub-tasks: Google / Facebook / LinkedIn — run in parallel
 // ---------------------------------------------------------------------------
 
+type GoogleOwnerSerpRow = {
+  phone: string | null;
+  email: string | null;
+  role: string | null;
+  page_access: PageAccessDiagnostics | null;
+};
+
 async function googleOwnerSearch(
   page: Page,
   ownerName: string,
   businessName: string,
   location: string,
   log: (msg: string) => void
-): Promise<{ phone: string | null; email: string | null; role: string | null }> {
+): Promise<GoogleOwnerSerpRow> {
   const c = city(location);
   const query = `"${ownerName}" "${businessName}" ${c} contact email téléphone`;
   log(`[Dirigeant/Google] "${query}"`);
 
   try {
     const ok = await safeGoto(page, googleUrl(query), log);
-    if (!ok) return { phone: null, email: null, role: null };
+    const diag = await diagnosePageAccess(page).catch(() => null);
+    if (!ok || (diag && (diag.captcha || diag.login_wall))) {
+      return { phone: null, email: null, role: null, page_access: diag };
+    }
 
     await dismissConsent(page);
     await randomDelay(800, 1500);
@@ -356,12 +372,12 @@ async function googleOwnerSearch(
       log(`[Dirigeant/Google] Found: phone=${phone || "—"} email=${email || "—"}`);
     }
 
-    return { phone, email, role: null };
+    return { phone, email, role: null, page_access: null };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("closed") || msg.includes("Protocol error")) throw e;
     log(`[Dirigeant/Google] ✗ ${msg.slice(0, 60)}`);
-    return { phone: null, email: null, role: null };
+    return { phone: null, email: null, role: null, page_access: null };
   }
 }
 
@@ -536,6 +552,13 @@ export async function researchDirigeant(
 
   // Google search — DOM extraction from SERP snippets
   const googleResult = await googleOwnerSearch(page, ownerName, businessName, location, log);
+  if (googleResult.page_access?.captcha || googleResult.page_access?.login_wall) {
+    const d = googleResult.page_access;
+    result.credential_required = d.login_wall;
+    result.page_access = d;
+    result.suggested_user_action_fr = d.suggested_action_fr;
+    result.credential_hostname = d.credential_hostname;
+  }
 
   // Facebook — find profile + extract contact
   const fbResult = await facebookOwnerSearch(page, ownerName, businessName, location, log);

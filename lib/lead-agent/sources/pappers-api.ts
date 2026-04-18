@@ -26,6 +26,53 @@ export interface PappersResult {
   all_dirigeants: PappersDirigeantInfo[];
 }
 
+export type PappersApiErrorCode =
+  | "missing_api_key"
+  | "unauthorized"
+  | "rate_limited"
+  | "http_error";
+
+export interface PappersApiError {
+  pappers_error: true;
+  error: string;
+  code: PappersApiErrorCode;
+  http_status?: number;
+}
+
+export function isPappersApiError(x: unknown): x is PappersApiError {
+  return (
+    typeof x === "object" &&
+    x !== null &&
+    (x as PappersApiError).pappers_error === true
+  );
+}
+
+function pappersApiErr(
+  error: string,
+  code: PappersApiErrorCode,
+  httpStatus?: number,
+): PappersApiError {
+  return { pappers_error: true, error, code, http_status: httpStatus };
+}
+
+function pappersHttpError(status: number): PappersApiError | null {
+  if (status === 401 || status === 403) {
+    return pappersApiErr(
+      `Pappers API rejected the request (HTTP ${status}). Check PAPPERS_API_KEY.`,
+      "unauthorized",
+      status,
+    );
+  }
+  if (status === 429) {
+    return pappersApiErr(
+      "Pappers API rate limit (HTTP 429). Retry later.",
+      "rate_limited",
+      status,
+    );
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Internal API types
 // ---------------------------------------------------------------------------
@@ -238,7 +285,7 @@ async function fetchEntrepriseBySiren(
   siren: string,
   apiKey: string,
   log: (msg: string) => void
-): Promise<PappersEntreprise | null> {
+): Promise<PappersEntreprise | PappersApiError | null> {
   const clean = siren.replace(/\s/g, "");
   if (!/^\d{9}$/.test(clean)) {
     log(`[Pappers API] Invalid SIREN "${siren}" (need 9 digits)`);
@@ -255,6 +302,8 @@ async function fetchEntrepriseBySiren(
       headers: { Accept: "application/json" },
     });
     if (!res.ok) {
+      const pe = pappersHttpError(res.status);
+      if (pe) return pe;
       log(`[Pappers API] entreprise/${clean} HTTP ${res.status}`);
       return null;
     }
@@ -328,11 +377,14 @@ export async function searchPappersApi(
   location: string,
   log: (msg: string) => void,
   options?: PappersSearchOptions | null,
-): Promise<PappersResult | null> {
+): Promise<PappersResult | PappersApiError | null> {
   const apiKey = process.env.PAPPERS_API_KEY;
   if (!apiKey) {
-    log("[Pappers] PAPPERS_API_KEY not set — skipping");
-    return null;
+    log("[Pappers] PAPPERS_API_KEY not set");
+    return pappersApiErr(
+      "PAPPERS_API_KEY is not set. Add it in .env.local (register at pappers.fr → API).",
+      "missing_api_key",
+    );
   }
 
   const addressHint = options?.address_hint?.trim() || null;
@@ -341,6 +393,9 @@ export async function searchPappersApi(
   // ── Direct SIREN path (authoritative) ──────────────────────────────
   if (sirenOpt) {
     const e = await fetchEntrepriseBySiren(sirenOpt, apiKey, log);
+    if (isPappersApiError(e)) {
+      return e;
+    }
     if (!e) {
       log(`[Pappers API] No company for SIREN ${sirenOpt}`);
     } else {
@@ -381,6 +436,8 @@ export async function searchPappersApi(
       });
 
       if (!res.ok) {
+        const pe = pappersHttpError(res.status);
+        if (pe) return pe;
         log(`[Pappers API] ✗ HTTP ${res.status}`);
         continue;
       }

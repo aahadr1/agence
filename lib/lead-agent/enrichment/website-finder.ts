@@ -4,6 +4,8 @@ import {
   normalizeUrl,
   randomDelay,
   dismissConsent,
+  diagnosePageAccess,
+  type PageAccessDiagnostics,
 } from "../browser";
 import {
   type WebsiteType,
@@ -47,6 +49,11 @@ export interface WebsiteFinderResult {
   platform_label: string | null;
   found_via: "gmb" | "google_search" | "click_through" | null;
   confidence: "high" | "medium" | "low";
+  /** Same semantics as `web_fetch` when Google SERP is unreadable. */
+  credential_required?: boolean;
+  page_access?: PageAccessDiagnostics;
+  suggested_user_action_fr?: string | null;
+  credential_hostname?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -440,6 +447,30 @@ export async function findWebsite(
       if (!ok) {
         log(`[WebFinder] ⚠️ Could not load SERP for "${query}"`);
         continue;
+      }
+
+      const serpDiag = await diagnosePageAccess(page);
+      if (serpDiag.captcha || serpDiag.login_wall) {
+        log(
+          `[WebFinder] SERP blocked (${serpDiag.captcha ? "captcha" : "login"}) — stop`,
+        );
+        return {
+          has_website: false,
+          website_url: null,
+          website_type: null,
+          platform_url:
+            (bestPlatform as { url: string; label: string } | null)?.url ??
+            null,
+          platform_label:
+            (bestPlatform as { url: string; label: string } | null)?.label ??
+            null,
+          found_via: null,
+          confidence: "low",
+          credential_required: serpDiag.login_wall,
+          page_access: serpDiag,
+          suggested_user_action_fr: serpDiag.suggested_action_fr,
+          credential_hostname: serpDiag.credential_hostname,
+        };
       }
 
       await dismissConsent(page);

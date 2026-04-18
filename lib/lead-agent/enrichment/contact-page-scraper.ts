@@ -1,9 +1,19 @@
 import type { Page } from "playwright-core";
-import { screenshotAndAsk, safeGoto, randomDelay } from "../browser";
+import {
+  screenshotAndAsk,
+  safeGoto,
+  randomDelay,
+  diagnosePageAccess,
+  type PageAccessDiagnostics,
+} from "../browser";
 
 export interface ContactPageResult {
   email: string | null;
   phone: string | null;
+  credential_required?: boolean;
+  page_access?: PageAccessDiagnostics;
+  suggested_user_action_fr?: string | null;
+  credential_hostname?: string | null;
 }
 
 /**
@@ -58,6 +68,7 @@ export async function scrapContactPage(
 
   let email: string | null = null;
   let phone: string | null = null;
+  let accessBlock: PageAccessDiagnostics | null = null;
 
   for (const path of CONTACT_PATHS) {
     if (email && phone) break; // already have everything
@@ -66,7 +77,17 @@ export async function scrapContactPage(
     try {
       log(`[ContactPage] Trying ${url}`);
       const ok = await safeGoto(page, url, log, 10000);
-      if (!ok) continue;
+      if (!ok) {
+        const d = await diagnosePageAccess(page).catch(() => null);
+        if (d?.captcha || d?.login_wall) accessBlock = d;
+        continue;
+      }
+
+      const afterLoad = await diagnosePageAccess(page);
+      if (afterLoad.captcha || afterLoad.login_wall) {
+        accessBlock = afterLoad;
+        continue;
+      }
 
       // ── DOM extraction (fast, reliable) ──
       const domResult = await page.evaluate(() => {
@@ -149,5 +170,15 @@ Only return data that is clearly visible. Return JSON only.`
   }
 
   log(`[ContactPage] No contact info found across ${CONTACT_PATHS.length} paths`);
+  if (accessBlock?.captcha || accessBlock?.login_wall) {
+    return {
+      email: null,
+      phone: null,
+      credential_required: accessBlock.login_wall,
+      page_access: accessBlock,
+      suggested_user_action_fr: accessBlock.suggested_action_fr,
+      credential_hostname: accessBlock.credential_hostname,
+    };
+  }
   return null;
 }

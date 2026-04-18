@@ -34,7 +34,7 @@ registerTool(
     const deadline = Date.now() + 120_000;
     return withBrowserSession(
       async (session) => {
-        const results = await scrapeGoogleMaps(
+        const { leads, meta } = await scrapeGoogleMaps(
           session.page,
           args.query as string,
           seenNames,
@@ -43,7 +43,17 @@ registerTool(
           maxResults,
           deadline,
         );
-        return { count: results.length, leads: results };
+        return {
+          count: leads.length,
+          leads,
+          blocked: Boolean(meta.blocked),
+          error_code: meta.blocked ?? null,
+          credential_required: meta.credential_required ?? false,
+          empty_reason: meta.empty_reason ?? null,
+          suggested_user_action_fr: meta.suggested_user_action_fr ?? null,
+          credential_hostname: meta.credential_hostname ?? null,
+          navigation_message: meta.navigation_message ?? null,
+        };
       },
       { orgId: context.orgId, attempts: 8 },
     );
