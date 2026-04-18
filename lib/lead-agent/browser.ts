@@ -6,6 +6,7 @@ import {
 } from "playwright-core";
 import chromiumBinary from "@sparticuz/chromium";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { loadPlaywrightCookiesForOrg } from "@/lib/agent/org-browser-credentials";
 
 const IS_SERVERLESS =
   !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
@@ -156,6 +157,96 @@ export function randomDelay(min: number, max: number): Promise<void> {
 // CAPTCHA & consent helpers (exported for source files)
 // ---------------------------------------------------------------------------
 
+export interface PageAccessDiagnostics {
+  captcha: boolean;
+  login_wall: boolean;
+  hostname: string;
+  /** Host key to use when saving cookies (no leading www). */
+  credential_hostname: string;
+  suggested_action_fr: string | null;
+}
+
+/**
+ * After navigation, detect captcha interstitials or obvious login walls so the
+ * agent can pause and ask the user to add org-scoped session cookies.
+ */
+export async function diagnosePageAccess(
+  page: Page,
+): Promise<PageAccessDiagnostics> {
+  let hostname = "";
+  try {
+    hostname = new URL(page.url()).hostname;
+  } catch {
+    hostname = "";
+  }
+  const credentialHostname = hostname.replace(/^www\./, "") || hostname;
+
+  if (await isCaptchaPage(page)) {
+    return {
+      captcha: true,
+      login_wall: false,
+      hostname,
+      credential_hostname: credentialHostname,
+      suggested_action_fr:
+        "Interstitiel captcha / trafic inhabituel. Réessayez plus tard, changez de réseau, ou ouvrez le site dans votre navigateur, exportez les cookies pour ce domaine et ajoutez-les dans Identifiants navigateur (session agent).",
+    };
+  }
+
+  const url = page.url().toLowerCase();
+  const authSegments = [
+    "/login",
+    "/signin",
+    "/sign-in",
+    "/connexion",
+    "/checkpoint",
+    "/authwall",
+    "/oauth/authorize",
+    "/u/login",
+    "/login.php",
+    "/account/login",
+    "/signup",
+    "/session/",
+  ];
+  let login_wall = authSegments.some((s) => url.includes(s));
+
+  try {
+    const title = ((await page.title()) || "").toLowerCase();
+    const bareHost = hostname.replace(/^www\./, "");
+    const social =
+      bareHost.startsWith("linkedin.") ||
+      bareHost.startsWith("facebook.") ||
+      bareHost.startsWith("instagram.");
+    if (
+      social &&
+      (title.includes("sign in") ||
+        title.includes("log in") ||
+        title.includes("connexion") ||
+        title.includes("join linkedin") ||
+        title.includes("créer un compte"))
+    ) {
+      login_wall = true;
+    }
+    if (!login_wall && bareHost.startsWith("linkedin.")) {
+      const n = await page.locator('input[type="password"]:visible').count();
+      if (n > 0) login_wall = true;
+    }
+  } catch {
+    /* */
+  }
+
+  const suggested = login_wall
+    ? `La page (${hostname}) exige une session authentifiée. Dans l’interface Agent → Identifiants navigateur, ajoutez un export cookies (format Playwright / navigateur) pour « ${credentialHostname} » depuis une fenêtre où vous êtes déjà connecté, puis relancez l’outil.`
+    : null;
+
+  return {
+    captcha: false,
+    login_wall,
+    hostname,
+    credential_hostname: credentialHostname,
+    suggested_action_fr: suggested,
+  };
+}
+
 export async function isCaptchaPage(page: Page): Promise<boolean> {
   const url = page.url();
   if (
@@ -277,6 +368,16 @@ export interface BrowserSession {
   page: Page;
 }
 
+export interface LaunchBrowserOptions {
+  /** When set, injects decrypted session cookies from `org_browser_credentials`. */
+  orgId?: string;
+}
+
+export interface WithBrowserSessionOptions {
+  attempts?: number;
+  orgId?: string;
+}
+
 export function isBrowserAlive(session: BrowserSession): boolean {
   try {
     return session.browser.isConnected();
@@ -322,13 +423,13 @@ export function isTransientPlaywrightFailure(e: unknown): boolean {
  */
 export async function withBrowserSession<T>(
   runner: (session: BrowserSession) => Promise<T>,
-  opts?: { attempts?: number },
+  opts?: WithBrowserSessionOptions,
 ): Promise<T> {
-  const defaultAttempts = IS_SERVERLESS ? 4 : 3;
-  const max = Math.min(Math.max(opts?.attempts ?? defaultAttempts, 1), 6);
+  const defaultAttempts = IS_SERVERLESS ? 6 : 4;
+  const max = Math.min(Math.max(opts?.attempts ?? defaultAttempts, 1), 8);
   let lastErr: unknown;
   for (let i = 1; i <= max; i++) {
-    const session = await launchBrowser();
+    const session = await launchBrowser({ orgId: opts?.orgId });
     try {
       return await runner(session);
     } catch (e) {
@@ -346,7 +447,9 @@ export async function withBrowserSession<T>(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-export async function launchBrowser(): Promise<BrowserSession> {
+export async function launchBrowser(
+  opts?: LaunchBrowserOptions,
+): Promise<BrowserSession> {
   // Vercel Pro (2–4 GB): prefer **multi-process** Chromium — much fewer
   // "BrowserContext closed" flakes than --single-process + --no-zygote.
   // If you hit OOM on tiny plans, set PLAYWRIGHT_SERVERLESS_SINGLE_PROCESS=1.
@@ -428,6 +531,20 @@ export async function launchBrowser(): Promise<BrowserSession> {
       path: "/",
     },
   ]);
+
+  if (opts?.orgId) {
+    try {
+      const extra = await loadPlaywrightCookiesForOrg(opts.orgId);
+      if (extra.length) {
+        await context.addCookies(extra);
+      }
+    } catch (e) {
+      console.warn(
+        "[browser] org cookie inject failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
 
   const page = await context.newPage();
   return { browser, context, page };

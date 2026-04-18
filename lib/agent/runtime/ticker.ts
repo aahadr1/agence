@@ -86,6 +86,38 @@ function parseLeadTargetFromUserPrompt(prompt: string): number | null {
   return null;
 }
 
+/** French one-liner for nudges: explicit saved vs target (CRM rows only). */
+async function leadGenProgressSummaryFr(
+  orgId: string,
+  sessionId: string,
+  userPrompt: string,
+): Promise<string> {
+  const saved = await countLeadsForAgentSession(orgId, sessionId);
+  const target = parseLeadTargetFromUserPrompt(userPrompt);
+  if (target != null) {
+    const miss = Math.max(0, target - saved);
+    return (
+      `**Livrable CRM** : ${saved} / ${target} leads sauvegardés (il en manque ${miss}). ` +
+      "Seules les lignes créées via save_lead ou batch_save_leads comptent."
+    );
+  }
+  return (
+    `**Livrable CRM** : ${saved} lead(s) sauvegardé(s). ` +
+    `Sans nombre explicite dans le message initial, vise au moins **1** lead vérifiable, ou demande une clarification.`
+  );
+}
+
+async function leadGenDeliverableStillIncomplete(
+  orgId: string,
+  sessionId: string,
+  userPrompt: string,
+): Promise<boolean> {
+  const saved = await countLeadsForAgentSession(orgId, sessionId);
+  const target = parseLeadTargetFromUserPrompt(userPrompt);
+  if (target != null) return saved < target;
+  return saved < 1;
+}
+
 // -----------------------------------------------------------------------------
 // Session row shape
 // -----------------------------------------------------------------------------
@@ -403,6 +435,19 @@ async function runOneTickLocked(
           });
         },
         checkOpenWork: async () => {
+          const leadGen = sessionPacksForBudget.includes("lead-gen-fr");
+          const userPrompt = leadGen
+            ? (await fetchInitialPrompt(sessionId)) || ""
+            : "";
+          const progressFr =
+            leadGen && userPrompt.trim()
+              ? await leadGenProgressSummaryFr(
+                  session.org_id,
+                  sessionId,
+                  userPrompt,
+                )
+              : "";
+
           const { data: todos } = await db
             .from("agent_todos")
             .select("content, status")
@@ -418,13 +463,15 @@ async function runOneTickLocked(
               todos.length > 5 ? `\n…and ${todos.length - 5} more` : "";
             return {
               open: true,
-              summary: `${todos.length} todo(s) still open:\n${preview}${more}`,
+              summary:
+                `${todos.length} todo(s) still open:\n${preview}${more}` +
+                (progressFr ? `\n\n${progressFr}` : ""),
             };
           }
           // Lead-gen (and similar multi-step packs): never treat "no rows" as
           // "nothing to do" — the model often chats a roadmap then stops before
           // todo_write, so checkOpenWork must still signal open work.
-          if (sessionPacksForBudget.includes("lead-gen-fr")) {
+          if (leadGen) {
             const { count, error } = await db
               .from("agent_todos")
               .select("id", { count: "exact", head: true })
@@ -433,7 +480,25 @@ async function runOneTickLocked(
               return {
                 open: true,
                 summary:
-                  "Aucune liste de todos — appelle `todo_write` puis les outils (`web_search`, `google_maps_search`, …). Ne termine pas sur un plan en prose seul.",
+                  "Aucune liste de todos — appelle `todo_write` puis les outils (`web_search`, `google_maps_search`, …). Ne termine pas sur un plan en prose seul." +
+                  (progressFr ? `\n\n${progressFr}` : ""),
+              };
+            }
+            // Todos can show "all completed" while CRM rows are still short of
+            // the user's N — keep the session "open" until save_lead catches up.
+            if (
+              userPrompt.trim() &&
+              (await leadGenDeliverableStillIncomplete(
+                session.org_id,
+                sessionId,
+                userPrompt,
+              ))
+            ) {
+              return {
+                open: true,
+                summary:
+                  (progressFr || "**Livrable CRM** : objectif non atteint.") +
+                  "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Enchaîne `save_lead` / `batch_save_leads` (ou explique explicitement en français pourquoi tu ne peux pas, avec le **chiffre réel** sauvegardé).",
               };
             }
           }

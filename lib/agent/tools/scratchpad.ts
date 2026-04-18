@@ -1,28 +1,55 @@
+/**
+ * Session-scratchpad stored in `agent_memory` under keys `scratchpad:*`.
+ * Survives between ticks (unlike the in-process `context.scratchpad` map).
+ */
+
 import { registerTool } from "../tool-registry";
+import { getAgentDb } from "./_db";
+
+const PREFIX = "scratchpad:";
+
+function storageKey(userKey: string): string {
+  const k = String(userKey).replace(/[\u0000-\u001f]/g, "").trim().slice(0, 180);
+  return `${PREFIX}${k || "_empty"}`;
+}
 
 registerTool(
   {
     name: "scratchpad_write",
     description:
-      "Write a key-value pair to the mission scratchpad (working memory). Use to persist observations, patterns, intermediate data between iterations.",
+      "Write a string value under a key in the session scratchpad (persisted in DB — survives ticks). Use for batch candidate tables, tier lists, JSON working sets.",
     parameters: {
-      key: { type: "string", description: "Key to store under" },
-      value: { type: "string", description: "Value to store (stringified)" },
+      key: { type: "string", description: "Key to store under (short, unique)" },
+      value: { type: "string", description: "Value (often JSON.stringify of a table)" },
     },
     required: ["key", "value"],
     costEstimateCents: 0,
   },
   async (args, context) => {
-    context.scratchpad.set(args.key as string, args.value);
+    const db = getAgentDb();
+    if (!context.sessionId) throw new Error("scratchpad_write requires a session");
+    const key = storageKey(String(args.key));
+    const text = String(args.value ?? "");
+    const value = { text };
+    const { error } = await db.from("agent_memory").upsert(
+      {
+        session_id: context.sessionId,
+        key,
+        value,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "session_id,key" },
+    );
+    if (error) throw new Error(`scratchpad_write failed: ${error.message}`);
+    context.scratchpad.set(String(args.key), text);
     return { stored: true, key: args.key };
-  }
+  },
 );
 
 registerTool(
   {
     name: "scratchpad_read",
-    description:
-      "Read a value from the mission scratchpad by key. Returns null if key not found.",
+    description: "Read a scratchpad value by key. Returns null if missing.",
     parameters: {
       key: { type: "string", description: "Key to read" },
     },
@@ -30,7 +57,22 @@ registerTool(
     costEstimateCents: 0,
   },
   async (args, context) => {
-    const value = context.scratchpad.get(args.key as string);
-    return { key: args.key, value: value ?? null };
-  }
+    const db = getAgentDb();
+    if (!context.sessionId) throw new Error("scratchpad_read requires a session");
+    const key = storageKey(String(args.key));
+    const { data } = await db
+      .from("agent_memory")
+      .select("value")
+      .eq("session_id", context.sessionId)
+      .eq("key", key)
+      .maybeSingle();
+    let text: string | null = null;
+    const raw = data?.value as unknown;
+    if (typeof raw === "string") text = raw;
+    else if (raw && typeof raw === "object" && "text" in raw) {
+      text = String((raw as { text?: unknown }).text ?? "");
+    }
+    if (text != null) context.scratchpad.set(String(args.key), text);
+    return { key: args.key, value: text };
+  },
 );

@@ -1,6 +1,7 @@
 import { registerTool } from "../tool-registry";
 import { searchPagesJaunes } from "@/lib/lead-agent/sources/pages-jaunes";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
+import type { AgentContext } from "../types";
 
 registerTool(
   {
@@ -15,19 +16,18 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 2,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[pages_jaunes] ${msg}`);
-    const session = await launchBrowser();
-    try {
-      return await searchPagesJaunes(
-        session.page,
-        args.business_name as string,
-        args.location as string,
-        (args.phone as string) || null,
-        log
-      );
-    } finally {
-      await safeClose(session);
-    }
-  }
+    return withBrowserSession(
+      async (session) =>
+        searchPagesJaunes(
+          session.page,
+          args.business_name as string,
+          args.location as string,
+          (args.phone as string) || null,
+          log,
+        ),
+      { orgId: context.orgId, attempts: 8 },
+    );
+  },
 );

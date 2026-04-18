@@ -1,6 +1,7 @@
 import { registerTool } from "../tool-registry";
 import { scrapContactPage } from "@/lib/lead-agent/enrichment/contact-page-scraper";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
+import type { AgentContext } from "../types";
 
 registerTool(
   {
@@ -14,18 +15,17 @@ registerTool(
     required: ["url", "business_name"],
     costEstimateCents: 2,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[contact_page] ${msg}`);
-    const session = await launchBrowser();
-    try {
-      return await scrapContactPage(
-        session.page,
-        args.url as string,
-        args.business_name as string,
-        log
-      );
-    } finally {
-      await safeClose(session);
-    }
-  }
+    return withBrowserSession(
+      async (session) =>
+        scrapContactPage(
+          session.page,
+          args.url as string,
+          args.business_name as string,
+          log,
+        ),
+      { orgId: context.orgId, attempts: 8 },
+    );
+  },
 );

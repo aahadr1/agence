@@ -9,6 +9,7 @@ export type SessionStatus =
 
 export interface Session {
   id: string;
+  org_id?: string;
   title: string | null;
   status: SessionStatus;
   model: string;

@@ -1,6 +1,7 @@
 import { registerTool } from "../tool-registry";
 import { findWebsite } from "@/lib/lead-agent/enrichment/website-finder";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
+import type { AgentContext } from "../types";
 
 registerTool(
   {
@@ -26,20 +27,19 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 3,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[website_finder] ${msg}`);
-    const session = await launchBrowser();
-    try {
-      return await findWebsite(
-        session.page,
-        args.business_name as string,
-        args.location as string,
-        (args.website_url as string) || null,
-        log,
-        (args.google_maps_url as string) || null
-      );
-    } finally {
-      await safeClose(session);
-    }
-  }
+    return withBrowserSession(
+      async (session) =>
+        findWebsite(
+          session.page,
+          args.business_name as string,
+          args.location as string,
+          (args.website_url as string) || null,
+          log,
+          (args.google_maps_url as string) || null,
+        ),
+      { orgId: context.orgId, attempts: 8 },
+    );
+  },
 );

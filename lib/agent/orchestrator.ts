@@ -87,8 +87,8 @@ const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`todo_write\`, \`todo_update\`, \`todo_update_batch\`, \`todo_read\`, \`todo_finalize\`: task list management. \`todo_update\` accepts UUID, 1-based index, content substring, or aliases \`current\`/\`next\`; prefer 1-based indices. Use \`todo_update_batch\` to close the current todo and open the next one in one call (it takes \`{ updates: [{id, status}, …] }\`). Call \`todo_finalize\` at the end to close all leftover open todos at once — same turn as your final user-facing message.
 - \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment (persisted + shown in the Plan UI). **Never** paste a numbered "phase 1–5" roadmap only in assistant text — call \`plan_create\` (or skip it and use \`todo_write\` + tools immediately). Prose plans do not execute.
 - \`reflect\`: self-review loop (JSON: observation, conclusion, next_action, strategy_revision — use \`strategy_revision\` when you must **change approach**, not just describe the next row).
-- \`scratchpad_write\`, \`scratchpad_read\`: working memory for **this tick** (in-process map). For cross-tick durable notes use \`memory_write\` / \`memory_read\`.
-- \`memory_write\`, \`memory_read\`, \`memory_list\`: durable scratchpad for the CURRENT session.
+- \`scratchpad_write\`, \`scratchpad_read\`: string working memory **persisted per session** (DB) — ideal for JSON candidate tables across ticks. Keys are namespaced; does not collide with \`memory_write\`.
+- \`memory_write\`, \`memory_read\`, \`memory_list\`: durable JSON memory for the CURRENT session (facts, IDs, decisions).
 - \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.
 - \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
 - \`request_approval\`: pause for user decision on sensitive actions.
@@ -116,13 +116,13 @@ OBJECTIVES (what "done" means — adapt how you get there):
 - Map the right **legal entity** and **commercial presence** (Maps, PJ, site, social).
 - Qualify the **business pain** the user cares about (site quality, booking, ads, etc.) using real signals (\`website_audit\`, \`fb_ad_library_check\`, etc.), not guesses.
 - Obtain **verifiable** establishment and/or decision-maker contact data; never invent.
-- Call \`save_lead\` as you lock in each prospect; the CRM only sees saved rows.
-- If the user asked for **N** leads, aim for **N** \`save_lead\` rows at usable quality. If fewer are realistically achievable, say so **explicitly in French** with reasons — do not ship a one-row table full of placeholders as if it were complete.
+- Call \`save_lead\` (one row) or \`batch_save_leads\` (many rows, same iteration budget) as you lock prospects; the CRM only sees saved rows.
+- If the user asked for **N** leads, aim for **N** saved rows at usable quality. If fewer are realistically achievable, say so **explicitly in French** with reasons — do not ship a one-row table full of placeholders as if it were complete.
 
 TOOLBOX (non-sequential — examples of use):
-- Discovery: \`google_maps_search\`, \`pages_jaunes_search\`, \`google_search\`.
+- Discovery: \`google_maps_search\` (request **max_results** high when you need a wide pool — up to 60), \`pages_jaunes_search\`, \`google_search\`.
 - Legal: \`pappers_search(business_name, location, address_hint?, siren?)\` — **always pass \`address_hint\`** (full Maps address) when you have it; pass \`siren\` when known. \`societe_com_lookup(business_name, location, address?)\` — pass Maps **address** when you have it.
-- Web / quality: \`website_finder(business_name, location, website_url?, google_maps_url?)\` — when Maps gives \`website_url\` or \`google_maps_url\`, pass them **before** concluding "no website". \`website_audit\`, \`contact_page_scraper\`, \`fb_ad_library_check\`.
+- Web / quality: \`batch_website_check(urls[])\` for cheap HTTP pre-checks on URLs you already have — then \`website_finder\`, \`website_audit\` only on survivors. \`website_finder(business_name, location, website_url?, google_maps_url?)\` — when Maps gives \`website_url\` or \`google_maps_url\`, pass them **before** concluding "no website". \`website_audit\`, \`contact_page_scraper\`, \`fb_ad_library_check\`.
 - People: \`dirigeant_research\`, \`linkedin_profile_search\`, \`facebook_page_lookup\`.
 
 INVARIANTS (non-negotiable — regardless of order):
@@ -167,6 +167,8 @@ Both \`web_search\` and \`web_fetch\` run through a real headless Chromium (Play
 
 const PACK_BROWSER = `<CAPABILITY:browser>
 You can drive a real browser (headless Chromium). Start with \`browser_navigate(url)\`. Then loop with \`browser_act(instruction)\` for vision-guided clicks/typing, and \`browser_extract(question)\` to read a specific piece of info off the page. Call \`browser_close\` when done. The browser session is persistent across calls in the same agent session.
+
+**Session cookies (organisation):** Playwright injects automatically any cookies the user saved under **Identifiants navigateur** in the Agent UI (encrypted per org). If \`web_fetch\` or \`browser_navigate\` returns \`credential_required: true\`, \`blocked: true\`, or \`page_access.login_wall\`, tell the user (in French) which hostname to cover and that they can paste an export cookies JSON there — then retry the same URL after they confirm it is saved.
 </CAPABILITY:browser>`;
 
 const PACK_SELF_CODING = `<CAPABILITY:self-coding>
@@ -280,11 +282,13 @@ export function getToolNamesForCapabilities(
       "fb_ad_library_check",
       "website_finder",
       "website_audit",
+      "batch_website_check",
       "dirigeant_research",
       "contact_page_scraper",
       "scratchpad_write",
       "scratchpad_read",
       "save_lead",
+      "batch_save_leads",
     ],
     email: ["gmail_list_recent", "gmail_send"],
     calendar: ["calendar_list_upcoming", "calendar_create_event"],

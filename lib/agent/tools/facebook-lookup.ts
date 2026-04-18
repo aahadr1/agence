@@ -1,6 +1,7 @@
 import { registerTool } from "../tool-registry";
 import { searchFacebook } from "@/lib/lead-agent/sources/facebook";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
+import type { AgentContext } from "../types";
 
 registerTool(
   {
@@ -15,19 +16,18 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 2,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[facebook] ${msg}`);
-    const session = await launchBrowser();
-    try {
-      return await searchFacebook(
-        session.page,
-        args.business_name as string,
-        args.location as string,
-        (args.owner_name as string) || null,
-        log
-      );
-    } finally {
-      await safeClose(session);
-    }
-  }
+    return withBrowserSession(
+      async (session) =>
+        searchFacebook(
+          session.page,
+          args.business_name as string,
+          args.location as string,
+          (args.owner_name as string) || null,
+          log,
+        ),
+      { orgId: context.orgId, attempts: 8 },
+    );
+  },
 );

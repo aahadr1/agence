@@ -28,6 +28,7 @@ import { StreamEvent } from "./stream-event";
 import { StatusIndicator } from "./status-indicator";
 import { EmptyState } from "./empty-state";
 import { Composer, type ComposerHandle } from "./composer";
+import { BrowserCredentialsPanel } from "./browser-credentials-panel";
 
 const CAPABILITY_PRESETS: CapabilityPreset[] = [
   {
@@ -372,7 +373,13 @@ export function AgentShell() {
           onScroll={handleScroll}
           className="relative flex-1 overflow-y-auto"
         >
-          {active && todos.length > 0 && <TodoTracker todos={todos} />}
+            {active && (
+              <BrowserCredentialsPanel
+                sessionId={active.id}
+                orgId={active.org_id}
+              />
+            )}
+            {active && todos.length > 0 && <TodoTracker todos={todos} />}
 
           <div className="mx-auto w-full max-w-3xl px-4 py-5 lg:px-6">
             {!active && timeline.length === 0 && (

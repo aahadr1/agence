@@ -1,6 +1,7 @@
 import { registerTool } from "../tool-registry";
 import { searchGoogle } from "@/lib/lead-agent/sources/google-search";
 import { withBrowserSession } from "@/lib/lead-agent/browser";
+import type { AgentContext } from "../types";
 
 registerTool(
   {
@@ -16,17 +17,19 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 2,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[google_search] ${msg}`);
-    return withBrowserSession(async (session) =>
-      searchGoogle(
-        session.page,
-        args.business_name as string,
-        args.location as string,
-        (args.phone as string) || null,
-        (args.address as string) || null,
-        log,
-      ),
+    return withBrowserSession(
+      async (session) =>
+        searchGoogle(
+          session.page,
+          args.business_name as string,
+          args.location as string,
+          (args.phone as string) || null,
+          (args.address as string) || null,
+          log,
+        ),
+      { orgId: context.orgId, attempts: 8 },
     );
-  }
+  },
 );

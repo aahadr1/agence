@@ -292,6 +292,22 @@ export async function runAgentLoop(
           const check = await config.checkOpenWork();
           if (check.open) {
             if (signingOff && config.finalizeOpenWork) {
+              if (config.isDeliverableComplete) {
+                try {
+                  const deliverableOk = await config.isDeliverableComplete();
+                  if (!deliverableOk) {
+                    state.finalSummaryDelivered = false;
+                    const nudge =
+                      "Ta conclusion ou tes todos ouverts ne suffisent pas : le livrable (nombre de leads sauvegardés pour cette session) est encore en dessous de l’objectif. Continue avec les outils et enchaîne `save_lead` / `batch_save_leads` jusqu’au bon volume, puis `todo_finalize`.";
+                    pushNudge(state, nudge);
+                    await config.onNudge?.(nudge, "deliverable_blocks_auto_finalize");
+                    state.consecutiveErrors++;
+                    continue;
+                  }
+                } catch {
+                  /* proceed — same as other deliverable soft-fails */
+                }
+              }
               // Tidy up: the user's deliverable is in hand, close leftover
               // todos so the session ends cleanly. No nudge, no loop.
               try {
@@ -338,7 +354,7 @@ export async function runAgentLoop(
           const deliverableReady = await config.isDeliverableComplete();
           if (!deliverableReady) {
             const nudge =
-              "Ton message ressemble à une conclusion, mais le livrable attendu n’est pas atteint (ex. pas assez de `save_lead` vs l’objectif du brief). Poursuis avec les outils, sauve des leads au fil de l’eau, puis `todo_finalize` seulement quand c’est réellement fini.";
+              "Ton message ressemble à une conclusion, mais le livrable attendu n’est pas atteint (ex. pas assez de `save_lead` / `batch_save_leads` vs l’objectif du brief). Poursuis avec les outils, sauve des leads au fil de l’eau, puis `todo_finalize` seulement quand c’est réellement fini.";
             pushNudge(state, nudge);
             await config.onNudge?.(nudge, "deliverable_incomplete");
             state.finalSummaryDelivered = false;

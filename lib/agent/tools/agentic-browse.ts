@@ -65,32 +65,51 @@ async function clearState(sessionId: string) {
 
 async function withBrowser<T>(
   state: BrowserState | null,
+  orgId: string | undefined,
   fn: (ctx: BrowserContext) => Promise<T>,
 ): Promise<T> {
   const { withBrowserSession } = await import("@/lib/lead-agent/browser");
-  return withBrowserSession(async (session) => {
-    if (state?.cookies?.length) {
-      try {
-        await session.context.addCookies(state.cookies);
-      } catch {
-        /* ignore invalid cookies from previous sessions */
+  return withBrowserSession(
+    async (session) => {
+      if (state?.cookies?.length) {
+        try {
+          await session.context.addCookies(state.cookies);
+        } catch {
+          /* ignore invalid cookies from previous sessions */
+        }
       }
-    }
-    return fn(session.context);
-  });
+      return fn(session.context);
+    },
+    { orgId, attempts: 8 },
+  );
 }
 
 async function extractPageText(ctx: BrowserContext, url: string): Promise<{
   text: string;
   finalUrl: string;
   cookies: Cookie[];
+  blocked?: boolean;
+  page_access?: import("@/lib/lead-agent/browser").PageAccessDiagnostics;
 }> {
   const page = ctx.pages()[0] || (await ctx.newPage());
-  const { safeGoto, dismissConsent } = await import("@/lib/lead-agent/browser");
+  const { safeGoto, dismissConsent, diagnosePageAccess } = await import(
+    "@/lib/lead-agent/browser"
+  );
   const loaded = await safeGoto(page, url);
   if (!loaded) throw new Error(`Failed to load ${url}`);
   await dismissConsent(page);
   const finalUrl = page.url();
+  const diag = await diagnosePageAccess(page);
+  if (diag.captcha || diag.login_wall) {
+    const cookies = await ctx.cookies();
+    return {
+      text: diag.suggested_action_fr || "[page inaccessible]",
+      finalUrl,
+      cookies,
+      blocked: true,
+      page_access: diag,
+    };
+  }
   const raw = await page.evaluate(() => {
     const body = document.body?.innerText || "";
     return body.replace(/\s+/g, " ").trim();
@@ -125,7 +144,9 @@ registerTool(
       throw new Error("absolute http(s) URL required");
 
     const prev = await loadState(context.sessionId);
-    const result = await withBrowser(prev, (ctx) => extractPageText(ctx, url));
+    const result = await withBrowser(prev, context.orgId, (ctx) =>
+      extractPageText(ctx, url),
+    );
 
     await saveState(context.sessionId, {
       url: result.finalUrl,
@@ -137,6 +158,15 @@ registerTool(
       url: result.finalUrl,
       text: result.text,
       length: result.text.length,
+      ...(result.blocked && result.page_access
+        ? {
+            blocked: true,
+            credential_required: result.page_access.login_wall,
+            captcha: result.page_access.captcha,
+            credential_hostname: result.page_access.credential_hostname,
+            suggested_user_action_fr: result.page_access.suggested_action_fr,
+          }
+        : {}),
     };
   },
 );
@@ -169,7 +199,7 @@ registerTool(
       "@/lib/lead-agent/browser"
     );
 
-    return withBrowser(state, async (ctx) => {
+    return withBrowser(state, context.orgId, async (ctx) => {
       const page = ctx.pages()[0] || (await ctx.newPage());
       const { safeGoto } = await import("@/lib/lead-agent/browser");
       await safeGoto(page, state.url);
@@ -218,7 +248,7 @@ registerTool(
     const { screenshotToBase64, askGemini, safeGoto, randomDelay } =
       await import("@/lib/lead-agent/browser");
 
-    return withBrowser(state, async (ctx) => {
+    return withBrowser(state, context.orgId, async (ctx) => {
       const page = ctx.pages()[0] || (await ctx.newPage());
       await safeGoto(page, state.url);
 

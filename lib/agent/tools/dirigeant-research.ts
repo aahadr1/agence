@@ -1,6 +1,7 @@
 import { registerTool } from "../tool-registry";
 import { researchDirigeant } from "@/lib/lead-agent/enrichment/dirigeant-researcher";
-import { launchBrowser, safeClose } from "@/lib/lead-agent/browser";
+import { withBrowserSession } from "@/lib/lead-agent/browser";
+import type { AgentContext } from "../types";
 
 registerTool(
   {
@@ -16,20 +17,19 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 5,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[dirigeant] ${msg}`);
-    const session = await launchBrowser();
-    try {
-      return await researchDirigeant(
-        session.page,
-        (args.owner_name as string) || null,
-        args.business_name as string,
-        args.location as string,
-        (args.niche as string) || null,
-        log
-      );
-    } finally {
-      await safeClose(session);
-    }
-  }
+    return withBrowserSession(
+      async (session) =>
+        researchDirigeant(
+          session.page,
+          (args.owner_name as string) || null,
+          args.business_name as string,
+          args.location as string,
+          (args.niche as string) || null,
+          log,
+        ),
+      { orgId: context.orgId, attempts: 8 },
+    );
+  },
 );

@@ -63,7 +63,7 @@ export interface AgentContext {
   sessionId: string;
   orgId: string;
   userId: string;
-  /** In-memory scratchpad; for persistent memory use memory_write tool */
+  /** Same-tick cache; durable scratchpad uses `scratchpad_write` → agent_memory */
   scratchpad: Map<string, unknown>;
   totalCostCents: number;
   budgetCapCents: number | null;

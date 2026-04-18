@@ -21,6 +21,7 @@
 
 import type { Page } from "playwright-core";
 import { registerTool } from "../tool-registry";
+import type { AgentContext } from "../types";
 
 async function extractText(
   page: Page,
@@ -77,7 +78,7 @@ registerTool(
     required: ["url"],
     costEstimateCents: 1,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const url = String(args.url);
     const maxChars = Math.min(Math.max(Number(args.max_chars) || 12000, 500), 40000);
     const includeHtml = Boolean(args.include_html);
@@ -86,48 +87,59 @@ registerTool(
       throw new Error("web_fetch requires an absolute http(s) URL");
     }
 
-    const { withBrowserSession, safeGoto, isCaptchaPage } = await import(
+    const { withBrowserSession, safeGoto, diagnosePageAccess } = await import(
       "@/lib/lead-agent/browser"
     );
 
-    return withBrowserSession(async (session) => {
-      const page = session.page;
-      const loaded = await safeGoto(page, url);
-      const finalUrl = page.url();
-      if (!loaded) {
+    return withBrowserSession(
+      async (session) => {
+        const page = session.page;
+        const loaded = await safeGoto(page, url);
+        const finalUrl = page.url();
+        if (!loaded) {
+          return {
+            url,
+            final_url: finalUrl,
+            status: null,
+            content_type: null,
+            content: "",
+            length: 0,
+            note: "navigation failed or timed out",
+          };
+        }
+
+        const diag = await diagnosePageAccess(page);
+        if (diag.captcha || diag.login_wall) {
+          return {
+            url,
+            final_url: finalUrl,
+            status: null,
+            content_type: null,
+            content: "",
+            length: 0,
+            note: diag.captcha
+              ? "captcha or interstitial detected — page not readable"
+              : "login wall or authentication required",
+            page_access: diag,
+            credential_required: diag.login_wall,
+            credential_hostname: diag.credential_hostname,
+            suggested_user_action_fr: diag.suggested_action_fr,
+          };
+        }
+
+        const { text, html, title } = await extractText(page, maxChars);
+
         return {
           url,
           final_url: finalUrl,
-          status: null,
-          content_type: null,
-          content: "",
-          length: 0,
-          note: "navigation failed or timed out",
+          title,
+          content_type: "text/html",
+          content: text,
+          length: text.length,
+          ...(includeHtml ? { html } : {}),
         };
-      }
-      if (await isCaptchaPage(page)) {
-        return {
-          url,
-          final_url: finalUrl,
-          status: null,
-          content_type: null,
-          content: "",
-          length: 0,
-          note: "captcha or interstitial detected — page not readable",
-        };
-      }
-
-      const { text, html, title } = await extractText(page, maxChars);
-
-      return {
-        url,
-        final_url: finalUrl,
-        title,
-        content_type: "text/html",
-        content: text,
-        length: text.length,
-        ...(includeHtml ? { html } : {}),
-      };
-    });
+      },
+      { orgId: context.orgId, attempts: 8 },
+    );
   },
 );

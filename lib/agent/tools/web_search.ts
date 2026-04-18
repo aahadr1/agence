@@ -21,6 +21,7 @@
 
 import type { Page } from "playwright-core";
 import { registerTool } from "../tool-registry";
+import type { AgentContext } from "../types";
 
 interface SearchResult {
   title: string;
@@ -134,7 +135,7 @@ registerTool(
     required: ["query"],
     costEstimateCents: 1,
   },
-  async (args) => {
+  async (args, context: AgentContext) => {
     const query = String(args.query).slice(0, 500);
     const count = Math.min(Math.max(Number(args.count) || 8, 1), 15);
     const preferred = (args.engine as string) === "duckduckgo"
@@ -168,6 +169,6 @@ registerTool(
         results,
         count: results.length,
       };
-    });
+    }, { orgId: context.orgId, attempts: 8 });
   },
 );

@@ -9,7 +9,7 @@ function getServiceClient() {
 }
 
 /** Only set leads.mission_id when candidate exists in public.missions (FK-safe). */
-async function resolveMissionIdForLead(
+export async function resolveMissionIdForLead(
   db: ReturnType<typeof getServiceClient>,
   candidate: string | undefined,
 ): Promise<string | null> {

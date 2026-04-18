@@ -1,7 +1,8 @@
 /**
- * Memory tools — durable key/value scratchpad per session.
- * Survives redeploys and long sessions. Prefer this over the in-memory
- * `context.scratchpad` Map for anything important.
+ * Memory tools — durable JSON key/value per session (`agent_memory`).
+ * For large string working sets (candidate tables), prefer `scratchpad_*`
+ * (same table, `scratchpad:` key prefix). The in-process `context.scratchpad`
+ * map is only a same-tick cache mirror.
  */
 
 import { registerTool } from "../tool-registry";
