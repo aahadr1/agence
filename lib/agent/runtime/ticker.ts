@@ -228,7 +228,10 @@ async function runOneTickLocked(
     ? ITER_PER_TICK_LEAD_GEN
     : ITER_PER_TICK;
   /** Lead-gen: reflect more often so forced JSON reflection realigns todos vs evidence. */
-  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 4 : 5;
+  // Lead-gen: reflect less often (every 6 vs 5) — saves 2 productive
+  // iterations per tick. At reflectEveryN=4 we were burning 25% of the
+  // 20-iteration budget on introspection alone.
+  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 6 : 5;
 
   // Journal the step (best-effort, non-fatal)
   const stepNum = (session.tick_count || 0) + 1;
@@ -348,7 +351,7 @@ async function runOneTickLocked(
       totalCostCents: session.cost_cents || 0,
       budgetCapCents: session.budget_cap_cents,
       iterationCount: 0,
-      maxIterations: ITER_PER_TICK,
+      maxIterations: iterBudget,
       capabilityPacks: packs,
       inputTokensSoFar: 0,
     };

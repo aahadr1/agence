@@ -70,6 +70,10 @@ interface AgentState {
    *  fire a periodic "remember to update your todos" reminder — Gemini in
    *  particular tends to forget after long tool runs. */
   successesSinceTodoTouch: number;
+  /** True after Maps discovery steering fired; used to enforce that the
+   *  agent calls scratchpad_write in the next turn. If it doesn't, a
+   *  critical warning is injected. */
+  scratchpadMandatePending: boolean;
 }
 
 const TODO_REMINDER_AFTER_SUCCESSES = 5;
@@ -111,6 +115,7 @@ export async function runAgentLoop(
     openWorkNudgeCount: 0,
     totalNudges: 0,
     successesSinceTodoTouch: 0,
+    scratchpadMandatePending: false,
   };
 
   const allToolCalls: ToolResult[] = [];
@@ -448,8 +453,17 @@ export async function runAgentLoop(
         }
       }
 
-      const content =
+      let content =
         toolResult.error ?? safeStringify(toolResult.result ?? null);
+
+      // Append inline recovery guidance for non-retryable errors so the
+      // model sees it in-band with the tool result (no separate injection).
+      if (toolResult.error?.includes("[NON_RETRYABLE]")) {
+        content +=
+          "\n\n[AUTO] Erreur non-retryable. Ne retente PAS ce même appel. " +
+          "Stocke les données collectées via `scratchpad_write`, bascule " +
+          "vers un outil alternatif, ou passe au candidat suivant.";
+      }
 
       return {
         type: "tool_result" as const,
@@ -504,6 +518,30 @@ export async function runAgentLoop(
 
     state.history.push({ role: "user", parts: toolResultParts });
 
+    // Scratchpad enforcement: if we told the agent to scratchpad_write after
+    // Maps and it didn’t, inject a critical warning.
+    if (state.scratchpadMandatePending) {
+      const hadScratchpadWrite = result.functionCalls.some(
+        (fc) => fc.name === "scratchpad_write",
+      );
+      if (!hadScratchpadWrite) {
+        state.history.push({
+          role: "user",
+          parts: [
+            {
+              type: "text",
+              text:
+                "[AVERTISSEMENT CRITIQUE] Tu as reçu des résultats Maps au tour précédent " +
+                "mais tu n’as PAS appelé `scratchpad_write`. Les données ne sont PAS " +
+                "persistées et seront PERDUES au prochain tick. Appelle `scratchpad_write` " +
+                "MAINTENANT avec la liste de candidats, AVANT tout autre outil.",
+            },
+          ],
+        });
+      }
+      state.scratchpadMandatePending = false;
+    }
+
     // One-shot discovery steering after first successful google_maps_search this tick
     const batchHadMaps = result.functionCalls.some(
       (fc) => fc.name === "google_maps_search",
@@ -515,19 +553,20 @@ export async function runAgentLoop(
       );
       if (mapsOk) {
         state.discoverySteeringDone = true;
+        state.scratchpadMandatePending = true;
         state.history.push({
           role: "user",
           parts: [
             {
               type: "text",
               text:
-                "[Discovery check — internal steering]\n" +
-                "Tu viens de recevoir des résultats Maps (ou équivalent). Avant du travail coûteux **par établissement** :\n" +
-                "1) Est-ce que tu as assez de candidats (vise **2–3×** la cible si incertain) ?\n" +
-                "2) **Pré-classe** avec les champs gratuits (website_url, has_website, avis, chaîne évidente) — évite d’auditer en profondeur la tête de liste « premium ».\n" +
-                "3) Enchaîne plusieurs **`website_finder` en parallèle** sur une shortlist, pas un audit long par tour.\n" +
-                "4) Optionnel : **`scratchpad_write`** pour une table de travail (statut par ligne).\n" +
-                "Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.",
+                "[Discovery steering — ACTIONS OBLIGATOIRES CE TOUR]\n" +
+                "Tu viens de recevoir des résultats Maps. Tu DOIS faire ces actions dans CE tour :\n" +
+                "1) **OBLIGATOIRE** : appelle `scratchpad_write` avec key=’candidates’ et value=JSON de tous les résultats. Si tu ne le fais pas, les données seront PERDUES au prochain tick.\n" +
+                "2) **Pré-classe** avec les champs gratuits (website_url, has_website, rating, chaîne évidente) — élimine les « premium » avant d’enrichir.\n" +
+                "3) Au prochain tour : lance plusieurs `website_finder` **en parallèle** (3-5 par tour), jamais un par un.\n" +
+                "4) Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.\n" +
+                "RAPPEL : ~20 itérations par tick. Ne gaspille pas.",
             },
           ],
         });

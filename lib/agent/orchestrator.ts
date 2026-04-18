@@ -64,6 +64,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
     - **\`browser_navigate\` + \`browser_extract\`** on the canonical public page (Maps place, registry, LinkedIn company, restaurant site / mentions légales).
     - **\`memory_write\`** the dead-ends you already tried so you don't repeat them blindly.
     Only skip a target after those attempts OR when the user cap (time/leads) is hit — never skip because "the first API looked hard".
+    **Budget guard**: NEVER spend more than **3 iterations** on a single failing prospect. If 3 distinct tools/strategies fail, note the failure in scratchpad and move on — the mission needs breadth, not depth on one row.
 
 12. TODO LIST STABILITY. After your first \`todo_write\` for a mission, do **not** call \`todo_write\` again to replace the whole list unless the **user explicitly** asks to replan or changes the goal. Adjust progress with \`todo_update\` / \`todo_update_batch\` / \`todo_finalize\` only. Re-planning from scratch mid-run destroys state and causes restart loops. **The server rejects \`todo_write\` while any todo is still pending or in_progress** unless you pass \`replace_existing: true\` and a \`reset_reason\` quoting the user's explicit reset request — do not invent that.
 
@@ -82,13 +83,19 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
     - **Enrich late**: spend deep tools only on the pre-qualified shortlist.
     - **Parallelize**: emit **several independent tool calls in the same turn** when results do not depend on each other (e.g. multiple \`website_finder\` for different businesses you already listed).
     - **Estimate cost**: if N × (tools per item) exceeds your per-tick iteration budget, you **must** batch — otherwise you will die mid-mission with 0 saves.
+
+16. ITERATION BUDGET. You have **~20 iterations per tick** (one tick = one serverless invocation, ~270 s). Forced reflections consume iterations too.
+    - **Do the math FIRST**: 30 leads × 5 sequential tools/lead = 150 iterations = **impossible** in 20. You MUST use batch tools (\`batch_website_check\`, \`batch_save_leads\`) and parallel calls.
+    - **Realistic throughput** with batching: discover 60 candidates (1 iter) → \`scratchpad_write\` (same turn) → \`batch_website_check\` 20 URLs (1 iter) → 5× parallel \`website_finder\` (1 iter each) → \`batch_save_leads\` (1 iter) = ~9 iterations for 10-25 leads.
+    - **Multi-tick is normal**: if it doesn't fit in one tick, the system chains another. But you MUST persist progress (\`scratchpad_write\` + \`save_lead\`/\`batch_save_leads\`) so the next tick resumes, not restarts.
+    - **Never spend an iteration on prose only** — every turn must include at least one tool call (except the final \`todo_finalize\` + message).
 </CORE_DISCIPLINE>`;
 
 const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`todo_write\`, \`todo_update\`, \`todo_update_batch\`, \`todo_read\`, \`todo_finalize\`: task list management. \`todo_update\` accepts UUID, 1-based index, content substring, or aliases \`current\`/\`next\`; prefer 1-based indices. Use \`todo_update_batch\` to close the current todo and open the next one in one call (it takes \`{ updates: [{id, status}, …] }\`). Call \`todo_finalize\` at the end to close all leftover open todos at once — same turn as your final user-facing message.
 - \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment (persisted + shown in the Plan UI). **Never** paste a numbered "phase 1–5" roadmap only in assistant text — call \`plan_create\` (or skip it and use \`todo_write\` + tools immediately). Prose plans do not execute.
 - \`reflect\`: self-review loop (JSON: observation, conclusion, next_action, strategy_revision — use \`strategy_revision\` when you must **change approach**, not just describe the next row).
-- \`scratchpad_write\`, \`scratchpad_read\`: string working memory **persisted per session** (DB) — ideal for JSON candidate tables across ticks. Keys are namespaced; does not collide with \`memory_write\`.
+- \`scratchpad_write\`, \`scratchpad_read\`: string working memory **persisted per session** (DB). **MANDATORY for volume tasks**: after any discovery tool (\`google_maps_search\`, \`pages_jaunes_search\`) returns 5+ results, call \`scratchpad_write\` in the **SAME turn** to persist the candidate list as JSON. Data is NOT automatically saved between ticks — if you skip this, you WILL lose results and restart from zero.
 - \`memory_write\`, \`memory_read\`, \`memory_list\`: durable JSON memory for the CURRENT session (facts, IDs, decisions).
 - \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.
 - \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
@@ -119,7 +126,7 @@ OBJECTIVES (what "done" means — adapt how you get there):
 - Obtain **verifiable** establishment and/or decision-maker contact data; never invent.
 - Call \`save_lead\` (one row) or \`batch_save_leads\` (many rows, same iteration budget) as you lock prospects; the CRM only sees saved rows.
 - If the user asked for **N** leads, aim for **N** saved rows at usable quality. If fewer are realistically achievable, say so **explicitly in French** with reasons — do not ship a one-row table full of placeholders as if it were complete.
-- **Définition de fini** : une mission « N leads » = **N insertions CRM réussies** (\`save_lead\` / \`batch_save_leads\`) ou escalade \`ask_user\` si un outil reste KO après **une** tentative sur une erreur invariante (401, colonne DB, violation NOT NULL). Ne réessaie pas l’identique après \`[NON_RETRYABLE]\` dans le message d’erreur.
+- **Définition de fini** : une mission « N leads » = **N insertions CRM réussies** (\`save_lead\` / \`batch_save_leads\`) ou escalade \`ask_user\` si un outil reste KO après **une** tentative sur une erreur invariante (401, colonne DB, violation NOT NULL). Ne réessaie pas l’identique après \`[NON_RETRYABLE]\` dans le message d’erreur. À la place : (1) stocke les données collectées jusqu’ici dans \`scratchpad_write\`, (2) note l’erreur brièvement, (3) continue avec le candidat suivant ou un outil alternatif, (4) mentionne le problème technique **UNE SEULE FOIS** dans ton message final. Ne fais PAS 3+ tours à dire « je suis bloqué ».
 
 TOOLBOX (non-sequential — examples of use):
 - Discovery: \`google_maps_search\` (request **max_results** high when you need a wide pool — up to 60), \`pages_jaunes_search\`, \`google_search\`.
@@ -152,6 +159,16 @@ FINAL MESSAGE:
 - Encourage **tiers / rank**, a **one-line pitch angle** per lead, and explicit **confidence** where useful — align with the extended iteration budget for this pack.
 
 BROWSER: when structured tools return nothing or SPA blocks reading, use \`browser_navigate\` + \`browser_extract\` on the real URL — never invent registry facts from a search snippet.
+
+ANTI-PATTERNS (FAUTES CRITIQUES — chacune a causé un échec total en production) :
+1. **JAMAIS annoncer sans agir.** « Je vais lancer une recherche » sans tool call dans le MÊME tour = itération gaspillée. Chaque tour DOIT contenir ≥ 1 tool call OU être le \`todo_finalize\` + message final. Si tu décris un plan, exécute-le dans le même tour.
+2. **JAMAIS oublier \`scratchpad_write\` après discovery.** Après \`google_maps_search\` ou \`pages_jaunes_search\`, appelle \`scratchpad_write\` dans le **MÊME tour** avec la liste candidats en JSON. Si tu dis « je vais sauvegarder » mais ne le fais pas, les données seront PERDUES au prochain tick. C'est arrivé 4 fois en production.
+3. **JAMAIS traiter candidats un par un** (website_finder → pappers → societe_com → dirigeant → save_lead = 5 iters/candidat = 4 candidats max/tick). À la place : batch \`website_finder\` ×3-5 en parallèle par tour, \`batch_website_check\` ×20 URLs, \`batch_save_leads\` ×25 rows.
+4. **JAMAIS enrichir avant filtrer.** \`google_maps_search\` retourne \`has_website\`, \`website_url\`, \`rating\`. Pré-filtre avec ces champs GRATUITS d'abord. Ne lance PAS \`website_finder\`/\`pappers_search\`/\`website_audit\` sur la liste brute.
+5. **JAMAIS > 2 itérations sur un candidat qui fail.** Tool A échoue → tool B échoue → note l'échec dans scratchpad et passe au suivant. Ne cascade PAS 5 outils sur un seul prospect.
+6. **JAMAIS \`todo_write\` deux fois.** Le serveur le bloque. Utilise \`todo_update\` / \`todo_update_batch\` pour changer les statuts. Si tu reçois « still open todos », appelle \`todo_read\` puis \`todo_update_batch\`.
+7. **JAMAIS boucler « je suis bloqué ».** Sur \`[NON_RETRYABLE]\` : stocke les données dans \`scratchpad_write\`, continue avec les candidats suivants, mentionne le problème 1× dans le message final. Ne fais PAS 3 tours à demander de l'aide.
+8. **JAMAIS ignorer une correction géographique.** Si l'utilisateur dit « nancy », TOUTES les recherches suivantes doivent contenir « Nancy ». Pas Lyon, pas « toute la France ». Écris la ville cible dans le scratchpad dès réception.
 </CAPABILITY:lead-gen-fr>`;
 
 const PACK_EMAIL = `<CAPABILITY:email>
@@ -245,7 +262,10 @@ export interface BuildSystemPromptOptions {
 
 export function buildSystemPrompt(opts: BuildSystemPromptOptions = {}): string {
   const persona = opts.persona?.trim() || BASE_PERSONA;
-  const parts: string[] = [persona, CORE_DISCIPLINE, TOOL_USAGE_HINTS];
+  // Order matters: Gemini has strong recency bias — put capability packs
+  // (with ANTI-PATTERNS, ITERATION BUDGET) after core rules so they're
+  // closest to the agent's working context.
+  const parts: string[] = [persona, TOOL_USAGE_HINTS, CORE_DISCIPLINE];
 
   for (const pack of opts.capabilities || []) {
     if (PACKS[pack]) parts.push(PACKS[pack]);
