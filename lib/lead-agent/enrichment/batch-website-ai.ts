@@ -4,6 +4,7 @@
  * sans Playwright, donc fiable sur Vercel.
  */
 
+import { hasGeminiApiKey } from "@/lib/ai/gemini-keys";
 import { askGeminiText, normalizeUrl } from "../browser";
 
 const BLOCKED_HOSTS = [
@@ -94,7 +95,7 @@ export async function augmentLeadsWithAiWebsites(
     return;
   }
 
-  if (!process.env.GEMINI_API_KEY) {
+  if (!hasGeminiApiKey()) {
     log("[AiWebsites] GEMINI_API_KEY missing — skip AI website fill");
     return;
   }

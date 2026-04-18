@@ -8,6 +8,10 @@ import {
 import chromiumBinary from "@sparticuz/chromium";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { loadPlaywrightCookiesForOrg } from "@/lib/agent/org-browser-credentials";
+import {
+  isGeminiQuotaLikeError,
+  listGeminiApiKeysInOrder,
+} from "@/lib/ai/gemini-keys";
 
 const IS_SERVERLESS =
   !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
@@ -18,15 +22,13 @@ const GEMINI_MODEL = "gemini-2.5-flash";
 // Gemini
 // ---------------------------------------------------------------------------
 
-let genAIInstance: GoogleGenerativeAI | null = null;
-
+/** First key only — prefer askGemini / askGeminiText for automatic fallbacks. */
 export function getGemini() {
-  if (!genAIInstance) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-    genAIInstance = new GoogleGenerativeAI(apiKey);
-  }
-  return genAIInstance.getGenerativeModel({ model: GEMINI_MODEL });
+  const keys = listGeminiApiKeysInOrder();
+  if (!keys.length) throw new Error("GEMINI_API_KEY is not set");
+  return new GoogleGenerativeAI(keys[0]!).getGenerativeModel({
+    model: GEMINI_MODEL,
+  });
 }
 
 function extractJson(raw: string): string {
@@ -98,9 +100,30 @@ export async function askGemini<T>(
 }
 
 export async function askGeminiText(prompt: string): Promise<string> {
-  const model = getGemini();
-  const result = await model.generateContent(prompt);
-  return result.response.text().trim();
+  const keys = listGeminiApiKeysInOrder();
+  if (!keys.length) throw new Error("GEMINI_API_KEY is not set");
+
+  let lastError: Error | null = null;
+  for (let ki = 0; ki < keys.length; ki++) {
+    const key = keys[ki]!;
+    const model = new GoogleGenerativeAI(key).getGenerativeModel({
+      model: GEMINI_MODEL,
+    });
+    try {
+      const result = await model.generateContent(prompt);
+      return result.response.text().trim();
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (isGeminiQuotaLikeError(e)) {
+        console.warn(
+          `[Gemini browser] quota/rate-limit (text) key #${ki + 1}/${keys.length}, trying fallback`,
+        );
+        continue;
+      }
+      throw lastError;
+    }
+  }
+  throw lastError ?? new Error("askGeminiText failed");
 }
 
 // ---------------------------------------------------------------------------

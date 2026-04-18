@@ -15,6 +15,10 @@ import {
   type GenerateContentResult,
 } from "@google/generative-ai";
 import type { ToolDefinition } from "@/lib/agent/types";
+import {
+  isGeminiQuotaLikeError,
+  listGeminiApiKeysInOrder,
+} from "@/lib/ai/gemini-keys";
 
 export type GeminiModel = "gemini-2.5-pro" | "gemini-2.5-flash";
 
@@ -32,19 +36,12 @@ const COST_PER_M_OUTPUT: Record<GeminiModel, number> = {
   "gemini-2.5-flash": 60,
 };
 
-let _client: GoogleGenerativeAI | null = null;
-
-function getClient(): GoogleGenerativeAI {
-  if (!_client) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) throw new Error("GEMINI_API_KEY is not set");
-    _client = new GoogleGenerativeAI(key);
-  }
-  return _client;
-}
-
 export function getModel(model: GeminiModel) {
-  return getClient().getGenerativeModel({ model: MODEL_MAP[model] });
+  const keys = listGeminiApiKeysInOrder();
+  if (!keys.length) throw new Error("GEMINI_API_KEY is not set");
+  return new GoogleGenerativeAI(keys[0]!).getGenerativeModel({
+    model: MODEL_MAP[model],
+  });
 }
 
 export function estimateCostCents(
@@ -140,66 +137,99 @@ export async function callGemini(opts: {
   maxRetries?: number;
 }): Promise<GeminiCallResult> {
   const { model: modelId, systemPrompt, history, tools, maxRetries = 2 } = opts;
-  const model = getModel(modelId);
+  const keys = listGeminiApiKeysInOrder();
+  if (!keys.length) throw new Error("GEMINI_API_KEY is not set");
 
   const functionDeclarations = tools?.length ? toFunctionDeclarations(tools) : undefined;
 
+  const payload = {
+    contents: history,
+    systemInstruction: { role: "user" as const, parts: [{ text: systemPrompt }] },
+    ...(functionDeclarations
+      ? { tools: [{ functionDeclarations }] }
+      : {}),
+  };
+
   let lastError: Error | null = null;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const result: GenerateContentResult = await model.generateContent({
-        contents: history,
-        systemInstruction: { role: "user", parts: [{ text: systemPrompt }] },
-        ...(functionDeclarations ? {
-          tools: [{ functionDeclarations }],
-        } : {}),
-      });
+  for (let ki = 0; ki < keys.length; ki++) {
+    const key = keys[ki]!;
+    const model = new GoogleGenerativeAI(key).getGenerativeModel({
+      model: MODEL_MAP[modelId],
+    });
 
-      const response = result.response;
-      const candidate = response.candidates?.[0];
-      if (!candidate) throw new Error("No candidate in Gemini response");
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result: GenerateContentResult =
+          await model.generateContent(payload);
 
-      const parts: Part[] = candidate.content?.parts || [];
+        const response = result.response;
+        const candidate = response.candidates?.[0];
+        if (!candidate) throw new Error("No candidate in Gemini response");
 
-      let textContent = "";
-      const functionCalls: { name: string; args: Record<string, unknown> }[] = [];
+        const parts: Part[] = candidate.content?.parts || [];
 
-      for (const part of parts) {
-        if ("text" in part && part.text) {
-          textContent += part.text;
+        let textContent = "";
+        const functionCalls: { name: string; args: Record<string, unknown> }[] =
+          [];
+
+        for (const part of parts) {
+          if ("text" in part && part.text) {
+            textContent += part.text;
+          }
+          if ("functionCall" in part && part.functionCall) {
+            functionCalls.push({
+              name: part.functionCall.name,
+              args: (part.functionCall.args as Record<string, unknown>) || {},
+            });
+          }
         }
-        if ("functionCall" in part && part.functionCall) {
-          functionCalls.push({
-            name: part.functionCall.name,
-            args: (part.functionCall.args as Record<string, unknown>) || {},
-          });
+
+        const usage = response.usageMetadata;
+        const inputTokens = usage?.promptTokenCount || 0;
+        const outputTokens = usage?.candidatesTokenCount || 0;
+        const costCents = estimateCostCents(modelId, inputTokens, outputTokens);
+
+        const { thinking, response: cleanText } = parseThinking(textContent);
+
+        return {
+          text: cleanText,
+          thinking,
+          functionCalls,
+          inputTokens,
+          outputTokens,
+          costCents,
+        };
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+        if (isGeminiQuotaLikeError(e)) {
+          const hasNext = ki + 1 < keys.length;
+          console.warn(
+            `[Gemini] quota/rate-limit on key #${ki + 1}/${keys.length}` +
+              (hasNext ? " — trying next distinct key from env" : " — no further keys"),
+          );
+          if (keys.length === 1) {
+            console.warn(
+              "[Gemini] Only one distinct API key loaded (check GEMINI_API_KEY_FALLBACK / FALLBACK_1…8 / FALLBACKS; duplicate values are deduped)",
+            );
+          }
+          break;
         }
-      }
-
-      const usage = response.usageMetadata;
-      const inputTokens = usage?.promptTokenCount || 0;
-      const outputTokens = usage?.candidatesTokenCount || 0;
-      const costCents = estimateCostCents(modelId, inputTokens, outputTokens);
-
-      const { thinking, response: cleanText } = parseThinking(textContent);
-
-      return {
-        text: cleanText,
-        thinking,
-        functionCalls,
-        inputTokens,
-        outputTokens,
-        costCents,
-      };
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if (attempt < maxRetries) {
-        const delay = 1000 * Math.pow(2, attempt);
-        await new Promise((r) => setTimeout(r, delay));
+        if (attempt < maxRetries) {
+          const delay = 1000 * Math.pow(2, attempt);
+          await new Promise((r) => setTimeout(r, delay));
+        } else {
+          break;
+        }
       }
     }
   }
 
-  throw lastError || new Error("callGemini failed");
+  const n = keys.length;
+  const hint =
+    n <= 1
+      ? ` [Gemini: ${n} distinct API key(s) in env — add another key or fix dedup if you expected fallbacks]`
+      : ` [Gemini: exhausted ${n} distinct API key(s) from env; last error above]`;
+  const base = lastError?.message || "callGemini failed";
+  throw new Error(base + hint, lastError ? { cause: lastError } : undefined);
 }

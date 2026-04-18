@@ -1,15 +1,14 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  hasGeminiApiKey,
+  isGeminiQuotaLikeError,
+  listGeminiApiKeysInOrder,
+} from "@/lib/ai/gemini-keys";
 
 const MODEL = "gemini-2.5-flash";
 /** Twilio inline fetch limit vs Gemini / serverless — stay conservative */
 const MAX_AUDIO_BYTES = 18 * 1024 * 1024;
-
-function getGeminiModel() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-  return new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: MODEL });
-}
 
 /**
  * Twilio RecordingUrl is a base URL; append .mp3 for the audio file.
@@ -48,8 +47,7 @@ async function fetchTwilioRecordingBuffer(
 export async function transcribeTwilioRecording(
   recordingUrl: string
 ): Promise<string | null> {
-  const model = getGeminiModel();
-  if (!model) return null;
+  if (!hasGeminiApiKey()) return null;
 
   const fetched = await fetchTwilioRecordingBuffer(recordingUrl);
   if (!fetched) return null;
@@ -60,7 +58,7 @@ export async function transcribeTwilioRecording(
     "Si plusieurs personnes parlent, indique les tours de parole si c'est clair. " +
     "Réponds uniquement par la transcription, sans titre ni préambule.";
 
-  const result = await model.generateContent([
+  const parts = [
     {
       inlineData: {
         mimeType: fetched.mimeType.includes("wav") ? "audio/wav" : "audio/mpeg",
@@ -68,10 +66,33 @@ export async function transcribeTwilioRecording(
       },
     },
     { text: prompt },
-  ]);
+  ];
 
-  const text = result.response.text()?.trim();
-  return text || null;
+  const keys = listGeminiApiKeysInOrder();
+  let lastErr: Error | null = null;
+  for (let ki = 0; ki < keys.length; ki++) {
+    const key = keys[ki]!;
+    try {
+      const model = new GoogleGenerativeAI(key).getGenerativeModel({
+        model: MODEL,
+      });
+      const result = await model.generateContent(parts);
+      const text = result.response.text()?.trim();
+      return text || null;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      if (isGeminiQuotaLikeError(e)) {
+        console.warn(
+          `[transcribe] Gemini quota on key #${ki + 1}/${keys.length}, trying fallback`,
+        );
+        continue;
+      }
+      console.error("[transcribe] Gemini error", lastErr.message);
+      return null;
+    }
+  }
+  console.error("[transcribe] all keys failed", lastErr?.message);
+  return null;
 }
 
 export async function saveTranscriptionForCallSid(

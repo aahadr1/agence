@@ -182,11 +182,13 @@ async function resolveTodoId(
   }
 
   // 2) Pure integer → interpret as 1-based index (position). Also handle
-  //    prefixes like "#3" or "todo 2".
+  //    prefixes like "#3" or "todo 2". Positions in DB are 0-based, so
+  //    user's "1" → position 0. Try (pos-1) first (1-based→0-based),
+  //    then raw pos as fallback for legacy 0-based callers.
   const intMatch = key.match(/^#?\s*(?:todo\s*)?(\d{1,3})$/i);
   if (intMatch) {
     const pos = parseInt(intMatch[1], 10);
-    for (const p of [pos, pos - 1]) {
+    for (const p of [pos - 1, pos]) {
       const { data } = await db
         .from("agent_todos")
         .select("id, content, status, position")

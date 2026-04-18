@@ -1,3 +1,4 @@
+import { hasGeminiApiKey } from "@/lib/ai/gemini-keys";
 import { FALLBACK_ORG_ID } from "@/lib/org/resolve-org";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
     console.error("[telephony/recording]", e);
   }
 
-  if (recordingUrl && process.env.GEMINI_API_KEY) {
+  if (recordingUrl && hasGeminiApiKey()) {
     after(async () => {
       try {
         const transcript = await transcribeTwilioRecording(recordingUrl);

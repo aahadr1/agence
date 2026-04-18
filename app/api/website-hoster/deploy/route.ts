@@ -1,4 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
+import {
+  hasGeminiApiKey,
+  isGeminiQuotaLikeError,
+  listGeminiApiKeysInOrder,
+} from "@/lib/ai/gemini-keys";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import JSZip from "jszip";
 import { NextResponse } from "next/server";
@@ -185,8 +190,7 @@ function heuristicAnalysis(files: UploadedEntry[]): Analysis {
 }
 
 async function analyzeWithGemini(files: UploadedEntry[], fallback: Analysis): Promise<Analysis> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return fallback;
+  if (!hasGeminiApiKey()) return fallback;
 
   const packageEntry = files.find((f) => f.path.endsWith("package.json"));
   const packageJsonPreview = packageEntry
@@ -225,39 +229,50 @@ package.json (optional):
 ${packageJsonPreview || "none"}
 `;
 
-  try {
-    const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
-      model: "gemini-2.5-flash",
-    });
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+  const keys = listGeminiApiKeysInOrder();
+  for (let ki = 0; ki < keys.length; ki++) {
+    const key = keys[ki]!;
+    try {
+      const model = new GoogleGenerativeAI(key).getGenerativeModel({
+        model: "gemini-2.5-flash",
+      });
+      const result = await model.generateContent(prompt);
+      const text = result.response.text().trim();
 
-    const jsonStart = text.indexOf("{");
-    const jsonEnd = text.lastIndexOf("}");
-    if (jsonStart === -1 || jsonEnd <= jsonStart) return fallback;
-    const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as {
-      framework?: string | null;
-      installCommand?: string | null;
-      buildCommand?: string | null;
-      outputDirectory?: string | null;
-      rootDirectory?: string | null;
-      reasoning?: string;
-    };
+      const jsonStart = text.indexOf("{");
+      const jsonEnd = text.lastIndexOf("}");
+      if (jsonStart === -1 || jsonEnd <= jsonStart) return fallback;
+      const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as {
+        framework?: string | null;
+        installCommand?: string | null;
+        buildCommand?: string | null;
+        outputDirectory?: string | null;
+        rootDirectory?: string | null;
+        reasoning?: string;
+      };
 
-    const normalized: Analysis = {
-      framework: parsed.framework ?? fallback.framework,
-      installCommand: parsed.installCommand || undefined,
-      buildCommand: parsed.buildCommand || undefined,
-      outputDirectory: parsed.outputDirectory || undefined,
-      rootDirectory: parsed.rootDirectory || undefined,
-      reasoning: parsed.reasoning || fallback.reasoning,
-    };
+      const normalized: Analysis = {
+        framework: parsed.framework ?? fallback.framework,
+        installCommand: parsed.installCommand || undefined,
+        buildCommand: parsed.buildCommand || undefined,
+        outputDirectory: parsed.outputDirectory || undefined,
+        rootDirectory: parsed.rootDirectory || undefined,
+        reasoning: parsed.reasoning || fallback.reasoning,
+      };
 
-    return normalized;
-  } catch (error) {
-    console.warn("[website-hoster] AI analysis failed, using heuristics", error);
-    return fallback;
+      return normalized;
+    } catch (error) {
+      if (isGeminiQuotaLikeError(error)) {
+        console.warn(
+          `[website-hoster] Gemini quota on key #${ki + 1}/${keys.length}, trying fallback`,
+        );
+        continue;
+      }
+      console.warn("[website-hoster] AI analysis failed, using heuristics", error);
+      return fallback;
+    }
   }
+  return fallback;
 }
 
 async function extractEntries(files: File[]): Promise<UploadedEntry[]> {
