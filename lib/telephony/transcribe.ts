@@ -2,8 +2,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   hasGeminiApiKey,
-  isGeminiQuotaLikeError,
   listGeminiApiKeysInOrder,
+  shouldRotateGeminiApiKey,
 } from "@/lib/ai/gemini-keys";
 
 const MODEL = "gemini-2.5-flash";
@@ -81,7 +81,7 @@ export async function transcribeTwilioRecording(
       return text || null;
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
-      if (isGeminiQuotaLikeError(e)) {
+      if (shouldRotateGeminiApiKey(e)) {
         console.warn(
           `[transcribe] Gemini quota on key #${ki + 1}/${keys.length}, trying fallback`,
         );

@@ -107,3 +107,29 @@ export function isGeminiQuotaLikeError(e: unknown): boolean {
 
   return false;
 }
+
+/**
+ * True when the **same** request might work with another `GEMINI_*` key
+ * (different Google Cloud project / billing). Retrying the same key is useless.
+ *
+ * Covers: quota/RPM, API not enabled for project (`SERVICE_DISABLED`),
+ * invalid API key string, etc. Does **not** cover model refusals / safety blocks
+ * where every key would fail the same way — callers still exhaust keys then throw.
+ */
+export function shouldRotateGeminiApiKey(e: unknown): boolean {
+  if (isGeminiQuotaLikeError(e)) return true;
+  const blob = collectGeminiErrorBlob(e);
+
+  if (blob.includes("api_key_invalid")) return true;
+  if (blob.includes("invalid api key")) return true;
+  if (blob.includes("api key not valid")) return true;
+
+  if (blob.includes("service_disabled")) return true;
+  if (blob.includes("has not been used") && blob.includes("gemini")) return true;
+  if (blob.includes("api has not been")) return true;
+
+  if (blob.includes("permission_denied") && blob.includes("generativelanguage"))
+    return true;
+
+  return false;
+}

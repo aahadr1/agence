@@ -9,8 +9,8 @@ import chromiumBinary from "@sparticuz/chromium";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { loadPlaywrightCookiesForOrg } from "@/lib/agent/org-browser-credentials";
 import {
-  isGeminiQuotaLikeError,
   listGeminiApiKeysInOrder,
+  shouldRotateGeminiApiKey,
 } from "@/lib/ai/gemini-keys";
 
 const IS_SERVERLESS =
@@ -114,9 +114,9 @@ export async function askGeminiText(prompt: string): Promise<string> {
       return result.response.text().trim();
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
-      if (isGeminiQuotaLikeError(e)) {
+      if (shouldRotateGeminiApiKey(e)) {
         console.warn(
-          `[Gemini browser] quota/rate-limit (text) key #${ki + 1}/${keys.length}, trying fallback`,
+          `[Gemini browser] key #${ki + 1}/${keys.length} rejected — trying next from env`,
         );
         continue;
       }

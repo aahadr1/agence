@@ -1,8 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import {
   hasGeminiApiKey,
-  isGeminiQuotaLikeError,
   listGeminiApiKeysInOrder,
+  shouldRotateGeminiApiKey,
 } from "@/lib/ai/gemini-keys";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import JSZip from "jszip";
@@ -262,7 +262,7 @@ ${packageJsonPreview || "none"}
 
       return normalized;
     } catch (error) {
-      if (isGeminiQuotaLikeError(error)) {
+      if (shouldRotateGeminiApiKey(error)) {
         console.warn(
           `[website-hoster] Gemini quota on key #${ki + 1}/${keys.length}, trying fallback`,
         );

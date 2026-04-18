@@ -16,8 +16,8 @@ import {
 } from "@google/generative-ai";
 import type { ToolDefinition } from "@/lib/agent/types";
 import {
-  isGeminiQuotaLikeError,
   listGeminiApiKeysInOrder,
+  shouldRotateGeminiApiKey,
 } from "@/lib/ai/gemini-keys";
 
 export type GeminiModel = "gemini-2.5-pro" | "gemini-2.5-flash";
@@ -202,10 +202,10 @@ export async function callGemini(opts: {
         };
       } catch (e) {
         lastError = e instanceof Error ? e : new Error(String(e));
-        if (isGeminiQuotaLikeError(e)) {
+        if (shouldRotateGeminiApiKey(e)) {
           const hasNext = ki + 1 < keys.length;
           console.warn(
-            `[Gemini] quota/rate-limit on key #${ki + 1}/${keys.length}` +
+            `[Gemini] key #${ki + 1}/${keys.length} rejected (quota / disabled API / invalid key — see message)` +
               (hasNext ? " — trying next distinct key from env" : " — no further keys"),
           );
           if (keys.length === 1) {
