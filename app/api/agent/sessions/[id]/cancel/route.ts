@@ -71,12 +71,27 @@ export async function POST(
     .contains("enrichment_data", { agent_session_id: sessionId });
 
   const n = count ?? 0;
+
+  let snapLine = "";
+  try {
+    const { count: snapCount } = await service
+      .from("agent_discovery_snapshots")
+      .select("id", { count: "exact", head: true })
+      .eq("session_id", sessionId);
+    const snaps = snapCount ?? 0;
+    if (snaps > 0) {
+      snapLine = ` Lots Maps persistés (serveur) : ${snaps}.`;
+    }
+  } catch {
+    /* table may not exist before migration */
+  }
+
   await service.from("agent_messages").insert({
     session_id: sessionId,
     role: "assistant",
     content:
-      `Session arrêtée sur ta demande. Prospects déjà enregistrés pour cette session : ${n}. ` +
-      `Les messages restent visibles ci-dessus.`,
+      `Session arrêtée sur ta demande. Prospects CRM enregistrés pour cette session : ${n}.${snapLine} ` +
+      `Les messages utiles restent visibles ci-dessus.`,
   });
 
   return NextResponse.json({ ok: true, status: "cancelled" });

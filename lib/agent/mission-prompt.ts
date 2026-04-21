@@ -1,5 +1,9 @@
 import { getAgentDb } from "./tools/_db";
-import { parseLeadTargetFromUserPrompt } from "./lead-target";
+import {
+  fetchLeadTargetForSession,
+  parseLeadTargetFromText,
+} from "@/lib/agent/lead-target";
+import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
 import type { AgentMessage } from "@/lib/ai/llm-router";
 import type { CapabilityPack } from "./types";
 
@@ -20,20 +24,32 @@ export async function countLeadsForAgentSession(
   return count ?? 0;
 }
 
+/**
+ * @param explicitUserPrompt — pass a string (possibly empty) for legacy `missions`
+ *   runs; omit the argument to load the brief from `agent_messages` for this
+ *   **agent** session id.
+ */
 export async function buildLeadGenMissionContextAppendix(
   orgId: string,
   sessionId: string,
   packs: CapabilityPack[],
-  userPrompt: string,
+  explicitUserPrompt?: string | null,
 ): Promise<string | null> {
   if (!packs.includes("lead-gen-fr")) return null;
-  const prompt = userPrompt || "";
-  const target = parseLeadTargetFromUserPrompt(prompt);
+  const useInlineMissionPrompt = explicitUserPrompt !== undefined;
+  const prompt = useInlineMissionPrompt
+    ? (explicitUserPrompt || "").trim() ||
+      "(aucun texte de mission — compléter le brief)"
+    : await fetchActiveUserBrief(sessionId);
+  const target = useInlineMissionPrompt
+    ? parseLeadTargetFromText(explicitUserPrompt || "")
+    : await fetchLeadTargetForSession(sessionId);
   const saved = await countLeadsForAgentSession(orgId, sessionId);
-  const maxPool = target != null ? Math.min(60, Math.max(30, target * 3)) : 36;
+  const maxPool =
+    target != null ? Math.min(60, Math.max(30, target * 3)) : 36;
   const lines: string[] = [
     "<MISSION_CONTEXT>",
-    `Brief (extrait) : ${prompt.slice(0, 500)}${prompt.length > 500 ? "…" : ""}`,
+    `Brief (extrait) : ${prompt.slice(0, 800)}${prompt.length > 800 ? "…" : ""}`,
     `Prospects déjà sauvegardés (CRM, cette session) : ${saved}.`,
   ];
   if (target != null) {

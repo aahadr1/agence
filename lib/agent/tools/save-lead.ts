@@ -108,6 +108,31 @@ registerTool(
       leadData.enrichment_data = enrichment;
     }
 
+    if (
+      !args.lead_id &&
+      context.capabilityPacks?.includes("lead-gen-fr")
+    ) {
+      const phone = String(args.phone || "").trim();
+      const email = String(args.email || "").trim();
+      const op = String(args.owner_phone || "").trim();
+      const oe = String(args.owner_email || "").trim();
+      const owner = String(args.owner_name || "").trim();
+      const prov = String(args.data_provenance || "").trim();
+      const siren = String(args.siren || "").trim();
+      const hasContact =
+        phone.length > 0 || email.length > 0 || op.length > 0 || oe.length > 0;
+      const hasOwnerOrLegal = owner.length > 0 || siren.length > 0;
+      if (!hasContact || !hasOwnerOrLegal || prov.length < 8) {
+        throw new Error(
+          "save_lead (lead-gen-fr) : fiche refusée — il faut au minimum : " +
+            "(1) un **contact** (téléphone ou email établissement ou dirigeant), " +
+            "(2) **dirigeant** (owner_name) **ou** SIREN vérifiable, " +
+            "(3) **data_provenance** (≥8 caractères) indiquant la source des faits. " +
+            "Complète puis réessaie.",
+        );
+      }
+    }
+
     if (args.lead_id) {
       const { data, error } = await db
         .from("leads")

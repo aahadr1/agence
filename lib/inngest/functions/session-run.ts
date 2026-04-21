@@ -13,6 +13,7 @@
 
 import { inngest } from "../client";
 import type { AgentContext, AgentModel, CapabilityPack } from "@/lib/agent/types";
+import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 function getDb(): SupabaseClient {
@@ -87,13 +88,13 @@ export async function runSession(
     inputTokensSoFar: 0,
   };
 
-  const userMessage = opts.userMessage ?? (await fetchInitialPrompt(db, sessionId));
+  const userMessage =
+    opts.userMessage ?? (await fetchActiveUserBrief(sessionId));
 
   const missionCtx = await buildLeadGenMissionContextAppendix(
     session.org_id,
     sessionId,
     packs,
-    userMessage,
   );
   if (missionCtx) systemPrompt = `${systemPrompt}\n\n${missionCtx}`;
 
@@ -105,6 +106,14 @@ export async function runSession(
       maxIterations: 40,
       reflectEveryN: packs.includes("lead-gen-fr") ? 4 : 5,
       reflectionLeadGenDepth: packs.includes("lead-gen-fr"),
+      shouldAbort: async () => {
+        const { data: row } = await db
+          .from("agent_sessions")
+          .select("status")
+          .eq("id", sessionId)
+          .maybeSingle();
+        return row?.status === "cancelled";
+      },
       onThinking: async (text) => {
         await db.from("agent_messages").insert({
           session_id: sessionId,
@@ -165,7 +174,9 @@ export async function runSession(
           ? "paused"
           : result.status === "max_iterations"
             ? "paused"
-            : "completed";
+            : result.status === "aborted"
+              ? "cancelled"
+              : "completed";
 
   await db
     .from("agent_sessions")
@@ -182,21 +193,6 @@ export async function runSession(
     costCents: result.totalCostCents,
     approvalId: result.pendingApprovalId,
   };
-}
-
-async function fetchInitialPrompt(
-  db: SupabaseClient,
-  sessionId: string,
-): Promise<string> {
-  const { data } = await db
-    .from("agent_messages")
-    .select("content")
-    .eq("session_id", sessionId)
-    .eq("role", "user")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  return data?.content || "Hello";
 }
 
 // ---------------------------------------------------------------------------

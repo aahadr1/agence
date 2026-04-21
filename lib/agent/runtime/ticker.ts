@@ -27,7 +27,8 @@ import { acquireLock, releaseLock, type SessionLock } from "./lock";
 import { withRetry, isLikelyTransient, sleep } from "./retry";
 import { scheduleNextTick } from "./schedule";
 import { getAgentDb } from "@/lib/agent/tools/_db";
-import { parseLeadTargetFromUserPrompt } from "@/lib/agent/lead-target";
+import { fetchLeadTargetForSession } from "@/lib/agent/lead-target";
+import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
 import {
   buildContinuationUserMessage,
   buildLeadGenMissionContextAppendix,
@@ -65,10 +66,9 @@ const MAX_TICK_RETRIES = 3;
 async function leadGenProgressSummaryFr(
   orgId: string,
   sessionId: string,
-  userPrompt: string,
 ): Promise<string> {
   const saved = await countLeadsForAgentSession(orgId, sessionId);
-  const target = parseLeadTargetFromUserPrompt(userPrompt);
+  const target = await fetchLeadTargetForSession(sessionId);
   if (target != null) {
     const miss = Math.max(0, target - saved);
     return (
@@ -78,17 +78,16 @@ async function leadGenProgressSummaryFr(
   }
   return (
     `Avancement CRM : ${saved} prospect(s) en base. ` +
-      "Sans nombre dans la consigne initiale, livre au moins 1 fiche vérifiable ou précise pourquoi ce n’est pas possible."
+      "Sans nombre explicite dans **aucun** message utilisateur, livre au moins 1 fiche vérifiable ou précise pourquoi ce n’est pas possible."
   );
 }
 
 async function leadGenDeliverableStillIncomplete(
   orgId: string,
   sessionId: string,
-  userPrompt: string,
 ): Promise<boolean> {
   const saved = await countLeadsForAgentSession(orgId, sessionId);
-  const target = parseLeadTargetFromUserPrompt(userPrompt);
+  const target = await fetchLeadTargetForSession(sessionId);
   if (target != null) return saved < target;
   return saved < 1;
 }
@@ -294,12 +293,10 @@ async function runOneTickLocked(
       orgId: session.org_id,
       scopes: packs,
     });
-    const firstUserPrompt = (await fetchInitialPrompt(sessionId)) || "";
     const missionCtx = await buildLeadGenMissionContextAppendix(
       session.org_id,
       sessionId,
       packs,
-      firstUserPrompt,
     );
     if (missionCtx) systemPrompt = `${systemPrompt}\n\n${missionCtx}`;
 
@@ -315,9 +312,8 @@ async function runOneTickLocked(
     const tools: ToolDefinition[] = getToolDefinitions(toolNames);
 
     // Resume: load prior history from DB so the LLM sees everything so far.
-    // Do NOT pass fetchInitialPrompt again on tick 1 — it duplicates the first
-    // user row already returned by loadHistory() and can push later user
-    // replies ("nancy") away from the model's working focus.
+    // `loadHistory()` already includes all user rows; follow-ups are reinforced
+    // via `buildUserFollowUpReinforcement` so the model keeps the latest scope.
     const priorHistoryLoaded = await loadHistory(sessionId);
     const followUpReinforcement =
       await buildUserFollowUpReinforcement(sessionId);
@@ -347,6 +343,15 @@ async function runOneTickLocked(
     };
 
     if (sessionPacksForBudget.includes("lead-gen-fr")) {
+      const nTarget = await fetchLeadTargetForSession(sessionId);
+      if (nTarget != null) {
+        context.leadGenDiscoveryMinResults = Math.min(
+          60,
+          Math.max(30, nTarget * 3),
+        );
+      } else {
+        context.leadGenDiscoveryMinResults = 30;
+      }
       try {
         const { ensureAgentLeadSearchId } = await import(
           "@/lib/agent/lead-search-stub"
@@ -365,20 +370,11 @@ async function runOneTickLocked(
         );
       }
       context.leadGenFinalizeGate = async () => {
-        const userPrompt = (await fetchInitialPrompt(sessionId)) || "";
         if (
-          await leadGenDeliverableStillIncomplete(
-            session.org_id,
-            sessionId,
-            userPrompt,
-          )
+          await leadGenDeliverableStillIncomplete(session.org_id, sessionId)
         ) {
-          const hint = userPrompt.trim()
-            ? await leadGenProgressSummaryFr(
-                session.org_id,
-                sessionId,
-                userPrompt,
-              )
+          const hint = (await fetchActiveUserBrief(sessionId)).trim()
+            ? await leadGenProgressSummaryFr(session.org_id, sessionId)
             : "Objectif CRM : au moins 1 lead sauvegardé requis pour clôturer.";
           return {
             ok: false,
@@ -402,6 +398,14 @@ async function runOneTickLocked(
         reflectionLeadGenDepth: sessionPacksForBudget.includes("lead-gen-fr"),
         sessionHints: {
           userFollowUpAppended: Boolean(followUpReinforcement),
+        },
+        shouldAbort: async () => {
+          const { data: row } = await db
+            .from("agent_sessions")
+            .select("status")
+            .eq("id", sessionId)
+            .maybeSingle();
+          return row?.status === "cancelled";
         },
         onThinking: async (text) => {
           await db.from("agent_messages").insert({
@@ -459,8 +463,7 @@ async function runOneTickLocked(
                 session.org_id,
                 sessionId,
               );
-              const prompt = await fetchInitialPrompt(sessionId);
-              const target = parseLeadTargetFromUserPrompt(prompt);
+              const target = await fetchLeadTargetForSession(sessionId);
               if (target != null) {
                 return saved >= target;
               }
@@ -486,15 +489,11 @@ async function runOneTickLocked(
         checkOpenWork: async () => {
           const leadGen = sessionPacksForBudget.includes("lead-gen-fr");
           const userPrompt = leadGen
-            ? (await fetchInitialPrompt(sessionId)) || ""
+            ? (await fetchActiveUserBrief(sessionId)) || ""
             : "";
           const progressFr =
             leadGen && userPrompt.trim()
-              ? await leadGenProgressSummaryFr(
-                  session.org_id,
-                  sessionId,
-                  userPrompt,
-                )
+              ? await leadGenProgressSummaryFr(session.org_id, sessionId)
               : "";
 
           const { data: todos } = await db
@@ -540,7 +539,6 @@ async function runOneTickLocked(
               (await leadGenDeliverableStillIncomplete(
                 session.org_id,
                 sessionId,
-                userPrompt,
               ))
             ) {
               return {
@@ -642,6 +640,9 @@ async function runOneTickLocked(
         // Hit per-tick iteration cap; more work likely left — chain another tick.
         endStatus = "yielded";
         willContinue = true;
+      } else if (raced.status === "aborted") {
+        endStatus = "cancelled";
+        willContinue = false;
       }
     }
 
@@ -657,15 +658,17 @@ async function runOneTickLocked(
     const derivedStatus =
       latestRow?.status === "cancelled"
         ? "cancelled"
-        : endStatus === "yielded"
-          ? "running"
-          : endStatus === "completed"
-            ? "completed"
-            : endStatus === "awaiting_approval"
-              ? "awaiting_approval"
-              : endStatus === "paused"
-                ? "paused"
-                : "running";
+        : endStatus === "cancelled"
+          ? "cancelled"
+          : endStatus === "yielded"
+            ? "running"
+            : endStatus === "completed"
+              ? "completed"
+              : endStatus === "awaiting_approval"
+                ? "awaiting_approval"
+                : endStatus === "paused"
+                  ? "paused"
+                  : "running";
 
     await db
       .from("agent_sessions")
@@ -887,19 +890,6 @@ async function loadHistory(sessionId: string): Promise<AgentMessage[]> {
     }
   }
   return messages;
-}
-
-async function fetchInitialPrompt(sessionId: string): Promise<string> {
-  const db = getAgentDb();
-  const { data } = await db
-    .from("agent_messages")
-    .select("content")
-    .eq("session_id", sessionId)
-    .eq("role", "user")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  return data?.content || "Hello";
 }
 
 // -----------------------------------------------------------------------------

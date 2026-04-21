@@ -140,6 +140,7 @@ export const missionExecute = inngest.createFunction(
         agentStatus === "awaiting_user_input" ||
         agentStatus === "awaiting_approval" ||
         agentStatus === "budget_exhausted" ||
+        agentStatus === "aborted" ||
         (typeof result.finalMessage === "string" &&
           result.finalMessage.toLowerCase().includes("paused"));
       const status = paused ? "paused" : "completed";

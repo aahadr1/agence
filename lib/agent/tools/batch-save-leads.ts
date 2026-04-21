@@ -56,6 +56,7 @@ registerTool(
       "notes",
       "confidence_score",
       "website_presence",
+      "data_provenance",
     ] as const;
 
     let searchId = context.leadSearchId;
@@ -85,6 +86,23 @@ registerTool(
         continue;
       }
 
+      if (context.capabilityPacks?.includes("lead-gen-fr")) {
+        const phone = String(row.phone || "").trim();
+        const email = String(row.email || "").trim();
+        const op = String(row.owner_phone || "").trim();
+        const oe = String(row.owner_email || "").trim();
+        const owner = String(row.owner_name || "").trim();
+        const prov = String(row.data_provenance || "").trim();
+        const siren = String(row.siren || "").trim();
+        const hasContact =
+          phone.length > 0 || email.length > 0 || op.length > 0 || oe.length > 0;
+        const hasOwnerOrLegal = owner.length > 0 || siren.length > 0;
+        if (!hasContact || !hasOwnerOrLegal || prov.length < 8) {
+          skipped.push(`${name} (lead-gen: contact+dirigeant/SIREN+provenance requis)`);
+          continue;
+        }
+      }
+
       const enrichment: Record<string, unknown> = {
         agent_session_id: context.sessionId,
       };
@@ -105,9 +123,17 @@ registerTool(
 
       for (const field of optionalFields) {
         if (field === "website_presence") continue;
+        if (field === "data_provenance") continue;
         if (row[field] !== undefined && row[field] !== null) {
           leadData[field] = row[field];
         }
+      }
+      const prov = String(row.data_provenance || "").trim();
+      if (prov) {
+        const prevNotes = String(leadData.notes || "").trim();
+        leadData.notes = prevNotes
+          ? `${prevNotes}\n\n[Sources] ${prov}`
+          : `[Sources] ${prov}`;
       }
       if (leadData.website_url) leadData.has_website = true;
       rows.push(leadData);

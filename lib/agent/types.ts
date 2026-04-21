@@ -87,6 +87,11 @@ export interface AgentContext {
   capabilityPacks: string[];
   /** Tokens so far this run (for context compaction decisions) */
   inputTokensSoFar: number;
+  /**
+   * When set (lead-gen ticks), `google_maps_search` bumps `max_results` to at
+   * least this value so discovery pools are large enough vs CRM target.
+   */
+  leadGenDiscoveryMinResults?: number;
 }
 
 export type AgentModel =
@@ -161,6 +166,11 @@ export interface AgentConfig {
     /** True when this tick appended a user follow-up reinforcement message */
     userFollowUpAppended?: boolean;
   };
+  /**
+   * If true (e.g. session cancelled in DB), the loop stops before the next
+   * LLM / tool batch — hard cancel inside a tick.
+   */
+  shouldAbort?: () => Promise<boolean>;
 }
 
 export type SubAgentRole =

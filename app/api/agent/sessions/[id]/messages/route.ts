@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { userMessageLikelyResetsScope } from "@/lib/agent/active-intent";
 import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
 
 export const runtime = "nodejs";
@@ -29,6 +30,17 @@ export async function POST(
   });
   if (insErr)
     return NextResponse.json({ error: insErr.message }, { status: 500 });
+
+  if (userMessageLikelyResetsScope(body.content.trim())) {
+    await service
+      .from("agent_todos")
+      .update({
+        status: "cancelled",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("session_id", id)
+      .in("status", ["pending", "in_progress"]);
+  }
 
   // If the session was in a terminal pause (completed / awaiting_approval /
   // paused), bump it back to running so the ticker picks it up.

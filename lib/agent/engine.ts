@@ -38,7 +38,13 @@ export interface RunAgentResult {
   totalOutputTokens: number;
   iterations: number;
   toolCalls: ToolResult[];
-  status: "completed" | "awaiting_approval" | "awaiting_user_input" | "budget_exhausted" | "max_iterations";
+  status:
+    | "completed"
+    | "awaiting_approval"
+    | "awaiting_user_input"
+    | "budget_exhausted"
+    | "max_iterations"
+    | "aborted";
   pendingApprovalId?: string;
 }
 
@@ -137,6 +143,11 @@ export async function runAgentLoop(
   for (let i = 0; i < config.maxIterations; i++) {
     context.iterationCount = i + 1;
 
+    if (config.shouldAbort && (await config.shouldAbort())) {
+      finalMessage = "Session arrêtée.";
+      return buildResult(finalMessage, "aborted");
+    }
+
     // ---- Budget guard ----
     if (
       context.budgetCapCents &&
@@ -168,12 +179,20 @@ export async function runAgentLoop(
       (i - state.lastReflectionIter) >= reflectEveryN;
     const errorReflect = state.consecutiveErrors >= REFLECT_AFTER_ERRORS;
     if (shouldReflect || errorReflect) {
+      if (config.shouldAbort && (await config.shouldAbort())) {
+        finalMessage = "Session arrêtée.";
+        return buildResult(finalMessage, "aborted");
+      }
       await runForcedReflection(state, config, context, errorReflect);
       state.lastReflectionIter = i;
       state.consecutiveErrors = 0;
     }
 
     // ---- LLM call ----
+    if (config.shouldAbort && (await config.shouldAbort())) {
+      finalMessage = "Session arrêtée.";
+      return buildResult(finalMessage, "aborted");
+    }
     const result = await callLLM({
       model: config.model,
       systemPrompt: config.systemPrompt,
@@ -420,6 +439,10 @@ export async function runAgentLoop(
     }
 
     // ---- Execute tool calls ----
+    if (config.shouldAbort && (await config.shouldAbort())) {
+      finalMessage = "Session arrêtée.";
+      return buildResult(finalMessage, "aborted");
+    }
     const toolResultParts: AgentMessagePart[] = [];
     let approvalRequestId: string | undefined;
 

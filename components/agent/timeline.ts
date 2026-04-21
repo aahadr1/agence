@@ -16,12 +16,17 @@ import type {
  *   renderer can surface suggested options.
  * - `thinking` rows render as collapsible inline blocks.
  */
+export type TimelineVisibility = "customer" | "debug";
+
 export function buildTimeline(
   messages: Message[],
   reflections: Reflection[],
-  options?: { includeReflections?: boolean },
+  options?: { includeReflections?: boolean; visibility?: TimelineVisibility },
 ): TimelineEvent[] {
-  const includeReflections = options?.includeReflections === true;
+  const includeReflections =
+    options?.includeReflections === true ||
+    options?.visibility === "debug";
+  const customer = options?.visibility !== "debug";
   const events: TimelineEvent[] = [];
 
   for (const m of messages) {
@@ -81,7 +86,7 @@ export function buildTimeline(
         break;
 
       case "thinking":
-        if (m.content?.trim()) {
+        if (!customer && m.content?.trim()) {
           events.push({
             kind: "thinking",
             id: m.id,
@@ -94,13 +99,15 @@ export function buildTimeline(
       case "system": {
         const meta = (m.metadata || {}) as Record<string, unknown>;
         if (meta.nudge) {
-          events.push({
-            kind: "nudge",
-            id: m.id,
-            content: m.content,
-            at: m.created_at,
-            reason: (meta.reason as string) || "course_correction",
-          });
+          if (!customer) {
+            events.push({
+              kind: "nudge",
+              id: m.id,
+              content: m.content,
+              at: m.created_at,
+              reason: (meta.reason as string) || "course_correction",
+            });
+          }
           break;
         }
         // Tool traces: only show the result rows (with `duration_ms` or
@@ -108,7 +115,11 @@ export function buildTimeline(
         const hasResult =
           typeof meta.duration_ms !== "undefined" ||
           typeof meta.error !== "undefined";
-        if ((meta.tool || meta.kind === "tool") && hasResult) {
+        if (
+          !customer &&
+          (meta.tool || meta.kind === "tool") &&
+          hasResult
+        ) {
           const status = meta.error ? "error" : "ok";
           events.push({
             kind: "tool",

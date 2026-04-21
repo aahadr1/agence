@@ -2,6 +2,7 @@ import { registerTool } from "../tool-registry";
 import { scrapeGoogleMaps } from "@/lib/lead-agent/sources/google-maps";
 import { withBrowserSession } from "@/lib/lead-agent/browser";
 import type { AgentContext } from "../types";
+import { getAgentDb } from "./_db";
 
 registerTool(
   {
@@ -41,11 +42,18 @@ registerTool(
       const floor = Math.min(60, Math.ceil(rawTarget * 3));
       maxResults = Math.min(60, Math.max(maxResults, floor));
     }
+    const minFromRuntime = context.leadGenDiscoveryMinResults;
+    if (typeof minFromRuntime === "number" && minFromRuntime > 0) {
+      maxResults = Math.min(
+        60,
+        Math.max(maxResults, Math.min(60, Math.floor(minFromRuntime))),
+      );
+    }
     const maxScrolls = Math.min(14, Math.max(4, Math.ceil(maxResults / 5)));
     const deadline = Date.now() + 120_000;
     const primaryQuery = args.query as string;
 
-    return withBrowserSession(
+    const payload = await withBrowserSession(
       async (session) => {
         const first = await scrapeGoogleMaps(
           session.page,
@@ -103,5 +111,34 @@ registerTool(
       },
       { orgId: context.orgId, attempts: 8 },
     );
+
+    if (
+      context.sessionId &&
+      payload &&
+      !payload.blocked &&
+      Array.isArray(payload.leads) &&
+      payload.leads.length > 0
+    ) {
+      try {
+        const db = getAgentDb();
+        await db.from("agent_discovery_snapshots").insert({
+          session_id: context.sessionId,
+          query: primaryQuery.slice(0, 500),
+          lead_count: payload.leads.length,
+          payload: {
+            max_results_requested: maxResults,
+            leads: payload.leads,
+            secondary_query_used: payload.secondary_query_used,
+          },
+        });
+      } catch (e) {
+        console.warn(
+          "[google_maps_search] snapshot insert:",
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
+
+    return payload;
   },
 );
