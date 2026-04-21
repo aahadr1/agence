@@ -153,6 +153,14 @@ export interface AgentConfig {
    * should use 10.
    */
   maxTotalNudges?: number;
+  /**
+   * Runtime hints from the session host (ticker) — tune nudge wording without
+   * importing DB helpers into the engine.
+   */
+  sessionHints?: {
+    /** True when this tick appended a user follow-up reinforcement message */
+    userFollowUpAppended?: boolean;
+  };
 }
 
 export type SubAgentRole =

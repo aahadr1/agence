@@ -27,6 +27,12 @@ import { acquireLock, releaseLock, type SessionLock } from "./lock";
 import { withRetry, isLikelyTransient, sleep } from "./retry";
 import { scheduleNextTick } from "./schedule";
 import { getAgentDb } from "@/lib/agent/tools/_db";
+import { parseLeadTargetFromUserPrompt } from "@/lib/agent/lead-target";
+import {
+  buildContinuationUserMessage,
+  buildLeadGenMissionContextAppendix,
+  countLeadsForAgentSession,
+} from "@/lib/agent/mission-prompt";
 import type { AgentMessage } from "@/lib/ai/llm-router";
 
 // -----------------------------------------------------------------------------
@@ -55,37 +61,6 @@ const LOCK_TTL_SEC = 300;
 /** Max automatic retries of a failing tick before we mark session as failed. */
 const MAX_TICK_RETRIES = 3;
 
-async function countLeadsForAgentSession(
-  orgId: string,
-  sessionId: string,
-): Promise<number> {
-  const db = getAgentDb();
-  const { count, error } = await db
-    .from("leads")
-    .select("id", { count: "exact", head: true })
-    .eq("org_id", orgId)
-    .contains("enrichment_data", { agent_session_id: sessionId });
-  if (error) {
-    console.warn("[agent.tick] countLeadsForAgentSession:", error.message);
-    return 0;
-  }
-  return count ?? 0;
-}
-
-/** Extract N from "30 leads", "liste de 20 professionnels", etc. */
-function parseLeadTargetFromUserPrompt(prompt: string): number | null {
-  const p = prompt.trim();
-  const m1 = p.match(
-    /\b(\d{1,3})\s*(?:leads?|prospects?|professionnels?|lignes?|candidats?)\b/i,
-  );
-  if (m1) return Math.min(500, Math.max(1, parseInt(m1[1], 10)));
-  const m2 = p.match(
-    /\b(?:liste|tableau)\s+(?:de|d['']|d')\s*(\d{1,3})\b/i,
-  );
-  if (m2) return Math.min(500, Math.max(1, parseInt(m2[1], 10)));
-  return null;
-}
-
 /** French one-liner for nudges: explicit saved vs target (CRM rows only). */
 async function leadGenProgressSummaryFr(
   orgId: string,
@@ -97,13 +72,13 @@ async function leadGenProgressSummaryFr(
   if (target != null) {
     const miss = Math.max(0, target - saved);
     return (
-      `**Livrable CRM** : ${saved} / ${target} leads sauvegardés (il en manque ${miss}). ` +
-      "Seules les lignes créées via save_lead ou batch_save_leads comptent."
+      `Avancement CRM : ${saved} / ${target} prospects enregistrés (${miss} manquant${miss !== 1 ? "s" : ""}). ` +
+      "Seules les lignes créées avec save_lead ou batch_save_leads comptent pour l’objectif."
     );
   }
   return (
-    `**Livrable CRM** : ${saved} lead(s) sauvegardé(s). ` +
-    `Sans nombre explicite dans le message initial, vise au moins **1** lead vérifiable, ou demande une clarification.`
+    `Avancement CRM : ${saved} prospect(s) en base. ` +
+      "Sans nombre dans la consigne initiale, livre au moins 1 fiche vérifiable ou précise pourquoi ce n’est pas possible."
   );
 }
 
@@ -292,13 +267,13 @@ async function runOneTickLocked(
   let willContinue = true;
 
   try {
-    // Lazy-load heavy deps
+    // Lazy-load heavy deps — tools must register before engine/sanitize reads names
+    const { executeTool, getToolDefinitions } = await import(
+      "@/lib/agent/tools",
+    );
     const { runAgentLoop } = await import("@/lib/agent/engine");
     const { buildSystemPrompt, getToolNamesForCapabilities } = await import(
-      "@/lib/agent/orchestrator"
-    );
-    const { executeTool, getToolDefinitions } = await import(
-      "@/lib/agent/tools"
+      "@/lib/agent/orchestrator",
     );
     const { registerCustomToolsForOrg } = await import(
       "@/lib/agent/runtime/custom-tools"
@@ -315,10 +290,18 @@ async function runOneTickLocked(
       capabilities: packs,
       domainInstructions: session.domain_instructions || undefined,
     });
-    const systemPrompt = await injectLearnings(baseSystem, {
+    let systemPrompt = await injectLearnings(baseSystem, {
       orgId: session.org_id,
       scopes: packs,
     });
+    const firstUserPrompt = (await fetchInitialPrompt(sessionId)) || "";
+    const missionCtx = await buildLeadGenMissionContextAppendix(
+      session.org_id,
+      sessionId,
+      packs,
+      firstUserPrompt,
+    );
+    if (missionCtx) systemPrompt = `${systemPrompt}\n\n${missionCtx}`;
 
     const toolNames = [
       ...getToolNamesForCapabilities(packs),
@@ -338,9 +321,15 @@ async function runOneTickLocked(
     const priorHistoryLoaded = await loadHistory(sessionId);
     const followUpReinforcement =
       await buildUserFollowUpReinforcement(sessionId);
-    const priorHistory = followUpReinforcement
-      ? [...priorHistoryLoaded, followUpReinforcement]
-      : priorHistoryLoaded;
+    const continuationBlock = buildContinuationUserMessage(
+      priorHistoryLoaded,
+      stepNum,
+    );
+    const priorHistory = [
+      ...priorHistoryLoaded,
+      ...(continuationBlock ? [continuationBlock] : []),
+      ...(followUpReinforcement ? [followUpReinforcement] : []),
+    ];
     const userMessage = undefined;
 
     const context: AgentContext = {
@@ -390,7 +379,7 @@ async function runOneTickLocked(
                 sessionId,
                 userPrompt,
               )
-            : "**Livrable CRM** : au moins 1 lead sauvegardé requis.";
+            : "Objectif CRM : au moins 1 lead sauvegardé requis pour clôturer.";
           return {
             ok: false,
             message:
@@ -411,6 +400,9 @@ async function runOneTickLocked(
         maxIterations: iterBudget,
         reflectEveryN,
         reflectionLeadGenDepth: sessionPacksForBudget.includes("lead-gen-fr"),
+        sessionHints: {
+          userFollowUpAppended: Boolean(followUpReinforcement),
+        },
         onThinking: async (text) => {
           await db.from("agent_messages").insert({
             session_id: sessionId,
@@ -554,7 +546,7 @@ async function runOneTickLocked(
               return {
                 open: true,
                 summary:
-                  (progressFr || "**Livrable CRM** : objectif non atteint.") +
+                  (progressFr || "Objectif CRM non atteint.") +
                   "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Enchaîne `save_lead` / `batch_save_leads` (ou explique explicitement en français pourquoi tu ne peux pas, avec le **chiffre réel** sauvegardé).",
               };
             }

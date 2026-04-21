@@ -19,7 +19,9 @@ import type {
 export function buildTimeline(
   messages: Message[],
   reflections: Reflection[],
+  options?: { includeReflections?: boolean },
 ): TimelineEvent[] {
+  const includeReflections = options?.includeReflections === true;
   const events: TimelineEvent[] = [];
 
   for (const m of messages) {
@@ -123,16 +125,18 @@ export function buildTimeline(
     }
   }
 
-  for (const r of reflections) {
-    events.push({
-      kind: "reflection",
-      id: r.id,
-      iteration: r.iteration,
-      observation: r.observation,
-      conclusion: r.conclusion,
-      next_action: r.next_action,
-      at: r.created_at,
-    });
+  if (includeReflections) {
+    for (const r of reflections) {
+      events.push({
+        kind: "reflection",
+        id: r.id,
+        iteration: r.iteration,
+        observation: r.observation,
+        conclusion: r.conclusion,
+        next_action: r.next_action,
+        at: r.created_at,
+      });
+    }
   }
 
   events.sort((a, b) => a.at.localeCompare(b.at));

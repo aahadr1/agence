@@ -28,6 +28,12 @@ registerTool(
     costEstimateCents: 2,
   },
   async (args) => {
+    if (!process.env.PAPPERS_API_KEY?.trim()) {
+      throw new Error(
+        "Pappers : variable PAPPERS_API_KEY absente sur le serveur. [NON_RETRYABLE] " +
+          "Configure la clé API Pappers ou utilise Societe.com / recherche web à la place.",
+      );
+    }
     const log = (msg: string) => console.log(`[pappers_search] ${msg}`);
     const res = await searchPappersApi(
       args.business_name as string,

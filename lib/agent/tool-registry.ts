@@ -11,6 +11,12 @@ import {
   isRedToolAllowedFromEnv,
 } from "./os/permissions";
 import { insertAgentAuditLog } from "./os/store";
+import {
+  blockSessionTool,
+  errorShouldBlockFurtherCalls,
+  isSessionToolBlocked,
+  sessionToolBlockKey,
+} from "./session-tool-blocks";
 
 async function hasConnection(
   userId: string,
@@ -152,6 +158,25 @@ export async function executeTool(
     });
   }
 
+  const circuitKey =
+    context.orgId && context.sessionId
+      ? sessionToolBlockKey(context.orgId, context.sessionId)
+      : undefined;
+  if (
+    circuitKey &&
+    isSessionToolBlocked(circuitKey, name)
+  ) {
+    return finalize({
+      name,
+      result: null,
+      error:
+        `Outil « ${name} » court-circuité pour cette session : erreur NON_RETRYABLE déjà rencontrée. ` +
+        `Choisis une autre source ou une autre stratégie sans rappeler cet outil.`,
+      durationMs: Date.now() - start,
+      costCents: 0,
+    });
+  }
+
   if (isHardBlockedRedTool(name) && !isRedToolAllowedFromEnv()) {
     return finalize({
       name,
@@ -189,10 +214,14 @@ export async function executeTool(
     });
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
+    const hinted = appendNonRetryHint(raw, name);
+    if (circuitKey && errorShouldBlockFurtherCalls(hinted, name)) {
+      blockSessionTool(circuitKey, name);
+    }
     return finalize({
       name,
       result: null,
-      error: appendNonRetryHint(raw, name),
+      error: hinted,
       durationMs: Date.now() - start,
       costCents: 0,
     });

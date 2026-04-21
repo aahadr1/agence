@@ -15,6 +15,7 @@
  */
 
 import { callLLM, type AgentMessage, type AgentMessagePart } from "@/lib/ai/llm-router";
+import { sanitizeAssistantUserText } from "@/lib/agent/sanitize-user-visible-text";
 import type {
   AgentConfig,
   AgentContext,
@@ -194,9 +195,12 @@ export async function runAgentLoop(
       state.history.push({ role: "assistant", parts: result.assistantParts });
     }
 
-    // Stream visible text to the user
+    // Stream visible text to the user (strip pseudo-tool line noise)
     if (result.text) {
-      await config.onMessage?.(result.text);
+      const vis = sanitizeAssistantUserText(result.text);
+      await config.onMessage?.(
+        vis.length > 0 ? vis : result.text.trim(),
+      );
     }
 
     // ---- No tool calls → decide: genuine done OR model-emitted pseudo-code ----
@@ -225,10 +229,9 @@ export async function runAgentLoop(
       const pseudo = canStillNudge ? detectPseudoToolCall(result.text) : null;
       if (pseudo) {
         const nudge =
-          `You just emitted a tool reference as text ("${pseudo}") instead of actually invoking a tool.` +
-          ` That text does NOT execute anything.` +
-          ` Re-do this turn: call the tool you intended via the function-calling API.` +
-          ` Do NOT wrap tool calls in code fences or <tool_code> blocks.`;
+          `Tu as écrit « ${pseudo} » comme texte — ça n’exécute rien.` +
+          ` Réessaie ce tour en appelant **réellement** l’outil via l’API fonctions.` +
+          ` Pas de barres à code ni de pseudo-code pour les outils.`;
         pushNudge(state, nudge);
         await config.onNudge?.(nudge, "pseudo_tool_call");
         state.consecutiveErrors++;
@@ -247,8 +250,8 @@ export async function runAgentLoop(
         (looksLikeIntentWithoutAction(result.text) || planningRoadmap)
       ) {
         const nudge = planningRoadmap
-          ? "You published a multi-step roadmap as plain text — that does not run anything and is not the dedicated plan UI. Either (a) call `plan_create` with { goal, steps } then `todo_write` and your first real tool in this same turn, or (b) skip `plan_create` and go straight to `todo_write` + tools (`web_search`, `google_maps_search`, …). Never end a turn with only prose when work remains."
-          : "You described the next step but did not call any tool. Execute it now by invoking the appropriate tool. If you truly have nothing left to do, call `todo_finalize` and then write a single short final summary — do not keep announcing actions.";
+          ? "Tu as publié une roadmap en prose — elle ne fait rien tourner. Soit (a) tu appelles plan_create puis todo_write et ton premier outil **dans ce même tour**, soit (b) tu vas directement à todo_write + un vrai outil (google_maps_search, …). Pas finir un tour avec du texte seul tant qu’il reste du travail."
+          : "Tu décris la prochaine étape mais aucun outil n’a été appelé. Lance l’outil maintenant. Si tout est vraiment fini : todo_finalize puis un court message final — pas d’annonces sans action.";
         pushNudge(state, nudge);
         await config.onNudge?.(
           nudge,
@@ -333,14 +336,19 @@ export async function runAgentLoop(
 
             if (canStillNudge && !signingOff) {
               state.openWorkNudgeCount++;
-              // IMPORTANT: the nudge wording matters. Earlier phrasings
-              // ("You stopped but there is still open work …") were
-              // misinterpreted by Gemini as "redo the whole task", which
-              // produced the Nancy-style restart loop. Keep this short,
-              // concrete, and NEVER instruct a re-plan.
-              const nudge =
-                `Open todos remain (${check.summary || "see list"}). ` +
-                "Do ONE of these, then continue: (a) call the next tool for the current in-progress todo, (b) call `todo_update` with a 1-based index (\"1\", \"2\", …) to advance status, or (c) call `todo_finalize` if the deliverable is already complete. Do NOT re-greet, re-plan, or call `todo_write` — the plan already exists.";
+              const followUp = config.sessionHints?.userFollowUpAppended;
+              const nudge = followUp
+                ? [
+                    `Travail encore ouvert (${check.summary || ""}). `,
+                    "Si l’utilisateur vient de **corriger la ville ou le périmètre**, tu dois appeler todo_write avec replace_existing:true et reset_reason qui cite son message, puis relancer la découverte.",
+                    "Sinon : une seule action parmi — (a) appelle le prochain outil pour la todo en cours, (b) todo_update avec un index « 1 », « 2 », …, (c) todo_finalize uniquement si le livrable est réellement complet.",
+                    "Ne refais pas une introduction « Bonjour » ni un plan depuis zéro sans que ce soit une nouvelle mission.",
+                  ].join(" ")
+                : [
+                    `Travail encore ouvert (${check.summary || ""}). `,
+                    "Une action parmi — (a) outil suivant pour la todo en cours, (b) todo_update avec index 1-based, (c) todo_finalize si tout est livré.",
+                    "Pas de nouveau Bonjour ni todo_write « full replace » sauf si l’utilisateur a explicitement demandé d’abandonner la liste ou changé la mission.",
+                  ].join(" ");
               pushNudge(state, nudge);
               await config.onNudge?.(nudge, "open_work_remaining");
               state.consecutiveErrors++;
@@ -581,7 +589,7 @@ export async function runAgentLoop(
                 "[Discovery steering — ACTIONS OBLIGATOIRES CE TOUR]\n" +
                 "Tu viens de recevoir des résultats Maps. Tu DOIS faire ces actions dans CE tour :\n" +
                 "1) **OBLIGATOIRE** : appelle `scratchpad_write` avec key=’candidates’ et value=JSON de tous les résultats. Si tu ne le fais pas, les données seront PERDUES au prochain tick.\n" +
-                "2) **Pré-classe** avec les champs gratuits (website_url, has_website, rating, chaîne évidente) — élimine les « premium » avant d’enrichir.\n" +
+                "2) **Pré-classe** avec les champs gratuits (website_url, has_website, chaîne évidente). La note Maps seule **ne suffit pas** pour valider un lead B2B — ne trie pas « par étoiles » comme critère métier.\n" +
                 "3) Au prochain tour : lance plusieurs `website_finder` **en parallèle** (3-5 par tour), jamais un par un.\n" +
                 "4) Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.\n" +
                 "RAPPEL : ~20 itérations par tick. Ne gaspille pas.",
@@ -672,6 +680,7 @@ function detectPseudoToolCall(text: string | null | undefined): string | null {
 }
 
 const INTENT_PATTERNS: RegExp[] = [
+  /\b(?:prendre en compte|optimis\w*\s+(?:la|vos)\s+recherches?|je\s+m['’]?aligne)\b/i,
   // Announcing an imminent action (strong signal)
   /\bje\s+vais\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|cr[eé]er|appeler|ex[eé]cuter|utiliser|consulter|analyser|continuer|mettre|examiner|passer|v[eé]rifier|essayer|regarder|start|d[eé]marrer)\b/i,
   /\b(?:let\s+me|i['’]?ll|i\s+will|i\s+am\s+going\s+to)\s+(?:now\s+)?(?:search|call|run|use|execute|invoke|check|analyze|look|find|try|continue|proceed|start|begin|launch)\b/i,
@@ -988,7 +997,7 @@ async function runForcedReflection(
 
   const leadGenDepthBlock =
     config.reflectionLeadGenDepth
-      ? " LEAD-GEN DEPTH: Inside the JSON strings, briefly cover (a) legal-entity vs Maps address / cessée / homonym risk for work in flight, (b) whether any 'no website' claim still holds vs Maps website_url, (c) quality vs filling N weak rows. Each field may use up to 4 short sentences."
+      ? " PROFONDEUR LEAD-GEN (dans le JSON) : (a) cohérence entité légale / adresse Maps / homonyme, (b) « pas de site » vs website_url, (c) progression vers **N lignes CRM** sans inventer ni sacrifier la triangulation."
       : "";
 
   const reflectionSchema = `{"observation": "...", "conclusion": "...", "next_action": "...", "strategy_revision": "...|null"}`;
@@ -996,19 +1005,19 @@ async function runForcedReflection(
 
   const nudge = dueToError
     ? [
-        "You hit repeated tool errors. Pause and reflect (for yourself only, NOT as a user-facing message).",
-        "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
+        "Erreurs outils répétées — réflexion interne uniquement (pas affichée à l’utilisateur).",
+        "Réponds par un unique objet JSON — pas de prose hors JSON, pas de barres à code — modèle exact :",
         reflectionSchema,
-        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." +
+        "Chaque champ : 2 phrases max. Dans next_action : quelle todo compléter / passer en cours." +
           strategyRevisionHint +
           leadGenDepthBlock +
           todoBlock,
       ].join(" ")
     : [
-        "Pause and reflect internally (not shown to the user).",
-        "Respond with a single JSON object — no prose outside the JSON, no code fences — shaped exactly as:",
+        "Réflexion interne uniquement (pas pour l’utilisateur final).",
+        "Réponds par un unique objet JSON — pas de prose hors JSON — modèle exact :",
         reflectionSchema,
-        "Keep each field under 2 short sentences. Include in `next_action` which todo you should mark completed/in_progress, if any." +
+        "Chaque champ : 2 phrases max. Dans next_action : todo à mettre à jour si besoin." +
           strategyRevisionHint +
           leadGenDepthBlock +
           todoBlock,

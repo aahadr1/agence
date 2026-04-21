@@ -51,6 +51,12 @@ registerTool(
         required: false,
       },
       notes: { type: "string", description: "Agent notes about this lead", required: false },
+      data_provenance: {
+        type: "string",
+        description:
+          "Optional: where each key fact came from (e.g. « dirigeant : Societe.com | tel établissement : Maps »). Appended to notes for audit.",
+        required: false,
+      },
     },
     required: ["business_name"],
     costEstimateCents: 0,
@@ -81,6 +87,14 @@ registerTool(
       if (args[field] !== undefined && args[field] !== null) {
         leadData[field] = args[field];
       }
+    }
+
+    const prov = String(args.data_provenance || "").trim();
+    if (prov) {
+      const prevNotes = String(leadData.notes || "").trim();
+      leadData.notes = prevNotes
+        ? `${prevNotes}\n\n[Sources] ${prov}`
+        : `[Sources] ${prov}`;
     }
 
     if (args.website_url) leadData.has_website = true;

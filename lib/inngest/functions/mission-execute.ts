@@ -4,7 +4,6 @@
  */
 
 import { inngest } from "../client";
-import { runAgentLoop } from "@/lib/agent/engine";
 import { ORCHESTRATOR_SYSTEM_PROMPT, ROLE_TOOLS } from "@/lib/agent/orchestrator";
 import { getToolDefinitions } from "@/lib/agent/tool-registry";
 import type { AgentContext } from "@/lib/agent/types";
@@ -46,7 +45,10 @@ export const missionExecute = inngest.createFunction(
     });
 
     const result = await step.run("orchestrator-loop", async () => {
-      const { executeTool: executeRegisteredTool } = await import("@/lib/agent/tools");
+      const { executeTool: executeRegisteredTool } = await import(
+        "@/lib/agent/tools",
+      );
+      const { runAgentLoop } = await import("@/lib/agent/engine");
 
       const context: AgentContext = {
         missionId,
@@ -65,9 +67,22 @@ export const missionExecute = inngest.createFunction(
       const toolNames = ROLE_TOOLS.orchestrator;
       const tools = getToolDefinitions(toolNames);
 
+      const { buildLeadGenMissionContextAppendix } = await import(
+        "@/lib/agent/mission-prompt",
+      );
+      const missionAppendix = await buildLeadGenMissionContextAppendix(
+        mission.org_id,
+        missionId,
+        ["lead-gen-fr", "web-research"],
+        mission.user_prompt || "",
+      );
+      const systemPromptWithMission = missionAppendix
+        ? `${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${missionAppendix}`
+        : ORCHESTRATOR_SYSTEM_PROMPT;
+
       const agentResult = await runAgentLoop(
         {
-          systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+          systemPrompt: systemPromptWithMission,
           tools,
           model: "gemini-2.5-pro",
           maxIterations: 50,

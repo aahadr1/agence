@@ -33,7 +33,7 @@ export async function POST(
 
   const { data: session, error: loadErr } = await service
     .from("agent_sessions")
-    .select("id, status")
+    .select("id, status, org_id")
     .eq("id", sessionId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -64,11 +64,19 @@ export async function POST(
   if (updErr)
     return NextResponse.json({ error: updErr.message }, { status: 500 });
 
+  const { count } = await service
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", session.org_id)
+    .contains("enrichment_data", { agent_session_id: sessionId });
+
+  const n = count ?? 0;
   await service.from("agent_messages").insert({
     session_id: sessionId,
     role: "assistant",
     content:
-      "Session arrêtée sur ta demande. Les messages et leads déjà enregistrés restent visibles ci-dessus.",
+      `Session arrêtée sur ta demande. Prospects déjà enregistrés pour cette session : ${n}. ` +
+      `Les messages restent visibles ci-dessus.`,
   });
 
   return NextResponse.json({ ok: true, status: "cancelled" });

@@ -53,17 +53,20 @@ export async function runSession(
     .update({ status: "running", updated_at: new Date().toISOString() })
     .eq("id", sessionId);
 
-  // Lazy-load heavy deps (playwright, tools registry, engine)
+  // Lazy-load heavy deps — tools register before engine / sanitize reads names
+  const { executeTool, getToolDefinitions } = await import(
+    "@/lib/agent/tools",
+  );
   const { runAgentLoop } = await import("@/lib/agent/engine");
   const { buildSystemPrompt, getToolNamesForCapabilities } = await import(
-    "@/lib/agent/orchestrator"
+    "@/lib/agent/orchestrator",
   );
-  const { executeTool, getToolDefinitions } = await import(
-    "@/lib/agent/tools"
+  const { buildLeadGenMissionContextAppendix } = await import(
+    "@/lib/agent/mission-prompt",
   );
 
   const packs = (session.capability_packs || []) as CapabilityPack[];
-  const systemPrompt = buildSystemPrompt({
+  let systemPrompt = buildSystemPrompt({
     capabilities: packs,
     domainInstructions: session.domain_instructions || undefined,
   });
@@ -85,6 +88,14 @@ export async function runSession(
   };
 
   const userMessage = opts.userMessage ?? (await fetchInitialPrompt(db, sessionId));
+
+  const missionCtx = await buildLeadGenMissionContextAppendix(
+    session.org_id,
+    sessionId,
+    packs,
+    userMessage,
+  );
+  if (missionCtx) systemPrompt = `${systemPrompt}\n\n${missionCtx}`;
 
   const result = await runAgentLoop(
     {
