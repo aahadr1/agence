@@ -23,16 +23,14 @@ import type {
   CapabilityPack,
   ToolDefinition,
 } from "@/lib/agent/types";
-import { acquireLock, releaseLock, type SessionLock } from "./lock";
+import { acquireLock, releaseLock } from "./lock";
 import { withRetry, isLikelyTransient, sleep } from "./retry";
 import { scheduleNextTick } from "./schedule";
 import { getAgentDb } from "@/lib/agent/tools/_db";
 import { fetchLeadTargetForSession } from "@/lib/agent/lead-target";
-import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
 import {
   buildContinuationUserMessage,
   buildLeadGenMissionContextAppendix,
-  countLeadsForAgentSession,
 } from "@/lib/agent/mission-prompt";
 import type { AgentMessage } from "@/lib/ai/llm-router";
 
@@ -61,36 +59,6 @@ const LOCK_TTL_SEC = 300;
 
 /** Max automatic retries of a failing tick before we mark session as failed. */
 const MAX_TICK_RETRIES = 3;
-
-/** French one-liner for nudges: explicit saved vs target (CRM rows only). */
-async function leadGenProgressSummaryFr(
-  orgId: string,
-  sessionId: string,
-): Promise<string> {
-  const saved = await countLeadsForAgentSession(orgId, sessionId);
-  const target = await fetchLeadTargetForSession(sessionId);
-  if (target != null) {
-    const miss = Math.max(0, target - saved);
-    return (
-      `Avancement CRM : ${saved} / ${target} prospects enregistrés (${miss} manquant${miss !== 1 ? "s" : ""}). ` +
-      "Seules les lignes créées avec save_lead ou batch_save_leads comptent pour l’objectif."
-    );
-  }
-  return (
-    `Avancement CRM : ${saved} prospect(s) en base. ` +
-      "Sans nombre explicite dans **aucun** message utilisateur, livre au moins 1 fiche vérifiable ou précise pourquoi ce n’est pas possible."
-  );
-}
-
-async function leadGenDeliverableStillIncomplete(
-  orgId: string,
-  sessionId: string,
-): Promise<boolean> {
-  const saved = await countLeadsForAgentSession(orgId, sessionId);
-  const target = await fetchLeadTargetForSession(sessionId);
-  if (target != null) return saved < target;
-  return saved < 1;
-}
 
 // -----------------------------------------------------------------------------
 // Session row shape
@@ -146,7 +114,7 @@ export async function tickSession(sessionId: string): Promise<TickResult> {
   }
 
   try {
-    return await runOneTickLocked(sessionId, lock);
+    return await runOneTickLocked(sessionId);
   } finally {
     await releaseLock(lock);
   }
@@ -156,10 +124,7 @@ export async function tickSession(sessionId: string): Promise<TickResult> {
 // Internal: one locked tick
 // -----------------------------------------------------------------------------
 
-async function runOneTickLocked(
-  sessionId: string,
-  _lock: SessionLock,
-): Promise<TickResult> {
+async function runOneTickLocked(sessionId: string): Promise<TickResult> {
   const db = getAgentDb();
   const startedAt = Date.now();
 
@@ -202,11 +167,9 @@ async function runOneTickLocked(
   const iterBudget = sessionPacksForBudget.includes("lead-gen-fr")
     ? ITER_PER_TICK_LEAD_GEN
     : ITER_PER_TICK;
-  /** Lead-gen: reflect more often so forced JSON reflection realigns todos vs evidence. */
-  // Lead-gen: reflect less often (every 6 vs 5) — saves 2 productive
-  // iterations per tick. At reflectEveryN=4 we were burning 25% of the
-  // 20-iteration budget on introspection alone.
-  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 6 : 5;
+  // V1 keeps reflection out of the tool loop. The model has only five tools
+  // and the prompt asks it to adapt directly from evidence.
+  const reflectEveryN = 0;
 
   // Journal the step (best-effort, non-fatal)
   const stepNum = (session.tick_count || 0) + 1;
@@ -274,24 +237,10 @@ async function runOneTickLocked(
     const { buildSystemPrompt, getToolNamesForCapabilities } = await import(
       "@/lib/agent/orchestrator",
     );
-    const { registerCustomToolsForOrg } = await import(
-      "@/lib/agent/runtime/custom-tools"
-    );
-    const { injectLearnings } = await import(
-      "@/lib/agent/runtime/learnings"
-    );
-
-    // Load any custom (user-defined, approved) tools for this org
-    const customToolNames = await registerCustomToolsForOrg(session.org_id);
-
     const packs = (session.capability_packs || []) as CapabilityPack[];
-    const baseSystem = buildSystemPrompt({
+    let systemPrompt = buildSystemPrompt({
       capabilities: packs,
       domainInstructions: session.domain_instructions || undefined,
-    });
-    let systemPrompt = await injectLearnings(baseSystem, {
-      orgId: session.org_id,
-      scopes: packs,
     });
     const missionCtx = await buildLeadGenMissionContextAppendix(
       session.org_id,
@@ -300,15 +249,7 @@ async function runOneTickLocked(
     );
     if (missionCtx) systemPrompt = `${systemPrompt}\n\n${missionCtx}`;
 
-    const toolNames = [
-      ...getToolNamesForCapabilities(packs),
-      ...customToolNames,
-      // Always expose the meta-tools for self-improvement / self-extension
-      "learn_record",
-      "learn_recall",
-      "tool_create",
-      "tool_list_custom",
-    ];
+    const toolNames = getToolNamesForCapabilities(packs);
     const tools: ToolDefinition[] = getToolDefinitions(toolNames);
 
     // Resume: load prior history from DB so the LLM sees everything so far.
@@ -369,23 +310,6 @@ async function runOneTickLocked(
           e instanceof Error ? e.message : e,
         );
       }
-      context.leadGenFinalizeGate = async () => {
-        if (
-          await leadGenDeliverableStillIncomplete(session.org_id, sessionId)
-        ) {
-          const hint = (await fetchActiveUserBrief(sessionId)).trim()
-            ? await leadGenProgressSummaryFr(session.org_id, sessionId)
-            : "Objectif CRM : au moins 1 lead sauvegardé requis pour clôturer.";
-          return {
-            ok: false,
-            message:
-              "`todo_finalize` refusé : le livrable CRM n’est pas atteint pour cette session. " +
-              "Enchaîne `save_lead` / `batch_save_leads` (ou `ask_user` si tu es bloqué), puis réessaie.\n\n" +
-              hint,
-          };
-        }
-        return { ok: true };
-      };
     }
 
     const loopPromise = runAgentLoop(
@@ -395,7 +319,7 @@ async function runOneTickLocked(
         model: (session.model as AgentModel) || "gemini-2.5-pro",
         maxIterations: iterBudget,
         reflectEveryN,
-        reflectionLeadGenDepth: sessionPacksForBudget.includes("lead-gen-fr"),
+        reflectionLeadGenDepth: false,
         sessionHints: {
           userFollowUpAppended: Boolean(followUpReinforcement),
         },
@@ -443,39 +367,10 @@ async function runOneTickLocked(
             },
           });
         },
-        onReflection: async (r) => {
-          const rev = r.strategyRevision?.trim();
-          const next =
-            rev && !/^null$/i.test(rev)
-              ? `${r.nextAction || ""}\n\n[Strategy revision]\n${rev}`.slice(0, 8000)
-              : r.nextAction;
-          await db.from("agent_reflections").insert({
-            session_id: sessionId,
-            iteration: r.iteration,
-            observation: r.observation,
-            conclusion: r.conclusion,
-            next_action: next ?? null,
-          });
-        },
-        isDeliverableComplete: sessionPacksForBudget.includes("lead-gen-fr")
-          ? async () => {
-              const saved = await countLeadsForAgentSession(
-                session.org_id,
-                sessionId,
-              );
-              const target = await fetchLeadTargetForSession(sessionId);
-              if (target != null) {
-                return saved >= target;
-              }
-              return saved >= 1;
-            }
-          : undefined,
-        maxNudgesBeforeYield: sessionPacksForBudget.includes("lead-gen-fr")
-          ? 5
-          : undefined,
-        maxTotalNudges: sessionPacksForBudget.includes("lead-gen-fr")
-          ? 10
-          : undefined,
+        onReflection: undefined,
+        isDeliverableComplete: undefined,
+        maxNudgesBeforeYield: 1,
+        maxTotalNudges: 2,
         onNudge: async (text, reason) => {
           // Persisted as a hidden system row so the next tick's loadHistory
           // can replay it, without polluting the user-visible chat.
@@ -486,117 +381,9 @@ async function runOneTickLocked(
             metadata: { nudge: true, reason },
           });
         },
-        checkOpenWork: async () => {
-          const leadGen = sessionPacksForBudget.includes("lead-gen-fr");
-          const userPrompt = leadGen
-            ? (await fetchActiveUserBrief(sessionId)) || ""
-            : "";
-          const progressFr =
-            leadGen && userPrompt.trim()
-              ? await leadGenProgressSummaryFr(session.org_id, sessionId)
-              : "";
-
-          const { data: todos } = await db
-            .from("agent_todos")
-            .select("content, status")
-            .eq("session_id", sessionId)
-            .in("status", ["pending", "in_progress"])
-            .limit(20);
-          if (todos && todos.length > 0) {
-            const preview = todos
-              .slice(0, 5)
-              .map((t) => `• ${t.content} (${t.status})`)
-              .join("\n");
-            const more =
-              todos.length > 5 ? `\n…and ${todos.length - 5} more` : "";
-            return {
-              open: true,
-              summary:
-                `${todos.length} todo(s) still open:\n${preview}${more}` +
-                (progressFr ? `\n\n${progressFr}` : ""),
-            };
-          }
-          // Lead-gen (and similar multi-step packs): never treat "no rows" as
-          // "nothing to do" — the model often chats a roadmap then stops before
-          // todo_write, so checkOpenWork must still signal open work.
-          if (leadGen) {
-            const { count, error } = await db
-              .from("agent_todos")
-              .select("id", { count: "exact", head: true })
-              .eq("session_id", sessionId);
-            if (!error && (count ?? 0) === 0) {
-              return {
-                open: true,
-                summary:
-                  "Aucune liste de todos — appelle `todo_write` puis les outils (`web_search`, `google_maps_search`, …). Ne termine pas sur un plan en prose seul." +
-                  (progressFr ? `\n\n${progressFr}` : ""),
-              };
-            }
-            // Todos can show "all completed" while CRM rows are still short of
-            // the user's N — keep the session "open" until save_lead catches up.
-            if (
-              userPrompt.trim() &&
-              (await leadGenDeliverableStillIncomplete(
-                session.org_id,
-                sessionId,
-              ))
-            ) {
-              return {
-                open: true,
-                summary:
-                  (progressFr || "Objectif CRM non atteint.") +
-                  "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Enchaîne `save_lead` / `batch_save_leads` (ou explique explicitement en français pourquoi tu ne peux pas, avec le **chiffre réel** sauvegardé).",
-              };
-            }
-          }
-          return { open: false };
-        },
-        finalizeOpenWork: async () => {
-          // Auto-close any leftover pending/in_progress todos after a final
-          // summary has already been delivered. This is the engine's
-          // graceful escape hatch for the post-delivery nudge spiral.
-          const { data } = await db
-            .from("agent_todos")
-            .update({
-              status: "completed",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("session_id", sessionId)
-            .in("status", ["pending", "in_progress"])
-            .select("id, content");
-          const n = data?.length || 0;
-          if (n === 0) return null;
-          return `${n} leftover todo(s) auto-closed`;
-        },
-        todoSnapshot: async () => {
-          // Compact snapshot used both by the forced reflection and the
-          // periodic "todo hygiene" reminder. Only returns a string when
-          // there's at least one todo — empty string means "skip".
-          const { data: rows } = await db
-            .from("agent_todos")
-            .select("content, status, position")
-            .eq("session_id", sessionId)
-            .order("position", { ascending: true })
-            .limit(30);
-          if (!rows || rows.length === 0) return "";
-          const lines = rows.map((t, i) => {
-            const mark =
-              t.status === "completed"
-                ? "✓"
-                : t.status === "in_progress"
-                  ? "►"
-                  : t.status === "cancelled"
-                    ? "✗"
-                    : "·";
-            const idx = i + 1;
-            const content =
-              t.content.length > 100
-                ? t.content.slice(0, 97) + "…"
-                : t.content;
-            return `${idx}. ${mark} [${t.status}] ${content}`;
-          });
-          return lines.join("\n");
-        },
+        checkOpenWork: undefined,
+        finalizeOpenWork: undefined,
+        todoSnapshot: undefined,
       },
       context,
       executeTool,

@@ -104,8 +104,8 @@ export async function runSession(
       tools,
       model: (session.model as AgentModel) || "gemini-2.5-pro",
       maxIterations: 40,
-      reflectEveryN: packs.includes("lead-gen-fr") ? 4 : 5,
-      reflectionLeadGenDepth: packs.includes("lead-gen-fr"),
+      reflectEveryN: 0,
+      reflectionLeadGenDepth: false,
       shouldAbort: async () => {
         const { data: row } = await db
           .from("agent_sessions")
@@ -150,15 +150,7 @@ export async function runSession(
           },
         });
       },
-      onReflection: async (r) => {
-        await db.from("agent_reflections").insert({
-          session_id: sessionId,
-          iteration: r.iteration,
-          observation: r.observation,
-          conclusion: r.conclusion,
-          next_action: r.nextAction,
-        });
-      },
+      onReflection: undefined,
     },
     context,
     executeTool,
