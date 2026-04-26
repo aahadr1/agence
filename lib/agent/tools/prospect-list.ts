@@ -5,12 +5,25 @@ import { ensureAgentLeadSearchId } from "../lead-search-stub";
 import { getAgentDb } from "./_db";
 
 type ProspectRow = Record<string, unknown>;
+type TaskStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
+type WorkspaceTask = {
+  id: string;
+  content: string;
+  status: TaskStatus;
+  position: number;
+  notes?: string | null;
+  updated_at: string;
+};
 
 const WORKSPACE_KEY = "v1_prospect_workspace";
 
 async function loadWorkspace(sessionId: string): Promise<{
   prospects: ProspectRow[];
   rejected: ProspectRow[];
+  tasks: WorkspaceTask[];
+  blocker_summary: string | null;
+  exported_at: string | null;
+  exported_count: number;
 }> {
   const db = getAgentDb();
   const { data } = await db
@@ -20,17 +33,37 @@ async function loadWorkspace(sessionId: string): Promise<{
     .eq("key", WORKSPACE_KEY)
     .maybeSingle();
   const value = data?.value as
-    | { prospects?: ProspectRow[]; rejected?: ProspectRow[] }
+    | {
+        prospects?: ProspectRow[];
+        rejected?: ProspectRow[];
+        tasks?: WorkspaceTask[];
+        blocker_summary?: string | null;
+        exported_at?: string | null;
+        exported_count?: number;
+      }
     | undefined;
   return {
     prospects: Array.isArray(value?.prospects) ? value.prospects : [],
     rejected: Array.isArray(value?.rejected) ? value.rejected : [],
+    tasks: Array.isArray(value?.tasks) ? value.tasks : [],
+    blocker_summary:
+      typeof value?.blocker_summary === "string" ? value.blocker_summary : null,
+    exported_at: typeof value?.exported_at === "string" ? value.exported_at : null,
+    exported_count:
+      typeof value?.exported_count === "number" ? value.exported_count : 0,
   };
 }
 
 async function saveWorkspace(
   sessionId: string,
-  workspace: { prospects: ProspectRow[]; rejected: ProspectRow[] },
+  workspace: {
+    prospects: ProspectRow[];
+    rejected: ProspectRow[];
+    tasks: WorkspaceTask[];
+    blocker_summary: string | null;
+    exported_at: string | null;
+    exported_count: number;
+  },
 ): Promise<void> {
   const db = getAgentDb();
   await db.from("agent_memory").upsert(
@@ -63,6 +96,60 @@ function mergeProspects(existing: ProspectRow[], incoming: ProspectRow[]): Prosp
     map.set(key, { ...(map.get(key) || {}), ...row });
   }
   return [...map.values()];
+}
+
+function makeTask(content: string, position: number): WorkspaceTask {
+  return {
+    id: `task_${position + 1}`,
+    content,
+    status: position === 0 ? "in_progress" : "pending",
+    position,
+    notes: null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function resolveTask(tasks: WorkspaceTask[], raw: unknown): WorkspaceTask | null {
+  const key = String(raw || "").trim().toLowerCase();
+  if (!key) return null;
+  const indexMatch = key.match(/^#?\s*(?:task\s*)?(\d{1,3})$/i);
+  if (indexMatch) {
+    const idx = parseInt(indexMatch[1], 10) - 1;
+    return tasks.find((t) => t.position === idx) || null;
+  }
+  if (key === "current" || key === "in_progress") {
+    return tasks.find((t) => t.status === "in_progress") || null;
+  }
+  if (key === "next") {
+    return tasks.find((t) => t.status === "pending") || null;
+  }
+  return (
+    tasks.find((t) => t.id.toLowerCase() === key) ||
+    tasks.find((t) => t.content.toLowerCase().includes(key)) ||
+    null
+  );
+}
+
+function workspaceProgress(workspace: Awaited<ReturnType<typeof loadWorkspace>>) {
+  const completeProspects = workspace.prospects.filter(
+    (p) =>
+      String(p.business_name || "").trim() &&
+      String(p.data_provenance || "").trim().length >= 8 &&
+      Boolean(String(p.phone || p.email || p.owner_phone || p.owner_email || "").trim()) &&
+      Boolean(String(p.owner_name || p.siren || "").trim()),
+  );
+  return {
+    total_prospects: workspace.prospects.length,
+    complete_prospects: completeProspects.length,
+    saved_prospects: workspace.prospects.filter((p) => p.saved || p.lead_id).length,
+    rejected_count: workspace.rejected.length,
+    exported_count: workspace.exported_count,
+    open_tasks: workspace.tasks.filter((t) =>
+      t.status === "pending" || t.status === "in_progress",
+    ).length,
+    tasks: workspace.tasks,
+    blocker_summary: workspace.blocker_summary,
+  };
 }
 
 async function resolveMissionIdForLead(
@@ -194,12 +281,55 @@ registerTool(
   {
     name: "prospect_list",
     description:
-      "Session prospect workspace and CRM persistence. Actions: add, update, reject, list, save, export. Stores provenance and saves verified prospects to CRM.",
+      "Session workspace, mandatory task state, prospect list, and CRM persistence. Actions: task_create, task_update, task_list, add, update, reject, list, save, export, blocker_summary, status. Create tasks before substantive multi-step work and update them when phases start/finish.",
     parameters: {
       action: {
         type: "string",
-        description: "add | update | reject | list | save | export",
-        enum: ["add", "update", "reject", "list", "save", "export"],
+        description:
+          "task_create | task_update | task_list | add | update | reject | list | save | export | blocker_summary | status",
+        enum: [
+          "task_create",
+          "task_update",
+          "task_list",
+          "add",
+          "update",
+          "reject",
+          "list",
+          "save",
+          "export",
+          "blocker_summary",
+          "status",
+        ],
+      },
+      tasks: {
+        type: "array",
+        description:
+          "task_create: ordered task descriptions. First task is set in_progress.",
+        items: { type: "string" },
+        required: false,
+      },
+      task_id: {
+        type: "string",
+        description:
+          "task_update: task id, 1-based index, current, in_progress, next, or content substring",
+        required: false,
+      },
+      status: {
+        type: "string",
+        description:
+          "task_update: pending | in_progress | completed | blocked | cancelled",
+        enum: ["pending", "in_progress", "completed", "blocked", "cancelled"],
+        required: false,
+      },
+      notes: {
+        type: "string",
+        description: "task_update/status note",
+        required: false,
+      },
+      target_count: {
+        type: "number",
+        description: "Optional user-requested target count for progress display",
+        required: false,
       },
       prospects: {
         type: "array",
@@ -223,6 +353,12 @@ registerTool(
         description: "Reject reason",
         required: false,
       },
+      summary: {
+        type: "string",
+        description:
+          "blocker_summary: explicit explanation when the requested deliverable cannot be completed honestly",
+        required: false,
+      },
     },
     required: ["action"],
     costEstimateCents: 0,
@@ -231,6 +367,63 @@ registerTool(
     if (!context.sessionId) throw new Error("prospect_list requires sessionId");
     const action = String(args.action || "").toLowerCase();
     const workspace = await loadWorkspace(context.sessionId);
+
+    if (action === "task_create") {
+      const rawTasks = Array.isArray(args.tasks) ? args.tasks : [];
+      const tasks = rawTasks
+        .map((t) => String(t || "").trim())
+        .filter(Boolean)
+        .map(makeTask);
+      if (tasks.length === 0) {
+        throw new Error("prospect_list.task_create requires tasks[]");
+      }
+      workspace.tasks = tasks;
+      workspace.blocker_summary = null;
+      await saveWorkspace(context.sessionId, workspace);
+      return {
+        ok: true,
+        tasks: workspace.tasks,
+        progress: workspaceProgress(workspace),
+      };
+    }
+
+    if (action === "task_update") {
+      const task = resolveTask(workspace.tasks, args.task_id || "current");
+      if (!task) {
+        throw new Error(
+          `prospect_list.task_update: no matching task for "${String(args.task_id || "current")}"`,
+        );
+      }
+      const status = String(args.status || "").trim() as TaskStatus;
+      if (!["pending", "in_progress", "completed", "blocked", "cancelled"].includes(status)) {
+        throw new Error("prospect_list.task_update requires valid status");
+      }
+      workspace.tasks = workspace.tasks.map((t) =>
+        t.id === task.id
+          ? {
+              ...t,
+              status,
+              notes: String(args.notes || t.notes || "").trim() || null,
+              updated_at: new Date().toISOString(),
+            }
+          : t,
+      );
+      await saveWorkspace(context.sessionId, workspace);
+      return {
+        ok: true,
+        tasks: workspace.tasks,
+        progress: workspaceProgress(workspace),
+      };
+    }
+
+    if (action === "task_list" || action === "status") {
+      return {
+        tasks: workspace.tasks,
+        prospects: workspace.prospects,
+        rejected: workspace.rejected,
+        progress: workspaceProgress(workspace),
+      };
+    }
 
     if (action === "add" || action === "update") {
       const incoming = Array.isArray(args.prospects)
@@ -242,6 +435,7 @@ registerTool(
         count: workspace.prospects.length,
         prospects: workspace.prospects,
         rejected_count: workspace.rejected.length,
+        progress: workspaceProgress(workspace),
       };
     }
 
@@ -264,6 +458,7 @@ registerTool(
         count: workspace.prospects.length,
         rejected_count: workspace.rejected.length,
         rejected,
+        progress: workspaceProgress(workspace),
       };
     }
 
@@ -285,10 +480,28 @@ registerTool(
     }
 
     if (action === "export") {
+      workspace.exported_at = new Date().toISOString();
+      workspace.exported_count = workspace.prospects.length;
+      await saveWorkspace(context.sessionId, workspace);
       return {
         prospects: workspace.prospects,
         rejected: workspace.rejected,
+        progress: workspaceProgress(workspace),
         csv: toCsv(workspace.prospects),
+      };
+    }
+
+    if (action === "blocker_summary") {
+      const summary = String(args.summary || args.reason || "").trim();
+      if (summary.length < 20) {
+        throw new Error("prospect_list.blocker_summary requires a specific summary");
+      }
+      workspace.blocker_summary = summary;
+      await saveWorkspace(context.sessionId, workspace);
+      return {
+        ok: true,
+        blocker_summary: summary,
+        progress: workspaceProgress(workspace),
       };
     }
 
@@ -298,6 +511,7 @@ registerTool(
         prospects: workspace.prospects,
         rejected_count: workspace.rejected.length,
         rejected: workspace.rejected,
+        progress: workspaceProgress(workspace),
       };
     }
 

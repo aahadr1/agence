@@ -55,6 +55,7 @@ export async function buildLeadGenMissionContextAppendix(
   if (target != null) {
     lines.push(
       `Objectif chiffré : ${target} fiches sauvegardées via prospect_list.save. Moins seulement si tu documentes précisément les blocages ou homonymes impossibles.`,
+      "Avant la découverte, crée un état de tâches durable avec prospect_list action=task_create. Mets-le à jour à chaque début/fin de phase avec action=task_update.",
       `Découverte : utilise prospect_discovery avec target_count=${target} et un vivier d'environ ${maxPool} candidats avant enrichissement.`,
     );
   } else {
@@ -81,9 +82,10 @@ export function buildContinuationUserMessage(
         text:
           "[REPRISE DE SESSION]\n" +
           `Tick ${stepNum} : Tu es en cours d'exécution. \n` +
-          "- Ne recommence pas avec un nouveau bonjour ou un manifeste.\n" +
-          "- Continue depuis les faits déjà collectés.\n" +
-          "- Prochaine action utile : browser, prospect_discovery, business_research, prospect_list, ou ask_user si une décision utilisateur bloque vraiment.",
+      "- Ne recommence pas avec un nouveau bonjour ou un manifeste.\n" +
+      "- Continue depuis les faits déjà collectés.\n" +
+      "- Vérifie l'état avec prospect_list action=status si tu hésites.\n" +
+      "- Prochaine action utile : prospect_list task_update/status, browser, prospect_discovery, business_research, ou ask_user si une décision utilisateur bloque vraiment.",
       },
     ],
   };

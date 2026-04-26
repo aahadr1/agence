@@ -73,24 +73,14 @@ interface AgentState {
   /** Global nudge budget for the whole tick — protects against pathological
    *  loops even when a tool call resets the per-stage counter. */
   totalNudges: number;
-  /** Successful tool calls since the agent last touched its todo list via
-   *  todo_write / todo_update / todo_update_batch / todo_finalize. Used to
-   *  fire a periodic "remember to update your todos" reminder — Gemini in
-   *  particular tends to forget after long tool runs. */
+  /** Successful tool calls since the agent last touched V1 durable work state. */
   successesSinceTodoTouch: number;
-  /** True after Maps discovery steering fired; used to enforce that the
-   *  agent calls scratchpad_write in the next turn. If it doesn't, a
-   *  critical warning is injected. */
+  /** Legacy flag kept for state shape compatibility; V1 uses prospect_list. */
   scratchpadMandatePending: boolean;
 }
 
 const TODO_REMINDER_AFTER_SUCCESSES = 5;
-const TODO_TOUCH_TOOLS = new Set<string>([
-  "todo_write",
-  "todo_update",
-  "todo_update_batch",
-  "todo_finalize",
-]);
+const TODO_TOUCH_TOOLS = new Set<string>(["prospect_list"]);
 
 const DEFAULT_MAX_NUDGES_BEFORE_YIELD = 3;
 /** Hard cap on nudges per tick. Once reached we accept the model's message
@@ -269,8 +259,8 @@ export async function runAgentLoop(
         (looksLikeIntentWithoutAction(result.text) || planningRoadmap)
       ) {
         const nudge = planningRoadmap
-          ? "Tu as publié une roadmap en prose — elle ne fait rien tourner. Soit (a) tu appelles plan_create puis todo_write et ton premier outil **dans ce même tour**, soit (b) tu vas directement à todo_write + un vrai outil (google_maps_search, …). Pas finir un tour avec du texte seul tant qu’il reste du travail."
-          : "Tu décris la prochaine étape mais aucun outil n’a été appelé. Lance l’outil maintenant. Si tout est vraiment fini : todo_finalize puis un court message final — pas d’annonces sans action.";
+          ? "Tu as publié une roadmap en prose — elle ne fait rien tourner. Crée/actualise d’abord l’état durable avec prospect_list action=task_create ou task_update, puis appelle le prochain outil réel (browser, prospect_discovery, business_research ou prospect_list)."
+          : "Tu décris la prochaine étape mais aucun outil n’a été appelé. Lance l’outil réel maintenant. Si tout est vraiment fini, vérifie prospect_list action=status puis livre le résultat final — pas d’annonce sans action.";
         pushNudge(state, nudge);
         await config.onNudge?.(
           nudge,
@@ -326,7 +316,7 @@ export async function runAgentLoop(
                   if (!deliverableOk) {
                     state.finalSummaryDelivered = false;
                     const nudge =
-                      "Ta conclusion ou tes todos ouverts ne suffisent pas : le livrable (nombre de leads sauvegardés pour cette session) est encore en dessous de l’objectif. Continue avec les outils et enchaîne `save_lead` / `batch_save_leads` jusqu’au bon volume, puis `todo_finalize`.";
+                      "Ta conclusion ne suffit pas : le livrable réel est encore incomplet. Vérifie prospect_list action=status, mets à jour la tâche en cours, puis continue avec les outils jusqu’au volume demandé ou enregistre un blocker_summary explicite.";
                     pushNudge(state, nudge);
                     await config.onNudge?.(nudge, "deliverable_blocks_auto_finalize");
                     state.consecutiveErrors++;
@@ -359,14 +349,14 @@ export async function runAgentLoop(
               const nudge = followUp
                 ? [
                     `Travail encore ouvert (${check.summary || ""}). `,
-                    "Si l’utilisateur vient de **corriger la ville ou le périmètre**, tu dois appeler todo_write avec replace_existing:true et reset_reason qui cite son message, puis relancer la découverte.",
-                    "Sinon : une seule action parmi — (a) appelle le prochain outil pour la todo en cours, (b) todo_update avec un index « 1 », « 2 », …, (c) todo_finalize uniquement si le livrable est réellement complet.",
+                    "Si l’utilisateur vient de corriger la ville ou le périmètre, mets à jour prospect_list task state puis relance la découverte.",
+                    "Sinon : une seule action parmi — (a) prospect_list action=task_update/status, (b) le prochain outil réel, (c) prospect_list blocker_summary si le livrable est impossible honnêtement.",
                     "Ne refais pas une introduction « Bonjour » ni un plan depuis zéro sans que ce soit une nouvelle mission.",
                   ].join(" ")
                 : [
                     `Travail encore ouvert (${check.summary || ""}). `,
-                    "Une action parmi — (a) outil suivant pour la todo en cours, (b) todo_update avec index 1-based, (c) todo_finalize si tout est livré.",
-                    "Pas de nouveau Bonjour ni todo_write « full replace » sauf si l’utilisateur a explicitement demandé d’abandonner la liste ou changé la mission.",
+                    "Une action parmi — (a) prospect_list action=task_update/status, (b) prochain outil réel, (c) prospect_list blocker_summary si tout est bloqué.",
+                    "Pas de nouveau Bonjour ni de plan prose sans action.",
                   ].join(" ");
               pushNudge(state, nudge);
               await config.onNudge?.(nudge, "open_work_remaining");
@@ -387,7 +377,7 @@ export async function runAgentLoop(
           const deliverableReady = await config.isDeliverableComplete();
           if (!deliverableReady) {
             const nudge =
-              "Ton message ressemble à une conclusion, mais le livrable attendu n’est pas atteint (ex. pas assez de `save_lead` / `batch_save_leads` vs l’objectif du brief). Poursuis avec les outils, sauve des leads au fil de l’eau, puis `todo_finalize` seulement quand c’est réellement fini.";
+              "Ton message ressemble à une conclusion, mais le livrable attendu n’est pas atteint. Vérifie prospect_list action=status, continue le travail, sauvegarde/exporte les lignes vérifiées, ou enregistre un blocker_summary précis si l’objectif est impossible.";
             pushNudge(state, nudge);
             await config.onNudge?.(nudge, "deliverable_incomplete");
             state.finalSummaryDelivered = false;
@@ -403,19 +393,35 @@ export async function runAgentLoop(
       return buildResult(finalMessage, "completed");
     }
 
+    if (config.requiresTaskState && hasSubstantiveWorkCall(result.functionCalls)) {
+      let hasTaskState = false;
+      try {
+        hasTaskState = await config.hasTaskState?.() ?? false;
+      } catch {
+        hasTaskState = false;
+      }
+      if (!hasTaskState && !result.functionCalls.some(isV1TaskCreateCall)) {
+        const nudge =
+          "État de tâches manquant. Avant toute recherche, navigation, enrichissement ou sauvegarde, appelle prospect_list avec action=\"task_create\" et une liste de phases concrètes. Ensuite seulement lance le premier outil de travail.";
+        pushNudge(state, nudge);
+        await config.onNudge?.(nudge, "missing_task_state");
+        state.consecutiveErrors++;
+        continue;
+      }
+    }
+
     // ---- Restart-loop guard ----
     // If a final summary was already delivered earlier (in this tick or a
     // previous one carried via priorHistory), and the model is now trying to
-    // "start over" with a fresh greeting + a wipe-and-rewrite of the todo
-    // list (todo_write deletes all existing todos), we treat that as a
+    // "start over" with a fresh greeting + a fresh V1 task list, we treat that as a
     // stuck-in-a-loop signal. The right move is to finalize and stop — NOT
-    // to let the model re-run the whole task against a fresh todo list.
+    // to let the model re-run the whole task against a fresh work state.
     //
     // Concrete trigger we saw (Nancy lead-gen incident): after delivering
     // "Voici la liste des 10 leads …", the next tick picked up, nudged
     // "open work remaining", and Gemini responded with "Bonjour ! J'ai
     // bien compris votre demande. Je vais rechercher …" followed by a
-    // fresh todo_write. Four full restart cycles ensued.
+    // fresh prospect_list task_create. Four full restart cycles ensued.
     if (
       state.finalSummaryDelivered &&
       looksLikeRestart(result.text, result.functionCalls)
@@ -496,7 +502,7 @@ export async function runAgentLoop(
       if (toolResult.error?.includes("[NON_RETRYABLE]")) {
         content +=
           "\n\n[AUTO] Erreur non-retryable. Ne retente PAS ce même appel. " +
-          "Stocke les données collectées via `scratchpad_write`, bascule " +
+          "Mets à jour l’état avec `prospect_list` (task_update ou blocker_summary), bascule " +
           "vers un outil alternatif, ou passe au candidat suivant.";
       }
 
@@ -567,62 +573,7 @@ export async function runAgentLoop(
 
     state.history.push({ role: "user", parts: toolResultParts });
 
-    // Scratchpad enforcement: if we told the agent to scratchpad_write after
-    // Maps and it didn’t, inject a critical warning.
-    if (state.scratchpadMandatePending) {
-      const hadScratchpadWrite = result.functionCalls.some(
-        (fc) => fc.name === "scratchpad_write",
-      );
-      if (!hadScratchpadWrite) {
-        state.history.push({
-          role: "user",
-          parts: [
-            {
-              type: "text",
-              text:
-                "[AVERTISSEMENT CRITIQUE] Tu as reçu des résultats Maps au tour précédent " +
-                "mais tu n’as PAS appelé `scratchpad_write`. Les données ne sont PAS " +
-                "persistées et seront PERDUES au prochain tick. Appelle `scratchpad_write` " +
-                "MAINTENANT avec la liste de candidats, AVANT tout autre outil.",
-            },
-          ],
-        });
-      }
-      state.scratchpadMandatePending = false;
-    }
-
-    // One-shot discovery steering after first successful google_maps_search this tick
-    const batchHadMaps = result.functionCalls.some(
-      (fc) => fc.name === "google_maps_search",
-    );
-    if (batchHadMaps && !state.discoverySteeringDone) {
-      const tail = allToolCalls.slice(-result.functionCalls.length);
-      const mapsOk = tail.some(
-        (t) => t.name === "google_maps_search" && !t.error,
-      );
-      if (mapsOk) {
-        state.discoverySteeringDone = true;
-        state.scratchpadMandatePending = true;
-        state.history.push({
-          role: "user",
-          parts: [
-            {
-              type: "text",
-              text:
-                "[Discovery steering — ACTIONS OBLIGATOIRES CE TOUR]\n" +
-                "Tu viens de recevoir des résultats Maps. Tu DOIS faire ces actions dans CE tour :\n" +
-                "1) **OBLIGATOIRE** : appelle `scratchpad_write` avec key=’candidates’ et value=JSON de tous les résultats. Si tu ne le fais pas, les données seront PERDUES au prochain tick.\n" +
-                "2) **Pré-classe** avec les champs gratuits (website_url, has_website, chaîne évidente). La note Maps seule **ne suffit pas** pour valider un lead B2B — ne trie pas « par étoiles » comme critère métier.\n" +
-                "3) Au prochain tour : lance plusieurs `website_finder` **en parallèle** (3-5 par tour), jamais un par un.\n" +
-                "4) Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.\n" +
-                "RAPPEL : ~20 itérations par tick. Ne gaspille pas.",
-            },
-          ],
-        });
-      }
-    }
-
-    // Todo-hygiene reminder: if the agent has been running non-todo tools
+    // Work-state reminder: if the agent has been running non-state tools
     // for a while, append a short todo-state snapshot to the last tool
     // result so it re-enters working memory. This fixes the Nancy bug where
     // Gemini delivered the final list but never advanced the todo list
@@ -642,7 +593,7 @@ export async function runAgentLoop(
                 text:
                   "[todo hygiene reminder — reply only if action is needed]\n" +
                   snapshot +
-                  "\nIf any of the open todos above are already done, close them with `todo_update_batch` in your next turn (before starting new work). If the next phase has begun, mark the new current todo `in_progress`.",
+                  "\nIf any open task above changed, call prospect_list action=task_update before starting new work. If the next phase has begun, mark that task in_progress.",
               },
             ],
           });
@@ -753,6 +704,13 @@ function looksLikeIntentWithoutAction(
   // Very short "ok done" messages are fine — skip
   if (t.length < 60 && /\b(done|ok|okay|termin[eé]|voilà|vu|parfait)\b/i.test(t)) {
     return false;
+  }
+  if (
+    /\bje\s+vais\s+(?:maintenant\s+)?(?:lancer|commencer|chercher|faire|cr[eé]er|appeler|ex[eé]cuter|utiliser|consulter|analyser|continuer|mettre|examiner|passer|v[eé]rifier|essayer|regarder|tenter)\b/i.test(t) ||
+    /\bmaintenant\s+je\s+(?:mets|continue|cherche|v[eé]rifie|passe|tente|regarde|analyse|lance|commence)\b/i.test(t) ||
+    /\b(?:i\s+will|i['’]?ll|let\s+me)\s+(?:now\s+)?(?:search|call|run|use|execute|check|analyze|continue|try|start|begin)\b/i.test(t)
+  ) {
+    return true;
   }
   let hits = 0;
   for (const re of INTENT_PATTERNS) {
@@ -899,19 +857,19 @@ const RESTART_INTENT_PATTERNS = [
 
 /**
  * Detects a "restart" turn: the model is greeting + re-planning + about to
- * wipe the todo list, after it has already delivered a final answer. This
+ * recreate the task list, after it has already delivered a final answer. This
  * is the Nancy-style loop ("Bonjour ! Voici mon plan …" × 4).
  *
  * Conservative: we require BOTH a greeting OR a plan-intent phrase AND a
- * todo_write tool call, so we never misfire on the legitimate first turn
+ * prospect_list task_create call, so we never misfire on the legitimate first turn
  * of a brand new task.
  */
 function looksLikeRestart(
   text: string | null | undefined,
-  calls: ReadonlyArray<{ name: string }>,
+  calls: ReadonlyArray<{ name: string; args?: Record<string, unknown> }>,
 ): boolean {
-  const hasTodoWrite = calls.some((c) => c.name === "todo_write");
-  if (!hasTodoWrite) return false;
+  const hasTaskCreate = calls.some(isV1TaskCreateCall);
+  if (!hasTaskCreate) return false;
   if (!text) return false;
   const t = text.trim();
   if (t.length < 20) return false;
@@ -927,6 +885,27 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function isV1TaskCreateCall(call: {
+  name: string;
+  args?: Record<string, unknown>;
+}): boolean {
+  return (
+    call.name === "prospect_list" &&
+    String(call.args?.action || "").toLowerCase() === "task_create"
+  );
+}
+
+function hasSubstantiveWorkCall(
+  calls: ReadonlyArray<{ name: string; args?: Record<string, unknown> }>,
+): boolean {
+  return calls.some((call) => {
+    if (call.name === "ask_user") return false;
+    if (call.name !== "prospect_list") return true;
+    const action = String(call.args?.action || "").toLowerCase();
+    return !["task_create", "task_list", "status"].includes(action);
+  });
 }
 
 /**

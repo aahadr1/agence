@@ -31,6 +31,7 @@ import { fetchLeadTargetForSession } from "@/lib/agent/lead-target";
 import {
   buildContinuationUserMessage,
   buildLeadGenMissionContextAppendix,
+  countLeadsForAgentSession,
 } from "@/lib/agent/mission-prompt";
 import type { AgentMessage } from "@/lib/ai/llm-router";
 
@@ -59,6 +60,88 @@ const LOCK_TTL_SEC = 300;
 
 /** Max automatic retries of a failing tick before we mark session as failed. */
 const MAX_TICK_RETRIES = 3;
+
+const V1_WORKSPACE_KEY = "v1_prospect_workspace";
+
+type V1Workspace = {
+  prospects?: Array<Record<string, unknown>>;
+  rejected?: Array<Record<string, unknown>>;
+  tasks?: Array<{
+    id?: string;
+    content?: string;
+    status?: string;
+    position?: number;
+    notes?: string | null;
+  }>;
+  blocker_summary?: string | null;
+  exported_count?: number;
+};
+
+async function fetchV1Workspace(sessionId: string): Promise<V1Workspace> {
+  const db = getAgentDb();
+  const { data } = await db
+    .from("agent_memory")
+    .select("value")
+    .eq("session_id", sessionId)
+    .eq("key", V1_WORKSPACE_KEY)
+    .maybeSingle();
+  return ((data?.value as V1Workspace | null) || {}) as V1Workspace;
+}
+
+function v1OpenTasks(workspace: V1Workspace) {
+  return (workspace.tasks || []).filter((t) =>
+    t.status === "pending" || t.status === "in_progress",
+  );
+}
+
+async function v1TaskSnapshot(sessionId: string): Promise<string> {
+  const workspace = await fetchV1Workspace(sessionId);
+  const tasks = workspace.tasks || [];
+  if (tasks.length === 0) return "";
+  return tasks
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map((t, i) => `${i + 1}. [${t.status || "pending"}] ${t.content || t.id || "task"}${t.notes ? ` — ${t.notes}` : ""}`)
+    .join("\n");
+}
+
+async function v1CompletionStatus(
+  orgId: string,
+  sessionId: string,
+): Promise<{
+  complete: boolean;
+  summary: string;
+}> {
+  const [target, saved, workspace] = await Promise.all([
+    fetchLeadTargetForSession(sessionId),
+    countLeadsForAgentSession(orgId, sessionId),
+    fetchV1Workspace(sessionId),
+  ]);
+  const exported = workspace.exported_count || 0;
+  const blocker = String(workspace.blocker_summary || "").trim();
+  const taskCount = workspace.tasks?.length || 0;
+  const openTasks = v1OpenTasks(workspace).length;
+  const prospectCount = workspace.prospects?.length || 0;
+  const rejectedCount = workspace.rejected?.length || 0;
+
+  if (target != null) {
+    const reached = Math.max(saved, exported) >= target;
+    const blocked = blocker.length >= 20;
+    return {
+      complete: reached || blocked,
+      summary:
+        `Progression : ${Math.max(saved, exported)} / ${target} livrable(s) ` +
+        `(CRM=${saved}, export=${exported}, workspace=${prospectCount}, rejetés=${rejectedCount}, tâches ouvertes=${openTasks}).` +
+        (blocked ? ` Blocage documenté : ${blocker}` : ""),
+    };
+  }
+
+  return {
+    complete: taskCount > 0 && openTasks === 0,
+    summary:
+      `État V1 : tâches=${taskCount}, tâches ouvertes=${openTasks}, workspace=${prospectCount}, CRM=${saved}, export=${exported}.` +
+      (blocker ? ` Blocage documenté : ${blocker}` : ""),
+  };
+}
 
 // -----------------------------------------------------------------------------
 // Session row shape
@@ -368,7 +451,15 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
           });
         },
         onReflection: undefined,
-        isDeliverableComplete: undefined,
+        isDeliverableComplete: async () => {
+          const status = await v1CompletionStatus(session.org_id, sessionId);
+          return status.complete;
+        },
+        requiresTaskState: true,
+        hasTaskState: async () => {
+          const workspace = await fetchV1Workspace(sessionId);
+          return (workspace.tasks?.length || 0) > 0;
+        },
         maxNudgesBeforeYield: 1,
         maxTotalNudges: 2,
         onNudge: async (text, reason) => {
@@ -381,9 +472,33 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
             metadata: { nudge: true, reason },
           });
         },
-        checkOpenWork: undefined,
+        checkOpenWork: async () => {
+          const workspace = await fetchV1Workspace(sessionId);
+          const tasks = workspace.tasks || [];
+          if (tasks.length === 0) {
+            return {
+              open: true,
+              summary:
+                "Aucun état de tâches durable. Appelle prospect_list action=task_create avant de continuer.",
+            };
+          }
+          const status = await v1CompletionStatus(session.org_id, sessionId);
+          if (!status.complete) {
+            return { open: true, summary: status.summary };
+          }
+          const openTasks = v1OpenTasks(workspace);
+          if (openTasks.length > 0) {
+            return {
+              open: true,
+              summary:
+                `${openTasks.length} tâche(s) encore ouverte(s). ` +
+                "Mets-les à jour avec prospect_list action=task_update avant de conclure.",
+            };
+          }
+          return { open: false };
+        },
         finalizeOpenWork: undefined,
-        todoSnapshot: undefined,
+        todoSnapshot: () => v1TaskSnapshot(sessionId),
       },
       context,
       executeTool,
