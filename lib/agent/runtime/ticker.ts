@@ -436,6 +436,36 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
       }
     }
 
+    let cancellationSeen = false;
+    const isSessionCancelled = async () => {
+      if (cancellationSeen) return true;
+      const { data: row } = await db
+        .from("agent_sessions")
+        .select("status")
+        .eq("id", sessionId)
+        .maybeSingle();
+      cancellationSeen = row?.status === "cancelled";
+      return cancellationSeen;
+    };
+
+    const guardedExecuteTool = async (
+      name: string,
+      args: Record<string, unknown>,
+      toolContext: AgentContext,
+    ) => {
+      const started = Date.now();
+      if (await isSessionCancelled()) {
+        return {
+          name,
+          result: null,
+          error: "[ABORTED] session cancelled",
+          durationMs: Date.now() - started,
+          costCents: 0,
+        };
+      }
+      return executeTool(name, args, toolContext);
+    };
+
     const loopPromise = runAgentLoop(
       {
         systemPrompt,
@@ -448,14 +478,10 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
           userFollowUpAppended: Boolean(followUpReinforcement),
         },
         shouldAbort: async () => {
-          const { data: row } = await db
-            .from("agent_sessions")
-            .select("status")
-            .eq("id", sessionId)
-            .maybeSingle();
-          return row?.status === "cancelled";
+          return isSessionCancelled();
         },
         onThinking: async (text) => {
+          if (await isSessionCancelled()) return;
           await db.from("agent_messages").insert({
             session_id: sessionId,
             role: "thinking",
@@ -463,6 +489,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
           });
         },
         onMessage: async (text) => {
+          if (await isSessionCancelled()) return;
           await db.from("agent_messages").insert({
             session_id: sessionId,
             role: "assistant",
@@ -470,6 +497,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
           });
         },
         onToolCall: async (name, params) => {
+          if (await isSessionCancelled()) return;
           await db.from("agent_messages").insert({
             session_id: sessionId,
             role: "system",
@@ -478,6 +506,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
           });
         },
         onToolResult: async (toolResult) => {
+          if (await isSessionCancelled()) return;
           await db.from("agent_messages").insert({
             session_id: sessionId,
             role: "system",
@@ -504,6 +533,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
         maxNudgesBeforeYield: 1,
         maxTotalNudges: 2,
         onNudge: async (text, reason) => {
+          if (await isSessionCancelled()) return;
           // Persisted as a hidden system row so the next tick's loadHistory
           // can replay it, without polluting the user-visible chat.
           await db.from("agent_messages").insert({
@@ -542,7 +572,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
         todoSnapshot: () => v1TaskSnapshot(sessionId),
       },
       context,
-      executeTool,
+      guardedExecuteTool,
       userMessage,
       priorHistory,
     );

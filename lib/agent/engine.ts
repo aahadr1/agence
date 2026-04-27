@@ -195,6 +195,13 @@ export async function runAgentLoop(
     context.totalCostCents += result.costCents;
     context.inputTokensSoFar = totalInputTokens;
 
+    // Cancellation can happen while the provider call is in flight. In that
+    // case do not surface the returned text or execute its tool calls.
+    if (config.shouldAbort && (await config.shouldAbort())) {
+      finalMessage = "Session arrêtée.";
+      return buildResult(finalMessage, "aborted");
+    }
+
     if (result.thinking) {
       await config.onThinking?.(result.thinking);
     }
@@ -452,6 +459,7 @@ export async function runAgentLoop(
     }
     const toolResultParts: AgentMessagePart[] = [];
     let approvalRequestId: string | undefined;
+    let abortRequested = false;
 
     // Check if any call is request_approval — must execute alone first
     const approvalCall = result.functionCalls.find(
@@ -466,11 +474,24 @@ export async function runAgentLoop(
 
     // Helper to process one tool call
     const processToolCall = async (fc: (typeof result.functionCalls)[0]) => {
+      if (config.shouldAbort && (await config.shouldAbort())) {
+        abortRequested = true;
+        return {
+          type: "tool_result" as const,
+          toolUseId: fc.id,
+          content: "Session cancelled before tool execution.",
+          isError: true,
+        };
+      }
       await config.onToolCall?.(fc.name, fc.args);
       const toolResult = await executeTool(fc.name, fc.args, context);
       allToolCalls.push(toolResult);
       context.totalCostCents += toolResult.costCents;
-      await config.onToolResult?.(toolResult);
+      if (config.shouldAbort && (await config.shouldAbort())) {
+        abortRequested = true;
+      } else {
+        await config.onToolResult?.(toolResult);
+      }
 
       // Update error streak
       if (toolResult.error) {
@@ -570,6 +591,11 @@ export async function runAgentLoop(
           }
         }
       }
+    }
+
+    if (abortRequested || (config.shouldAbort && (await config.shouldAbort()))) {
+      finalMessage = "Session arrêtée.";
+      return buildResult(finalMessage, "aborted");
     }
 
     state.history.push({ role: "user", parts: toolResultParts });
@@ -759,8 +785,8 @@ function looksLikeProcessChatterOnly(text: string | null | undefined): boolean {
     .map((line) => line.trim())
     .filter(Boolean);
   if (lines.length > 6) return false;
-  const chatterLine = /^(?:bien s[ûu]r|d['’]?accord|ok|parfait|super|maintenant|ensuite|je\s+(?:commence|lance|vais|reprends|continue|mets|v[eé]rifie|cherche|tente|passe|consulte|regarde)|je\s+vais\s+maintenant|i\s+(?:will|am going to|will now)|let\s+me|now\s+i|next\s+i)\b/i;
-  const actionWords = /\b(?:rechercher|chercher|lancer|commencer|continuer|reprendre|v[eé]rifier|consulter|enrichir|mettre [àa] jour|sauvegarder|browser|prospect_list|prospect_discovery|business_research|search|check|continue|resume|update|save|enrich)\b/i;
+  const chatterLine = /^(?:bien s[ûu]r|d['’]?accord|ok|parfait|super|maintenant|ensuite|la page est en cours|j['’]?ai commenc[eé]|je\s+(?:commence|lance|vais|reprends|continue|mets|v[eé]rifie|cherche|tente|passe|consulte|regarde|sauvegarde|traite)|je\s+vais\s+maintenant|i\s+(?:will|am going to|will now)|let\s+me|now\s+i|next\s+i)\b/i;
+  const actionWords = /\b(?:rechercher|chercher|lancer|commencer|continuer|reprendre|v[eé]rifier|consulter|enrichir|mettre [àa] jour|sauvegarder|traiter|browser|prospect_list|prospect_discovery|business_research|search|check|continue|resume|update|save|enrich)\b/i;
   const allChatter = lines.every((line) =>
     chatterLine.test(line) || (actionWords.test(line) && looksLikeIntentWithoutAction(line)),
   );
