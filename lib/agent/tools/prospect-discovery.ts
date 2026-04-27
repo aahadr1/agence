@@ -7,6 +7,167 @@ import {
   uniqueByBusinessKey,
 } from "./v1-browser-utils";
 
+const V1_WORKSPACE_KEY = "v1_prospect_workspace";
+const DEFAULT_CONTACT_POLICY =
+  "Establishment phone or establishment email counts as contact unless the user explicitly asks for owner-direct contact.";
+
+type ProspectRow = Record<string, unknown>;
+type V1Workspace = {
+  prospects?: ProspectRow[];
+  rejected?: ProspectRow[];
+  tasks?: Array<Record<string, unknown>>;
+  objective?: string | null;
+  target_count?: number | null;
+  acceptance_criteria?: string | null;
+  contact_policy?: string | null;
+  blocker_summary?: string | null;
+  terminal_blocked?: boolean;
+  exported_at?: string | null;
+  exported_count?: number;
+};
+
+function normalizeLoose(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function prospectKey(row: ProspectRow): string {
+  return `${row.business_name || row.name || ""}|${row.address || row.location || ""}`
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasContact(row: ProspectRow): boolean {
+  return Boolean(String(row.phone || row.email || row.owner_phone || row.owner_email || "").trim());
+}
+
+function hasLegal(row: ProspectRow): boolean {
+  return Boolean(String(row.owner_name || row.siren || row.siret || "").trim());
+}
+
+function inferStatus(row: ProspectRow): string {
+  if (row.saved || row.lead_id) return "saved";
+  if (row.status === "rejected") return "rejected";
+  if (row.status === "needs_review") return "needs_review";
+  if (Array.isArray(row.rejected_reasons) && row.rejected_reasons.length > 0) {
+    return "needs_review";
+  }
+  if (hasContact(row) && hasLegal(row)) return "complete";
+  if (hasLegal(row)) return "legal_found";
+  if (hasContact(row)) return "contact_found";
+  return "discovered";
+}
+
+function isRejectedCandidate(row: ProspectRow, rejected: ProspectRow[] = []): boolean {
+  const name = normalizeLoose(row.business_name || row.name);
+  const address = normalizeLoose(row.address || row.location);
+  const siren = normalizeLoose(row.siren || row.siret);
+  const maps = normalizeLoose(row.google_maps_url);
+  if (!name && !siren && !maps) return false;
+  return rejected.some((r) => {
+    const rName = normalizeLoose(r.business_name || r.name);
+    const rAddress = normalizeLoose(r.address || r.location);
+    const rSiren = normalizeLoose(r.siren || r.siret);
+    const rMaps = normalizeLoose(r.google_maps_url);
+    if (siren && rSiren && siren === rSiren) return true;
+    if (maps && rMaps && maps === rMaps) return true;
+    if (!name || !rName || name !== rName) return false;
+    if (!address || !rAddress) return true;
+    return address === rAddress;
+  });
+}
+
+async function persistDiscoveredCandidates(
+  sessionId: string,
+  payload: {
+    niche: string;
+    location: string;
+    candidates: ProspectRow[];
+  },
+  target: number,
+): Promise<{ workspace_count: number; skipped_rejected: number }> {
+  const db = getAgentDb();
+  const { data } = await db
+    .from("agent_memory")
+    .select("value")
+    .eq("session_id", sessionId)
+    .eq("key", V1_WORKSPACE_KEY)
+    .maybeSingle();
+  const value = ((data?.value as V1Workspace | null) || {}) as V1Workspace;
+  const prospects = Array.isArray(value.prospects) ? value.prospects : [];
+  const rejected = Array.isArray(value.rejected) ? value.rejected : [];
+  const map = new Map<string, ProspectRow>();
+  for (const row of prospects) {
+    const key = prospectKey(row);
+    if (key) map.set(key, { ...row, status: inferStatus(row) });
+  }
+  let skippedRejected = 0;
+  for (const row of payload.candidates) {
+    if (isRejectedCandidate(row, rejected)) {
+      skippedRejected++;
+      continue;
+    }
+    const key = prospectKey(row);
+    if (!key) continue;
+    const prev = map.get(key) || {};
+    const provenance = `prospect_discovery ${row.source || "web"} query "${row.source_query || `${payload.niche} ${payload.location}`}"`;
+    const merged = {
+      ...prev,
+      ...row,
+      data_provenance: String(row.data_provenance || prev.data_provenance || provenance),
+      discovered_at: prev.discovered_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const statusProbe = row.status ? merged : { ...merged, status: undefined };
+    map.set(key, { ...merged, status: inferStatus(statusProbe) });
+  }
+
+  const workspace: V1Workspace = {
+    prospects: [...map.values()],
+    rejected,
+    tasks: Array.isArray(value.tasks) ? value.tasks : [],
+    objective:
+      typeof value.objective === "string" && value.objective.trim()
+        ? value.objective
+        : `Find and qualify ${payload.niche} in ${payload.location}`,
+    target_count:
+      typeof value.target_count === "number" && value.target_count > 0
+        ? value.target_count
+        : target > 0
+          ? target
+          : null,
+    acceptance_criteria:
+      typeof value.acceptance_criteria === "string" && value.acceptance_criteria.trim()
+        ? value.acceptance_criteria
+        : "Final rows must have a verified business name, contact phone/email, legal identity (owner or SIREN), and source provenance.",
+    contact_policy:
+      typeof value.contact_policy === "string" && value.contact_policy.trim()
+        ? value.contact_policy
+        : DEFAULT_CONTACT_POLICY,
+    blocker_summary: value.blocker_summary || null,
+    terminal_blocked: value.terminal_blocked === true,
+    exported_at: value.exported_at || null,
+    exported_count: typeof value.exported_count === "number" ? value.exported_count : 0,
+  };
+
+  await db.from("agent_memory").upsert(
+    {
+      session_id: sessionId,
+      key: V1_WORKSPACE_KEY,
+      value: workspace,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "session_id,key" },
+  );
+  return { workspace_count: workspace.prospects?.length || 0, skipped_rejected: skippedRejected };
+}
+
 registerTool(
   {
     name: "prospect_discovery",
@@ -142,6 +303,7 @@ registerTool(
     );
 
     if (context.sessionId && payload.candidates.length > 0) {
+      let persisted: { workspace_count: number; skipped_rejected: number } | null = null;
       try {
         const db = getAgentDb();
         await db.from("agent_discovery_snapshots").insert({
@@ -159,12 +321,22 @@ registerTool(
           },
           { onConflict: "session_id,key" },
         );
+        persisted = await persistDiscoveredCandidates(context.sessionId, payload, target);
       } catch (e) {
         console.warn(
           "[prospect_discovery] snapshot:",
           e instanceof Error ? e.message : e,
         );
       }
+      return {
+        ...payload,
+        count: payload.candidates.length,
+        auto_persisted: Boolean(persisted),
+        workspace_count: persisted?.workspace_count || null,
+        skipped_rejected: persisted?.skipped_rejected || 0,
+        guidance:
+          "Candidates were persisted to prospect_list automatically. Use prospect_list status/list, then call business_research for promising businesses before saving/exporting complete rows.",
+      };
     }
 
     return {

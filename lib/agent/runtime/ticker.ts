@@ -73,7 +73,12 @@ type V1Workspace = {
     position?: number;
     notes?: string | null;
   }>;
+  objective?: string | null;
+  target_count?: number | null;
+  acceptance_criteria?: string | null;
+  contact_policy?: string | null;
   blocker_summary?: string | null;
+  terminal_blocked?: boolean;
   exported_count?: number;
 };
 
@@ -94,6 +99,32 @@ function v1OpenTasks(workspace: V1Workspace) {
   );
 }
 
+function v1HasContact(row: Record<string, unknown>): boolean {
+  return Boolean(
+    String(row.phone || row.email || row.owner_phone || row.owner_email || "").trim(),
+  );
+}
+
+function v1HasLegal(row: Record<string, unknown>): boolean {
+  return Boolean(String(row.owner_name || row.siren || row.siret || "").trim());
+}
+
+function v1HasProvenance(row: Record<string, unknown>): boolean {
+  return String(row.data_provenance || "").trim().length >= 8 ||
+    (Array.isArray(row.sources) && row.sources.length > 0);
+}
+
+function v1CompleteProspectCount(workspace: V1Workspace): number {
+  return (workspace.prospects || []).filter(
+    (p) =>
+      String(p.business_name || "").trim() &&
+      String(p.status || "") !== "rejected" &&
+      v1HasContact(p) &&
+      v1HasLegal(p) &&
+      v1HasProvenance(p),
+  ).length;
+}
+
 async function v1TaskSnapshot(sessionId: string): Promise<string> {
   const workspace = await fetchV1Workspace(sessionId);
   const tasks = workspace.tasks || [];
@@ -111,7 +142,7 @@ async function v1CompletionStatus(
   complete: boolean;
   summary: string;
 }> {
-  const [target, saved, workspace] = await Promise.all([
+  const [targetFromBrief, saved, workspace] = await Promise.all([
     fetchLeadTargetForSession(sessionId),
     countLeadsForAgentSession(orgId, sessionId),
     fetchV1Workspace(sessionId),
@@ -122,24 +153,34 @@ async function v1CompletionStatus(
   const openTasks = v1OpenTasks(workspace).length;
   const prospectCount = workspace.prospects?.length || 0;
   const rejectedCount = workspace.rejected?.length || 0;
+  const completeCount = v1CompleteProspectCount(workspace);
+  const target =
+    typeof workspace.target_count === "number" && workspace.target_count > 0
+      ? workspace.target_count
+      : targetFromBrief;
+  const delivered = Math.max(saved, exported, completeCount);
+  const coverage = prospectCount + rejectedCount;
+  const blocked =
+    workspace.terminal_blocked === true &&
+    blocker.length >= 40 &&
+    (target == null ? taskCount > 0 : coverage >= target);
 
   if (target != null) {
-    const reached = Math.max(saved, exported) >= target;
-    const blocked = blocker.length >= 20;
+    const reached = delivered >= target;
     return {
       complete: reached || blocked,
       summary:
-        `Progression : ${Math.max(saved, exported)} / ${target} livrable(s) ` +
-        `(CRM=${saved}, export=${exported}, workspace=${prospectCount}, rejetés=${rejectedCount}, tâches ouvertes=${openTasks}).` +
-        (blocked ? ` Blocage documenté : ${blocker}` : ""),
+        `Progression : ${delivered} / ${target} ligne(s) complètes ` +
+        `(CRM=${saved}, export=${exported}, complètes=${completeCount}, workspace=${prospectCount}, rejetés=${rejectedCount}, tâches ouvertes=${openTasks}).` +
+        (blocked ? ` Blocage terminal documenté : ${blocker}` : ""),
     };
   }
 
   return {
-    complete: taskCount > 0 && openTasks === 0,
+    complete: blocked || (taskCount > 0 && openTasks === 0),
     summary:
-      `État V1 : tâches=${taskCount}, tâches ouvertes=${openTasks}, workspace=${prospectCount}, CRM=${saved}, export=${exported}.` +
-      (blocker ? ` Blocage documenté : ${blocker}` : ""),
+      `État V1 : tâches=${taskCount}, tâches ouvertes=${openTasks}, workspace=${prospectCount}, complètes=${completeCount}, CRM=${saved}, export=${exported}.` +
+      (blocked ? ` Blocage terminal documenté : ${blocker}` : ""),
   };
 }
 

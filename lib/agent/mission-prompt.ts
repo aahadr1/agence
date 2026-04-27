@@ -55,7 +55,8 @@ export async function buildLeadGenMissionContextAppendix(
   if (target != null) {
     lines.push(
       `Objectif chiffré : ${target} fiches sauvegardées via prospect_list.save. Moins seulement si tu documentes précisément les blocages ou homonymes impossibles.`,
-      "Avant la découverte, crée un état de tâches durable avec prospect_list action=task_create. Mets-le à jour à chaque début/fin de phase avec action=task_update.",
+      "Avant la découverte, crée un état de tâches durable avec prospect_list action=task_create, target_count, objective et acceptance_criteria. Mets-le à jour à chaque début/fin de phase avec action=task_update.",
+      "Pour un contact demandé sans précision, un téléphone/email d'établissement vérifié compte. Ne compte pas une ligne comme complète sans contact + dirigeant/SIREN + provenance.",
       `Découverte : utilise prospect_discovery avec target_count=${target} et un vivier d'environ ${maxPool} candidats avant enrichissement.`,
     );
   } else {
@@ -83,9 +84,11 @@ export function buildContinuationUserMessage(
           "[REPRISE DE SESSION]\n" +
           `Tick ${stepNum} : Tu es en cours d'exécution. \n` +
       "- Ne recommence pas avec un nouveau bonjour ou un manifeste.\n" +
+      "- Ne dis pas « je reprends » à l'utilisateur. Continue silencieusement depuis l'état durable.\n" +
       "- Continue depuis les faits déjà collectés.\n" +
-      "- Vérifie l'état avec prospect_list action=status si tu hésites.\n" +
-      "- Prochaine action utile : prospect_list task_update/status, browser, prospect_discovery, business_research, ou ask_user si une décision utilisateur bloque vraiment.",
+      "- Vérifie l'état avec prospect_list action=status si tu hésites, puis choisis la prochaine action concrète.\n" +
+      "- Ne réintroduis jamais un candidat rejeté sauf nouvelle preuve explicite.\n" +
+      "- Prochaine action utile : prospect_list task_update/status/list, browser, prospect_discovery seulement si le vivier manque, business_research, ou ask_user si une décision utilisateur bloque vraiment.",
       },
     ],
   };

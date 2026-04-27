@@ -6,6 +6,14 @@ import { getAgentDb } from "./_db";
 
 type ProspectRow = Record<string, unknown>;
 type TaskStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
+type ProspectStatus =
+  | "discovered"
+  | "legal_found"
+  | "contact_found"
+  | "complete"
+  | "saved"
+  | "rejected"
+  | "needs_review";
 type WorkspaceTask = {
   id: string;
   content: string;
@@ -14,17 +22,25 @@ type WorkspaceTask = {
   notes?: string | null;
   updated_at: string;
 };
-
-const WORKSPACE_KEY = "v1_prospect_workspace";
-
-async function loadWorkspace(sessionId: string): Promise<{
+type Workspace = {
   prospects: ProspectRow[];
   rejected: ProspectRow[];
   tasks: WorkspaceTask[];
+  objective: string | null;
+  target_count: number | null;
+  acceptance_criteria: string | null;
+  contact_policy: string;
   blocker_summary: string | null;
+  terminal_blocked: boolean;
   exported_at: string | null;
   exported_count: number;
-}> {
+};
+
+const WORKSPACE_KEY = "v1_prospect_workspace";
+const DEFAULT_CONTACT_POLICY =
+  "Establishment phone or establishment email counts as contact unless the user explicitly asks for owner-direct contact.";
+
+async function loadWorkspace(sessionId: string): Promise<Workspace> {
   const db = getAgentDb();
   const { data } = await db
     .from("agent_memory")
@@ -37,7 +53,12 @@ async function loadWorkspace(sessionId: string): Promise<{
         prospects?: ProspectRow[];
         rejected?: ProspectRow[];
         tasks?: WorkspaceTask[];
+        objective?: string | null;
+        target_count?: number | null;
+        acceptance_criteria?: string | null;
+        contact_policy?: string | null;
         blocker_summary?: string | null;
+        terminal_blocked?: boolean;
         exported_at?: string | null;
         exported_count?: number;
       }
@@ -46,8 +67,22 @@ async function loadWorkspace(sessionId: string): Promise<{
     prospects: Array.isArray(value?.prospects) ? value.prospects : [],
     rejected: Array.isArray(value?.rejected) ? value.rejected : [],
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
+    objective: typeof value?.objective === "string" ? value.objective : null,
+    target_count:
+      typeof value?.target_count === "number" && Number.isFinite(value.target_count)
+        ? value.target_count
+        : null,
+    acceptance_criteria:
+      typeof value?.acceptance_criteria === "string"
+        ? value.acceptance_criteria
+        : null,
+    contact_policy:
+      typeof value?.contact_policy === "string" && value.contact_policy.trim()
+        ? value.contact_policy
+        : DEFAULT_CONTACT_POLICY,
     blocker_summary:
       typeof value?.blocker_summary === "string" ? value.blocker_summary : null,
+    terminal_blocked: value?.terminal_blocked === true,
     exported_at: typeof value?.exported_at === "string" ? value.exported_at : null,
     exported_count:
       typeof value?.exported_count === "number" ? value.exported_count : 0,
@@ -56,14 +91,7 @@ async function loadWorkspace(sessionId: string): Promise<{
 
 async function saveWorkspace(
   sessionId: string,
-  workspace: {
-    prospects: ProspectRow[];
-    rejected: ProspectRow[];
-    tasks: WorkspaceTask[];
-    blocker_summary: string | null;
-    exported_at: string | null;
-    exported_count: number;
-  },
+  workspace: Workspace,
 ): Promise<void> {
   const db = getAgentDb();
   await db.from("agent_memory").upsert(
@@ -78,24 +106,123 @@ async function saveWorkspace(
 }
 
 function prospectKey(row: ProspectRow): string {
-  return `${row.business_name || ""}|${row.address || ""}`
+  return `${row.business_name || row.name || ""}|${row.address || row.location || ""}`
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function mergeProspects(existing: ProspectRow[], incoming: ProspectRow[]): ProspectRow[] {
+function normalizeLoose(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasContact(row: ProspectRow): boolean {
+  return Boolean(
+    String(row.phone || row.email || row.owner_phone || row.owner_email || "").trim(),
+  );
+}
+
+function hasLegalIdentity(row: ProspectRow): boolean {
+  return Boolean(String(row.owner_name || row.siren || row.siret || "").trim());
+}
+
+function hasProvenance(row: ProspectRow): boolean {
+  return String(row.data_provenance || "").trim().length >= 8 ||
+    (Array.isArray(row.sources) && row.sources.length > 0);
+}
+
+function inferProspectStatus(row: ProspectRow): ProspectStatus {
+  if (row.saved || row.lead_id) return "saved";
+  if (row.status === "rejected") return "rejected";
+  if (row.status === "needs_review") return "needs_review";
+  if (Array.isArray(row.rejected_reasons) && row.rejected_reasons.length > 0) {
+    return "needs_review";
+  }
+  const contact = hasContact(row);
+  const legal = hasLegalIdentity(row);
+  if (contact && legal && hasProvenance(row)) return "complete";
+  if (contact && legal) return "needs_review";
+  if (legal) return "legal_found";
+  if (contact) return "contact_found";
+  return "discovered";
+}
+
+function isCompleteProspect(row: ProspectRow): boolean {
+  return (
+    String(row.business_name || "").trim().length > 0 &&
+    hasContact(row) &&
+    hasLegalIdentity(row) &&
+    hasProvenance(row) &&
+    String(row.status || "") !== "rejected"
+  );
+}
+
+function mergeSources(a: unknown, b: unknown): unknown {
+  if (!Array.isArray(a) && !Array.isArray(b)) return b ?? a;
+  const all = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
+  const seen = new Set<string>();
+  return all.filter((item) => {
+    const key = JSON.stringify(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function isRejectedCandidate(row: ProspectRow, rejected: ProspectRow[]): boolean {
+  const name = normalizeLoose(row.business_name || row.name);
+  const address = normalizeLoose(row.address || row.location);
+  const siren = normalizeLoose(row.siren || row.siret);
+  const maps = normalizeLoose(row.google_maps_url);
+  if (!name && !siren && !maps) return false;
+  return rejected.some((r) => {
+    const rName = normalizeLoose(r.business_name || r.name);
+    const rAddress = normalizeLoose(r.address || r.location);
+    const rSiren = normalizeLoose(r.siren || r.siret);
+    const rMaps = normalizeLoose(r.google_maps_url);
+    if (siren && rSiren && siren === rSiren) return true;
+    if (maps && rMaps && maps === rMaps) return true;
+    if (!name || !rName || name !== rName) return false;
+    if (!address || !rAddress) return true;
+    return address === rAddress;
+  });
+}
+
+function mergeProspects(
+  existing: ProspectRow[],
+  incoming: ProspectRow[],
+  rejected: ProspectRow[],
+): { prospects: ProspectRow[]; skipped_rejected: ProspectRow[] } {
   const map = new Map<string, ProspectRow>();
   for (const row of existing) {
     const key = prospectKey(row);
-    if (key) map.set(key, row);
+    if (key) map.set(key, { ...row, status: inferProspectStatus(row) });
   }
+  const skipped_rejected: ProspectRow[] = [];
   for (const row of incoming) {
     const key = prospectKey(row);
     if (!key) continue;
-    map.set(key, { ...(map.get(key) || {}), ...row });
+    if (isRejectedCandidate(row, rejected) && row.reconsider !== true) {
+      skipped_rejected.push(row);
+      continue;
+    }
+    const prev = map.get(key) || {};
+    const merged = {
+      ...prev,
+      ...row,
+      sources: mergeSources(prev.sources, row.sources),
+      updated_at: new Date().toISOString(),
+    };
+    const statusProbe = row.status ? merged : { ...merged, status: undefined };
+    map.set(key, { ...merged, status: inferProspectStatus(statusProbe) });
   }
-  return [...map.values()];
+  return { prospects: [...map.values()], skipped_rejected };
 }
 
 function makeTask(content: string, position: number): WorkspaceTask {
@@ -130,25 +257,39 @@ function resolveTask(tasks: WorkspaceTask[], raw: unknown): WorkspaceTask | null
   );
 }
 
-function workspaceProgress(workspace: Awaited<ReturnType<typeof loadWorkspace>>) {
-  const completeProspects = workspace.prospects.filter(
-    (p) =>
-      String(p.business_name || "").trim() &&
-      String(p.data_provenance || "").trim().length >= 8 &&
-      Boolean(String(p.phone || p.email || p.owner_phone || p.owner_email || "").trim()) &&
-      Boolean(String(p.owner_name || p.siren || "").trim()),
-  );
+function workspaceProgress(workspace: Workspace) {
+  const normalized = workspace.prospects.map((p) => ({
+    ...p,
+    status: inferProspectStatus(p),
+  }));
+  const completeProspects = normalized.filter(isCompleteProspect);
+  const target = workspace.target_count;
+  const statusCounts = normalized.reduce<Record<string, number>>((acc, row) => {
+    const status = String(row.status || "discovered");
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
   return {
+    objective: workspace.objective,
+    target_count: target,
+    acceptance_criteria: workspace.acceptance_criteria,
+    contact_policy: workspace.contact_policy,
     total_prospects: workspace.prospects.length,
+    complete_count: completeProspects.length,
     complete_prospects: completeProspects.length,
+    partial_count: normalized.length - completeProspects.length,
     saved_prospects: workspace.prospects.filter((p) => p.saved || p.lead_id).length,
     rejected_count: workspace.rejected.length,
+    status_counts: statusCounts,
+    remaining_needed:
+      typeof target === "number" ? Math.max(0, target - completeProspects.length) : null,
     exported_count: workspace.exported_count,
     open_tasks: workspace.tasks.filter((t) =>
       t.status === "pending" || t.status === "in_progress",
     ).length,
     tasks: workspace.tasks,
     blocker_summary: workspace.blocker_summary,
+    terminal_blocked: workspace.terminal_blocked,
   };
 }
 
@@ -168,15 +309,10 @@ async function resolveMissionIdForLead(
 
 function validateForSave(row: ProspectRow): string | null {
   const name = String(row.business_name || "").trim();
-  const provenance = String(row.data_provenance || "").trim();
-  const hasContact = Boolean(
-    String(row.phone || row.email || row.owner_phone || row.owner_email || "").trim(),
-  );
-  const hasLegal = Boolean(String(row.owner_name || row.siren || "").trim());
   if (!name) return "missing business_name";
-  if (!hasContact) return `${name}: missing verified phone or email`;
-  if (!hasLegal) return `${name}: missing verified owner or SIREN`;
-  if (provenance.length < 8) return `${name}: missing data_provenance`;
+  if (!hasContact(row)) return `${name}: missing verified phone or email`;
+  if (!hasLegalIdentity(row)) return `${name}: missing verified owner or SIREN`;
+  if (!hasProvenance(row)) return `${name}: missing data_provenance or sources`;
   return null;
 }
 
@@ -331,6 +467,23 @@ registerTool(
         description: "Optional user-requested target count for progress display",
         required: false,
       },
+      objective: {
+        type: "string",
+        description: "task_create/status: concise user objective being pursued",
+        required: false,
+      },
+      acceptance_criteria: {
+        type: "string",
+        description:
+          "What makes a row usable, e.g. 10 restaurants in Nancy with dirigeant plus establishment phone/email",
+        required: false,
+      },
+      contact_policy: {
+        type: "string",
+        description:
+          "Clarify contact definition. Default: establishment phone/email counts unless owner-direct was requested.",
+        required: false,
+      },
       prospects: {
         type: "array",
         description: "Prospect objects to add/update/save",
@@ -378,7 +531,19 @@ registerTool(
         throw new Error("prospect_list.task_create requires tasks[]");
       }
       workspace.tasks = tasks;
+      workspace.objective = String(args.objective || workspace.objective || "").trim() || null;
+      workspace.target_count =
+        Number.isFinite(Number(args.target_count)) && Number(args.target_count) > 0
+          ? Number(args.target_count)
+          : workspace.target_count;
+      workspace.acceptance_criteria =
+        String(args.acceptance_criteria || workspace.acceptance_criteria || "").trim() ||
+        null;
+      workspace.contact_policy =
+        String(args.contact_policy || workspace.contact_policy || "").trim() ||
+        DEFAULT_CONTACT_POLICY;
       workspace.blocker_summary = null;
+      workspace.terminal_blocked = false;
       await saveWorkspace(context.sessionId, workspace);
       return {
         ok: true,
@@ -406,13 +571,23 @@ registerTool(
               notes: String(args.notes || t.notes || "").trim() || null,
               updated_at: new Date().toISOString(),
             }
-          : t,
+          : status === "in_progress" && t.status === "in_progress"
+            ? {
+                ...t,
+                status: "pending",
+                updated_at: new Date().toISOString(),
+              }
+            : t,
       );
       await saveWorkspace(context.sessionId, workspace);
       return {
         ok: true,
         tasks: workspace.tasks,
         progress: workspaceProgress(workspace),
+        guidance:
+          status === "completed"
+            ? "If a next phase is starting, call prospect_list task_update with task_id=\"next\" status=\"in_progress\" before the next substantive tool."
+            : null,
       };
     }
 
@@ -429,12 +604,16 @@ registerTool(
       const incoming = Array.isArray(args.prospects)
         ? (args.prospects as ProspectRow[])
         : [];
-      workspace.prospects = mergeProspects(workspace.prospects, incoming);
+      const merged = mergeProspects(workspace.prospects, incoming, workspace.rejected);
+      workspace.prospects = merged.prospects;
+      workspace.blocker_summary = null;
+      workspace.terminal_blocked = false;
       await saveWorkspace(context.sessionId, workspace);
       return {
         count: workspace.prospects.length,
         prospects: workspace.prospects,
         rejected_count: workspace.rejected.length,
+        skipped_rejected: merged.skipped_rejected,
         progress: workspaceProgress(workspace),
       };
     }
@@ -448,10 +627,27 @@ registerTool(
               reason: args.reason || "rejected",
             },
           ];
-      workspace.rejected = [...workspace.rejected, ...rejected];
+      const stampedRejected: ProspectRow[] = rejected.map((r) => ({
+        ...r,
+        status: "rejected",
+        rejected_at: new Date().toISOString(),
+        reason: r.reason || args.reason || "rejected",
+      }));
+      const rejectionMap = new Map<string, ProspectRow>();
+      for (const row of workspace.rejected) {
+        const key = prospectKey(row) || normalizeLoose(row.business_name || row.name);
+        if (key) rejectionMap.set(key, { ...row, status: "rejected" });
+      }
+      for (const row of stampedRejected) {
+        const key = prospectKey(row) || normalizeLoose(row.business_name || row.name);
+        if (key) rejectionMap.set(key, row);
+      }
+      workspace.rejected = [...rejectionMap.values()];
       const rejectedKeys = new Set(rejected.map(prospectKey));
       workspace.prospects = workspace.prospects.filter(
-        (p) => !rejectedKeys.has(prospectKey(p)),
+        (p) =>
+          !rejectedKeys.has(prospectKey(p)) &&
+          !isRejectedCandidate(p, stampedRejected),
       );
       await saveWorkspace(context.sessionId, workspace);
       return {
@@ -473,7 +669,8 @@ registerTool(
           const saved = result.saved.find(
             (s) => String(s.business_name) === String(p.business_name),
           );
-          return saved ? { ...p, lead_id: saved.lead_id, saved: true } : p;
+          const merged = saved ? { ...p, lead_id: saved.lead_id, saved: true } : p;
+          return { ...merged, status: inferProspectStatus(merged) };
         }),
       });
       return result;
@@ -481,27 +678,47 @@ registerTool(
 
     if (action === "export") {
       workspace.exported_at = new Date().toISOString();
-      workspace.exported_count = workspace.prospects.length;
+      const complete = workspace.prospects
+        .map((p) => ({ ...p, status: inferProspectStatus(p) }))
+        .filter(isCompleteProspect);
+      workspace.prospects = workspace.prospects.map((p) => ({
+        ...p,
+        status: inferProspectStatus(p),
+      }));
+      workspace.exported_count = complete.length;
       await saveWorkspace(context.sessionId, workspace);
       return {
-        prospects: workspace.prospects,
+        prospects: complete,
         rejected: workspace.rejected,
         progress: workspaceProgress(workspace),
-        csv: toCsv(workspace.prospects),
+        csv: toCsv(complete),
       };
     }
 
     if (action === "blocker_summary") {
       const summary = String(args.summary || args.reason || "").trim();
-      if (summary.length < 20) {
+      if (summary.length < 40) {
         throw new Error("prospect_list.blocker_summary requires a specific summary");
       }
       workspace.blocker_summary = summary;
+      workspace.terminal_blocked = true;
+      workspace.tasks = workspace.tasks.map((t) =>
+        t.status === "pending" || t.status === "in_progress"
+          ? {
+              ...t,
+              status: "blocked",
+              notes: summary.slice(0, 500),
+              updated_at: new Date().toISOString(),
+            }
+          : t,
+      );
       await saveWorkspace(context.sessionId, workspace);
       return {
         ok: true,
         blocker_summary: summary,
         progress: workspaceProgress(workspace),
+        guidance:
+          "Terminal blocker recorded. Stop searching now and deliver the verified rows plus exact blocker/rejection summary unless the user changes scope.",
       };
     }
 
