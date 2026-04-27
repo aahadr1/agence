@@ -149,6 +149,13 @@ export interface AgentConfig {
    */
   isDeliverableComplete?: () => Promise<boolean>;
   /**
+   * V1 work-state gate. When true, the model must create durable task state
+   * through an allowed tool before it can perform substantive work.
+   */
+  requiresTaskState?: boolean;
+  /** Returns true once durable task/work state exists for the session. */
+  hasTaskState?: () => Promise<boolean>;
+  /**
    * Max consecutive nudges before yielding (per no-tool-call streak).
    * Default: 3. Lead-gen sessions should use 5.
    */

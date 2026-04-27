@@ -16,6 +16,10 @@ function getDb() {
   );
 }
 
+type InngestStep = {
+  run: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>;
+};
+
 export const missionExecute = inngest.createFunction(
   {
     id: "mission-execute",
@@ -23,7 +27,13 @@ export const missionExecute = inngest.createFunction(
     concurrency: [{ limit: 5 }],
     triggers: [{ event: "lead-agent/mission.start" }],
   },
-  async ({ event, step }: { event: { data: { missionId: string } }; step: any }) => {
+  async ({
+    event,
+    step,
+  }: {
+    event: { data: { missionId: string } };
+    step: InngestStep;
+  }) => {
     const { missionId } = event.data as { missionId: string };
     const db = getDb();
 
@@ -86,8 +96,8 @@ export const missionExecute = inngest.createFunction(
           tools,
           model: "gemini-2.5-pro",
           maxIterations: 50,
-          reflectEveryN: 4,
-          reflectionLeadGenDepth: true,
+          reflectEveryN: 0,
+          reflectionLeadGenDepth: false,
           onThinking: async (text) => {
             await db.from("mission_messages").insert({
               mission_id: missionId,

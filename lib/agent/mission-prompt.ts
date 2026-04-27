@@ -54,13 +54,15 @@ export async function buildLeadGenMissionContextAppendix(
   ];
   if (target != null) {
     lines.push(
-      `Objectif chiffré : ${target} fiches sauvegardées — prioritaire. Moins seulement si tu documentes précisément les blocages ou homonymes impossibles.`,
-      `Découverte Maps : google_maps_search avec max_results=${maxPool} et target_pool_size=${target} pour un vivier suffisant avant enrichissement.`,
+      `Objectif chiffré : ${target} fiches sauvegardées via prospect_list.save. Moins seulement si tu documentes précisément les blocages ou homonymes impossibles.`,
+      "Avant la découverte, crée un état de tâches durable avec prospect_list action=task_create, target_count, objective et acceptance_criteria. Mets-le à jour à chaque début/fin de phase avec action=task_update.",
+      "Pour un contact demandé sans précision, un téléphone/email d'établissement vérifié compte. Ne compte pas une ligne comme complète sans contact + dirigeant/SIREN + provenance.",
+      `Découverte : utilise prospect_discovery avec target_count=${target} et un vivier d'environ ${maxPool} candidats avant enrichissement.`,
     );
   } else {
     lines.push(
       "OBJECTIF par défaut : au moins 1 lead sauvegardé vérifiable, ou clarification honnête.",
-      "Découverte : max_results ≥ 30 pour éviter des listes trop courtes.",
+      "Découverte : utilise prospect_discovery avec plusieurs variantes de mots-clés pour éviter des listes trop courtes.",
     );
   }
   lines.push("</MISSION_CONTEXT>");
@@ -79,9 +81,14 @@ export function buildContinuationUserMessage(
       {
         type: "text",
         text:
-          "[Reprise de session — priorité absolue]\n" +
-          `Tick ${stepNum} : tu es au milieu d’une mission. Pas de nouveau « Bonjour », pas de re-lancement du plan en 3 phases depuis zéro. Continue, mets à jour les todos avec todo_update. ` +
-          "Remplace la liste de todos (todo_write) uniquement si l’utilisateur a changé la mission / la zone : utilise replace_existing:true + reset_reason qui cite son message.",
+          "[REPRISE DE SESSION]\n" +
+          `Tick ${stepNum} : Tu es en cours d'exécution. \n` +
+      "- Ne recommence pas avec un nouveau bonjour ou un manifeste.\n" +
+      "- Ne dis pas « je reprends » à l'utilisateur. Continue silencieusement depuis l'état durable.\n" +
+      "- Continue depuis les faits déjà collectés.\n" +
+      "- Vérifie l'état avec prospect_list action=status si tu hésites, puis choisis la prochaine action concrète.\n" +
+      "- Ne réintroduis jamais un candidat rejeté sauf nouvelle preuve explicite.\n" +
+      "- Prochaine action utile : prospect_list task_update/status/list, browser, prospect_discovery seulement si le vivier manque, business_research, ou ask_user si une décision utilisateur bloque vraiment.",
       },
     ],
   };

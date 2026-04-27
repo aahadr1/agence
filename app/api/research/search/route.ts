@@ -1,8 +1,58 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { tavily } from "@tavily/core";
+import { withBrowserSession, safeGoto } from "@/lib/lead-agent/browser";
+import {
+  extractRenderedText,
+  searchWebWithBrowser,
+} from "@/lib/agent/tools/v1-browser-utils";
 
 export const maxDuration = 60;
+
+type ResearchSearch = {
+  label: string;
+  query: string;
+  results: Array<{ title: string; url: string; snippet: string }>;
+};
+
+async function collectImagesFromPage(pageUrl: string) {
+  return withBrowserSession(async (session) => {
+    const ok = await safeGoto(session.page, pageUrl);
+    if (!ok) return [];
+    return session.page.evaluate(() => {
+      const out: Array<{ url: string; description: string }> = [];
+      const add = (url: string | null | undefined, description: string) => {
+        if (!url) return;
+        try {
+          const absolute = new URL(url, location.href).toString();
+          if (
+            /favicon|sprite|avatar|icon/i.test(absolute) ||
+            !/\.(jpe?g|png|webp)(\?|$)|photo|image|media|upload|cdn/i.test(
+              absolute,
+            )
+          ) {
+            return;
+          }
+          if (!out.some((x) => x.url === absolute)) {
+            out.push({ url: absolute, description });
+          }
+        } catch {
+          /* skip */
+        }
+      };
+
+      add(
+        document
+          .querySelector<HTMLMetaElement>('meta[property="og:image"]')
+          ?.content,
+        "OpenGraph image",
+      );
+      document.querySelectorAll<HTMLImageElement>("img").forEach((img) => {
+        add(img.currentSrc || img.src, img.alt || document.title || "");
+      });
+      return out.slice(0, 10);
+    });
+  });
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -19,178 +69,100 @@ export async function POST(request: Request) {
   if (!businessName || !businessAddress) {
     return NextResponse.json(
       { error: "Business name and address are required" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   try {
-    const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY! });
+    const city =
+      String(businessAddress).split(",").slice(-2, -1)[0]?.trim() ||
+      String(businessAddress);
 
-    // Extract city from address for more targeted searches
-    const city = businessAddress.split(",").slice(-2, -1)[0]?.trim() || businessAddress;
-
-    // Run 6 targeted parallel searches
-    const [
-      generalSearch,
-      reviewSearch,
-      menuSearch,
-      socialSearch,
-      imageSearch,
-      mapsSearch,
-    ] = await Promise.all([
-      // 1. General info — who are they, what do they do
-      tvly.search(`"${businessName}" ${businessAddress}`, {
-        maxResults: 10,
-        searchDepth: "advanced",
-        includeAnswer: true,
-        includeImages: true,
-        includeImageDescriptions: true,
-      }),
-
-      // 2. Reviews — what customers say (multi-platform)
-      tvly.search(
-        `"${businessName}" ${city} avis reviews clients google tripadvisor yelp`,
+    const searches = await withBrowserSession(async (session) => {
+      const plans = [
+        { label: "GENERAL INFORMATION", query: `"${businessName}" ${businessAddress}` },
         {
-          maxResults: 10,
-          searchDepth: "advanced",
-          includeAnswer: true,
-          includeImages: true,
-          includeImageDescriptions: true,
-        }
-      ),
-
-      // 3. Menu/Services/Products — what they offer with prices
-      tvly.search(
-        `"${businessName}" ${city} menu carte services tarifs prix horaires`,
+          label: "CUSTOMER REVIEWS & SENTIMENT",
+          query: `"${businessName}" ${city} avis reviews clients google tripadvisor yelp`,
+        },
         {
-          maxResults: 8,
-          searchDepth: "advanced",
-          includeAnswer: true,
-          includeImages: true,
-          includeImageDescriptions: true,
-        }
-      ),
-
-      // 4. Social media + official website
-      tvly.search(
-        `"${businessName}" site officiel instagram facebook telephone email contact`,
+          label: "MENU, SERVICES & PRICES",
+          query: `"${businessName}" ${city} menu carte services tarifs prix horaires`,
+        },
         {
-          maxResults: 8,
-          searchDepth: "basic",
-          includeAnswer: true,
-        }
-      ),
-
-      // 5. Dedicated image search — get the best visual content
-      tvly.search(`"${businessName}" ${city} photos images interieur`, {
-        maxResults: 10,
-        searchDepth: "advanced",
-        includeAnswer: false,
-        includeImages: true,
-        includeImageDescriptions: true,
-      }),
-
-      // 6. Google Maps / location data
-      tvly.search(
-        `"${businessName}" ${businessAddress} google maps fiche etablissement horaires`,
+          label: "SOCIAL MEDIA & WEB PRESENCE",
+          query: `"${businessName}" site officiel instagram facebook telephone email contact`,
+        },
         {
-          maxResults: 5,
-          searchDepth: "advanced",
-          includeAnswer: true,
-        }
-      ),
-    ]);
+          label: "IMAGES",
+          query: `"${businessName}" ${city} photos images interieur`,
+        },
+        {
+          label: "LOCATION & GOOGLE MAPS DATA",
+          query: `"${businessName}" ${businessAddress} google maps fiche etablissement horaires`,
+        },
+      ];
 
-    // Collect ALL found images (deduplicated, max 25)
-    const allFoundImages = new Map<string, string>();
-    const imageSearches = [
-      generalSearch,
-      reviewSearch,
-      menuSearch,
-      imageSearch,
-    ];
+      const out: ResearchSearch[] = [];
+      for (const plan of plans) {
+        const res = await searchWebWithBrowser(session.page, plan.query, 10, "google");
+        out.push({ ...plan, results: res.results });
+      }
+      return out;
+    });
 
-    for (const search of imageSearches) {
-      if (search.images) {
-        for (const img of search.images) {
-          if (
-            img.url &&
-            !allFoundImages.has(img.url) &&
-            allFoundImages.size < 25 &&
-            // Filter out common non-useful images
-            !img.url.includes("favicon") &&
-            !img.url.includes("logo-tripadvisor") &&
-            !img.url.includes("google.com/maps") &&
-            !img.url.includes("gstatic.com") &&
-            !img.url.includes("yelp-logo") &&
-            !img.url.includes("sprite") &&
-            !img.url.includes("avatar") &&
-            !img.url.includes("icon") &&
-            // Must be a real image format or CDN
-            (img.url.includes(".jpg") ||
-              img.url.includes(".jpeg") ||
-              img.url.includes(".png") ||
-              img.url.includes(".webp") ||
-              img.url.includes("photo") ||
-              img.url.includes("image") ||
-              img.url.includes("media") ||
-              img.url.includes("upload") ||
-              img.url.includes("cdn"))
-          ) {
-            allFoundImages.set(img.url, img.description || "");
-          }
+    const imageCandidates = new Map<string, string>();
+    const imagePages = searches
+      .flatMap((s) => s.results)
+      .slice(0, 8)
+      .map((r) => r.url);
+    for (const url of imagePages) {
+      const imgs = await collectImagesFromPage(url).catch(() => []);
+      for (const img of imgs) {
+        if (imageCandidates.size >= 25) break;
+        if (!imageCandidates.has(img.url)) {
+          imageCandidates.set(img.url, img.description || "");
         }
       }
     }
 
-    const foundImages = Array.from(allFoundImages.entries()).map(
-      ([url, description]) => ({ url, description })
+    const pageSummaries = await withBrowserSession(async (session) => {
+      const summaries: Record<string, string> = {};
+      const urls = searches.flatMap((s) => s.results.slice(0, 2).map((r) => r.url));
+      for (const url of urls) {
+        if (summaries[url]) continue;
+        const ok = await safeGoto(session.page, url);
+        if (!ok) continue;
+        const rendered = await extractRenderedText(session.page, 2500);
+        summaries[url] = rendered.text;
+      }
+      return summaries;
+    });
+
+    const foundImages = [...imageCandidates.entries()].map(
+      ([url, description]) => ({ url, description }),
     );
 
-    // Build comprehensive raw research text
-    const rawResearch = `
-=== GENERAL INFORMATION ===
-${generalSearch.answer || "No answer available"}
-
-Sources:
-${generalSearch.results.map((r) => `- [${r.title}] ${r.content}`).join("\n")}
-
-=== CUSTOMER REVIEWS & SENTIMENT ===
-${reviewSearch.answer || "No review information found"}
-
-Sources:
-${reviewSearch.results.map((r) => `- [${r.title}] ${r.content}`).join("\n")}
-
-=== MENU, SERVICES & PRICES ===
-${menuSearch.answer || "No menu/services information found"}
-
-Sources:
-${menuSearch.results.map((r) => `- [${r.title}] ${r.content}`).join("\n")}
-
-=== SOCIAL MEDIA & WEB PRESENCE ===
-${socialSearch.answer || "No social media information found"}
-
-Sources:
-${socialSearch.results.map((r) => `- [${r.title}] ${r.content}`).join("\n")}
-
-=== LOCATION & GOOGLE MAPS DATA ===
-${mapsSearch.answer || "No location data found"}
-
-Sources:
-${mapsSearch.results.map((r) => `- [${r.title}] ${r.content}`).join("\n")}
-
-=== IMAGES FOUND (${foundImages.length} images) ===
-${foundImages.map((img, i) => `Image ${i + 1}: ${img.url} — ${img.description || "no description"}`).join("\n")}
-`.trim();
-
-    console.log(
-      `[research/search] Found ${foundImages.length} images for "${businessName}"`
-    );
+    const rawResearch = searches
+      .map((s) => {
+        const sources = s.results
+          .map(
+            (r) =>
+              `- [${r.title}] ${r.url}\n  ${r.snippet || pageSummaries[r.url] || ""}`,
+          )
+          .join("\n");
+        return `=== ${s.label} ===\nQuery: ${s.query}\n\nSources:\n${sources}`;
+      })
+      .join("\n\n")
+      .concat(
+        `\n\n=== IMAGES FOUND (${foundImages.length} images) ===\n${foundImages
+          .map((img, i) => `Image ${i + 1}: ${img.url} - ${img.description || "no description"}`)
+          .join("\n")}`,
+      );
 
     return NextResponse.json({ rawResearch, foundImages });
   } catch (error) {
-    const msg =
-      error instanceof Error ? error.message : "Search failed";
+    const msg = error instanceof Error ? error.message : "Search failed";
     console.error("Research search error:", msg, error);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
