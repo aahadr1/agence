@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
 import { encryptSecret } from "@/lib/integrations/crypto";
 import {
@@ -89,7 +89,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const { data, error } = await supabase
+  const service = await createServiceClient();
+  const { data, error } = await service
     .from("org_browser_credentials")
     .insert({
       org_id: orgId,

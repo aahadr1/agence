@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
 
 export const runtime = "nodejs";
@@ -18,7 +18,8 @@ export async function DELETE(
 
   const orgId = await resolveOrgIdForUser(supabase, user.id);
 
-  const { error } = await supabase
+  const service = await createServiceClient();
+  const { error } = await service
     .from("org_browser_credentials")
     .delete()
     .eq("id", id)
