@@ -14,6 +14,7 @@
 import { inngest } from "../client";
 import type { AgentContext, AgentModel, CapabilityPack } from "@/lib/agent/types";
 import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
+import { summarizeToolResultForTimeline } from "@/lib/agent/tool-timeline";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 function getDb(): SupabaseClient {
@@ -147,6 +148,7 @@ export async function runSession(
             tool: toolResult.name,
             error: toolResult.error || null,
             duration_ms: toolResult.durationMs,
+            summary: summarizeToolResultForTimeline(toolResult),
           },
         });
       },

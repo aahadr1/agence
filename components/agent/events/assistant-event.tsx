@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Bot, Copy, Check } from "lucide-react";
+import { Copy, Check } from "lucide-react";
 import { Markdown } from "../markdown";
 import { cn } from "@/lib/utils";
 
@@ -30,17 +30,13 @@ export function AssistantEvent({ content, metadata, last }: Props) {
   };
 
   return (
-    <div className={cn("group flex w-full gap-3 animate-fade-in", last && "pb-1")}>
-      <div
-        className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
-          "bg-[var(--muted)] text-[var(--foreground)]",
-        )}
-      >
-        <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
-      </div>
-
-      <div className="min-w-0 flex-1">
+    <div
+      className={cn(
+        "group w-full animate-fade-in border-l border-[var(--border)] pl-4",
+        last && "pb-1",
+      )}
+    >
+      <div className="min-w-0">
         <Markdown content={content || "…"} />
 
         {Array.isArray(askOptions) && askOptions.length > 0 && (

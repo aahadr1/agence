@@ -477,6 +477,7 @@ export function AgentShell() {
                     approvals={approvals}
                     onRespondApproval={respondApproval}
                     last={i === timeline.length - 1}
+                    live={isLive}
                   />
                 ))}
                 {isLive && <StatusIndicator status={active!.status} />}

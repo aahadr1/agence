@@ -25,6 +25,10 @@ export function buildTimeline(
 ): TimelineEvent[] {
   const includeReflections = options?.includeReflections !== false;
   const events: TimelineEvent[] = [];
+  const pendingToolCalls: Array<{
+    tool?: string;
+    params?: Record<string, unknown>;
+  }> = [];
 
   for (const m of messages) {
     switch (m.role) {
@@ -110,18 +114,41 @@ export function buildTimeline(
         const hasResult =
           typeof meta.duration_ms !== "undefined" ||
           typeof meta.error !== "undefined";
+        if ((meta.tool || meta.kind === "tool") && !hasResult) {
+          pendingToolCalls.push({
+            tool: meta.tool as string | undefined,
+            params: meta.params as Record<string, unknown> | undefined,
+          });
+          break;
+        }
         if (
           (meta.tool || meta.kind === "tool") &&
           hasResult
         ) {
+          const tool = meta.tool as string | undefined;
+          const matchingCallIndex = pendingToolCalls.findIndex(
+            (call) => call.tool === tool,
+          );
+          const matchingCall =
+            matchingCallIndex >= 0
+              ? pendingToolCalls.splice(matchingCallIndex, 1)[0]
+              : pendingToolCalls.shift();
           const status = meta.error ? "error" : "ok";
           events.push({
             kind: "tool",
             id: m.id,
             content: m.content,
             at: m.created_at,
-            tool: meta.tool as string | undefined,
+            tool,
             status,
+            params:
+              (meta.params as Record<string, unknown> | undefined) ||
+              matchingCall?.params,
+            duration_ms:
+              typeof meta.duration_ms === "number"
+                ? meta.duration_ms
+                : undefined,
+            summary: meta.summary as string | undefined,
           });
         }
         // otherwise skip — silent/internal trace

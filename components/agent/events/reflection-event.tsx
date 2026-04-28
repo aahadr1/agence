@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, ChevronRight, ArrowRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -36,10 +36,6 @@ export function ReflectionEvent({
           onClick={() => setOpen((o) => !o)}
           className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--muted)]/40"
         >
-          <Sparkles
-            className="h-3.5 w-3.5 text-[var(--blue)]"
-            strokeWidth={1.75}
-          />
           <span className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
             Réflexion
           </span>
@@ -84,11 +80,7 @@ export function ReflectionEvent({
               </div>
             )}
             {next_action && (
-              <div className="flex items-start gap-1.5 rounded-md bg-[var(--blue-subtle)] px-2.5 py-1.5 text-[var(--foreground)]">
-                <ArrowRight
-                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--blue)]"
-                  strokeWidth={2}
-                />
+              <div className="rounded-md bg-[var(--blue-subtle)] px-2.5 py-1.5 text-[var(--foreground)]">
                 <span className="whitespace-pre-wrap">{next_action}</span>
               </div>
             )}

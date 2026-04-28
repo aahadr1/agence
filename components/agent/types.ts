@@ -136,6 +136,9 @@ export type TimelineEvent =
       at: string;
       tool?: string;
       status?: string;
+      params?: Record<string, unknown>;
+      duration_ms?: number;
+      summary?: string;
     };
 
 export interface CapabilityPreset {

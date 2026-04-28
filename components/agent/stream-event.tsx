@@ -16,6 +16,7 @@ interface Props {
   approvals: Approval[];
   onRespondApproval: (id: string, decision: "approve" | "reject") => void;
   last?: boolean;
+  live?: boolean;
 }
 
 export function StreamEvent({
@@ -23,6 +24,7 @@ export function StreamEvent({
   approvals,
   onRespondApproval,
   last,
+  live,
 }: Props) {
   switch (event.kind) {
     case "user":
@@ -49,13 +51,16 @@ export function StreamEvent({
     case "nudge":
       return <NudgeEvent content={event.content} reason={event.reason} />;
     case "thinking":
-      return <ThinkingEvent content={event.content} />;
+      return <ThinkingEvent content={event.content} active={Boolean(live && last)} />;
     case "tool":
       return (
         <ToolEvent
           content={event.content}
           tool={event.tool}
           status={event.status}
+          params={event.params}
+          durationMs={event.duration_ms}
+          summary={event.summary}
         />
       );
     case "approval_request":

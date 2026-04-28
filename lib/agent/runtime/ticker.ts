@@ -35,6 +35,7 @@ import {
   buildLeadGenMissionContextAppendix,
   countLeadsForAgentSession,
 } from "@/lib/agent/mission-prompt";
+import { summarizeToolResultForTimeline } from "@/lib/agent/tool-timeline";
 import type { AgentMessage } from "@/lib/ai/llm-router";
 
 // -----------------------------------------------------------------------------
@@ -445,6 +446,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
               tool: toolResult.name,
               error: toolResult.error || null,
               duration_ms: toolResult.durationMs,
+              summary: summarizeToolResultForTimeline(toolResult),
             },
           });
         },
