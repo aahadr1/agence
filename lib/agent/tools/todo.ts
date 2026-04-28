@@ -68,10 +68,7 @@ registerTool(
       throw new Error("todo_write requires an active session");
     }
 
-    const replace =
-      args.replace_existing === true &&
-      typeof args.reset_reason === "string" &&
-      String(args.reset_reason).trim().length >= 20;
+    const replace = args.replace_existing === true;
 
     const { data: openRows } = await db
       .from("agent_todos")
@@ -82,7 +79,7 @@ registerTool(
 
     if (openRows && openRows.length > 0 && !replace) {
       throw new Error(
-        "todo_write blocked: there are still open todos (pending or in_progress). Replacing the whole list mid-run destroys progress and causes restart loops. Call todo_read, then todo_update / todo_update_batch to adjust statuses, or todo_finalize when everything is truly done. Only if the USER explicitly asked to abandon the current work and replan from scratch, call todo_write again with replace_existing: true and reset_reason quoting their request.",
+        "todo_write bloqué : il y a encore des tâches en cours. Si tu veux vraiment réinitialiser le plan (par exemple parce que la ville a changé ou que tu es bloqué), utilise `replace_existing: true`.",
       );
     }
 
@@ -170,44 +167,38 @@ async function resolveTodoId(
   const key = idOrMatch.trim();
   if (!key) return null;
 
-  // 1) Proper UUID — direct lookup
-  if (UUID_RE.test(key)) {
-    const { data } = await db
-      .from("agent_todos")
-      .select("id, content, status, position")
-      .eq("session_id", sessionId)
-      .eq("id", key)
-      .maybeSingle();
-    if (data) return data as never;
-  }
-
-  // 2) Pure integer → interpret as 1-based index (position). Also handle
-  //    prefixes like "#3" or "todo 2". Positions in DB are 0-based, so
-  //    user's "1" → position 0. Try (pos-1) first (1-based→0-based),
-  //    then raw pos as fallback for legacy 0-based callers.
-  const intMatch = key.match(/^#?\s*(?:todo\s*)?(\d{1,3})$/i);
-  if (intMatch) {
-    const pos = parseInt(intMatch[1], 10);
-    for (const p of [pos - 1, pos]) {
-      const { data } = await db
-        .from("agent_todos")
-        .select("id, content, status, position")
-        .eq("session_id", sessionId)
-        .eq("position", p)
-        .maybeSingle();
-      if (data) return data as never;
-    }
-  }
-
-  // 3) Fetch all todos for this session so we can do fuzzy matching
+  // Fetch all todos once and use this ordered list as the source of truth for
+  // user-facing indices. DB `position` can be null/non-contiguous on older rows,
+  // but the recovery hint still exposes "index: 1, 2, ..." from this list.
   const { data: allTodos } = await db
     .from("agent_todos")
     .select("id, content, status, position")
     .eq("session_id", sessionId)
-    .order("position", { ascending: true });
+    .order("position", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
   if (!allTodos || allTodos.length === 0) return null;
 
-  // Exact (case-insensitive, normalized) match wins first.
+  // 1) Proper UUID — direct lookup
+  if (UUID_RE.test(key)) {
+    const match = allTodos.find((t) => t.id === key);
+    if (match) return match as never;
+  }
+
+  // 2) Pure integer → interpret as 1-based index (position). Also handle
+  //    prefixes like "#3" or "todo 2". Positions in DB are 0-based, so
+  //    user's "1" → ordered list item 0 first, then position fallbacks.
+  const intMatch = key.match(/^#?\s*(?:todo\s*)?(\d{1,3})$/i);
+  if (intMatch) {
+    const pos = parseInt(intMatch[1], 10);
+    const byVisibleIndex = allTodos[pos - 1];
+    if (byVisibleIndex) return byVisibleIndex as never;
+    const byPosition = allTodos.find(
+      (t) => Number(t.position) === pos - 1 || Number(t.position) === pos,
+    );
+    if (byPosition) return byPosition as never;
+  }
+
+  // 3) Exact (case-insensitive, normalized) match wins first.
   const keyNorm = normalizeContent(key);
   for (const t of allTodos) {
     if (normalizeContent(t.content) === keyNorm) return t as never;
