@@ -25,6 +25,7 @@ import { SessionsRail } from "./sessions-rail";
 import { AgentHeader } from "./header";
 import { TodoTracker } from "./todo-tracker";
 import { StreamEvent } from "./stream-event";
+import { WorkSummary } from "./work-summary";
 import { StatusIndicator } from "./status-indicator";
 import { EmptyState } from "./empty-state";
 import { Composer, type ComposerHandle } from "./composer";
@@ -114,6 +115,7 @@ export function AgentShell() {
   const [sending, setSending] = useState(false);
   const [preset, setPreset] = useState<CapabilityPreset>(CAPABILITY_PRESETS[0]);
   const [railOpen, setRailOpen] = useState(false);
+  const activeId = active?.id ?? null;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -137,11 +139,17 @@ export function AgentShell() {
     try {
       const res = await fetch(`/api/agent/sessions/${id}`);
       const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.error) return;
       setMessages(json.messages || []);
       setTodos(json.todos || []);
       setReflections(json.reflections || []);
       setApprovals(json.approvals || []);
-      if (json.session) setActive(json.session);
+      if (json.session) {
+        setActive((current) => {
+          if (!current || current.id !== json.session.id) return current;
+          return json.session;
+        });
+      }
     } catch {
       /* noop */
     }
@@ -153,20 +161,20 @@ export function AgentShell() {
 
   // Realtime
   useEffect(() => {
-    if (!active) return;
-    fetchSession(active.id);
+    if (!activeId) return;
+    fetchSession(activeId);
 
     const channel = supabase
-      .channel(`agent-session-${active.id}`)
+      .channel(`agent-session-${activeId}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "agent_messages",
-          filter: `session_id=eq.${active.id}`,
+          filter: `session_id=eq.${activeId}`,
         },
-        () => fetchSession(active.id),
+        () => fetchSession(activeId),
       )
       .on(
         "postgres_changes",
@@ -174,9 +182,9 @@ export function AgentShell() {
           event: "*",
           schema: "public",
           table: "agent_todos",
-          filter: `session_id=eq.${active.id}`,
+          filter: `session_id=eq.${activeId}`,
         },
-        () => fetchSession(active.id),
+        () => fetchSession(activeId),
       )
       .on(
         "postgres_changes",
@@ -184,9 +192,9 @@ export function AgentShell() {
           event: "*",
           schema: "public",
           table: "agent_reflections",
-          filter: `session_id=eq.${active.id}`,
+          filter: `session_id=eq.${activeId}`,
         },
-        () => fetchSession(active.id),
+        () => fetchSession(activeId),
       )
       .on(
         "postgres_changes",
@@ -194,9 +202,9 @@ export function AgentShell() {
           event: "*",
           schema: "public",
           table: "agent_approvals",
-          filter: `session_id=eq.${active.id}`,
+          filter: `session_id=eq.${activeId}`,
         },
-        () => fetchSession(active.id),
+        () => fetchSession(activeId),
       )
       .on(
         "postgres_changes",
@@ -204,10 +212,10 @@ export function AgentShell() {
           event: "UPDATE",
           schema: "public",
           table: "agent_sessions",
-          filter: `id=eq.${active.id}`,
+          filter: `id=eq.${activeId}`,
         },
         () => {
-          fetchSession(active.id);
+          fetchSession(activeId);
           fetchSessions();
         },
       )
@@ -216,7 +224,7 @@ export function AgentShell() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [active, fetchSession, fetchSessions, supabase]);
+  }, [activeId, fetchSession, fetchSessions, supabase]);
 
   // -------------------------- Scroll tracking --------------------------
 
@@ -304,6 +312,17 @@ export function AgentShell() {
     setTimeout(() => composerRef.current?.focus(), 30);
   };
 
+  const selectSession = useCallback((session: Session) => {
+    setActive((current) =>
+      current?.id === session.id ? { ...current, ...session } : session,
+    );
+    setMessages([]);
+    setTodos([]);
+    setReflections([]);
+    setApprovals([]);
+    setRailOpen(false);
+  }, []);
+
   // -------------------------- Derived --------------------------
 
   const timeline = useMemo(
@@ -315,6 +334,8 @@ export function AgentShell() {
     active?.status === "running" ||
     active?.status === "pending" ||
     active?.status === "awaiting_approval";
+  const shouldCollapseCompletedWork =
+    active?.status === "completed" && timeline.length > 0;
 
   const canStopAgent = Boolean(
     active &&
@@ -366,10 +387,7 @@ export function AgentShell() {
       <SessionsRail
         sessions={sessions}
         activeId={active?.id || null}
-        onSelect={(s) => {
-          setActive(s);
-          setRailOpen(false);
-        }}
+        onSelect={selectSession}
         onNew={startNew}
       />
 
@@ -387,10 +405,7 @@ export function AgentShell() {
             <SessionsRail
               sessions={sessions}
               activeId={active?.id || null}
-              onSelect={(s) => {
-                setActive(s);
-                setRailOpen(false);
-              }}
+              onSelect={selectSession}
               onNew={() => {
                 startNew();
                 setRailOpen(false);
@@ -414,14 +429,16 @@ export function AgentShell() {
           onScroll={handleScroll}
           className="relative flex-1 overflow-y-auto"
         >
-            {active && (
+            {active && !shouldCollapseCompletedWork && (
               <BrowserCredentialsPanel
                 sessionId={active.id}
                 orgId={active.org_id}
               />
             )}
-            {active && todos.length > 0 && <TodoTracker todos={todos} />}
-            {active && (
+            {active && todos.length > 0 && !shouldCollapseCompletedWork && (
+              <TodoTracker todos={todos} />
+            )}
+            {active && !shouldCollapseCompletedWork && (
               <OsContextPanel
                 sessionId={active.id}
                 enabled={Boolean(
@@ -441,7 +458,17 @@ export function AgentShell() {
               />
             )}
 
-            {timeline.length > 0 && (
+            {timeline.length > 0 && shouldCollapseCompletedWork && active && (
+              <WorkSummary
+                session={active}
+                events={timeline}
+                todos={todos}
+                approvals={approvals}
+                onRespondApproval={respondApproval}
+              />
+            )}
+
+            {timeline.length > 0 && !shouldCollapseCompletedWork && (
               <div className="space-y-5">
                 {timeline.map((ev, i) => (
                   <StreamEvent
