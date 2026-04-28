@@ -115,6 +115,7 @@ export function AgentShell() {
   const [sending, setSending] = useState(false);
   const [preset, setPreset] = useState<CapabilityPreset>(CAPABILITY_PRESETS[0]);
   const [railOpen, setRailOpen] = useState(false);
+  const [realtimeStatus, setRealtimeStatus] = useState<string | null>(null);
   const activeId = active?.id ?? null;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -219,10 +220,19 @@ export function AgentShell() {
           fetchSessions();
         },
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        setRealtimeStatus(status);
+        if (status === "SUBSCRIBED") {
+          void fetchSession(activeId);
+        }
+        if (err) {
+          console.warn("[agent] realtime subscription error:", err);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
+      setRealtimeStatus(null);
     };
   }, [activeId, fetchSession, fetchSessions, supabase]);
 
@@ -336,6 +346,27 @@ export function AgentShell() {
     active?.status === "awaiting_approval";
   const shouldCollapseCompletedWork =
     active?.status === "completed" && timeline.length > 0;
+
+  useEffect(() => {
+    if (!activeId || !isLive) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      await fetchSession(activeId);
+    };
+
+    const interval = window.setInterval(() => {
+      void poll();
+    }, realtimeStatus === "SUBSCRIBED" ? 5000 : 1500);
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeId, fetchSession, isLive, realtimeStatus]);
 
   const canStopAgent = Boolean(
     active &&
