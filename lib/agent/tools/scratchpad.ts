@@ -8,9 +8,27 @@ import { getAgentDb } from "./_db";
 
 const PREFIX = "scratchpad:";
 
-function storageKey(userKey: string): string {
+export function scratchpadStorageKey(userKey: string): string {
   const k = String(userKey).replace(/[\u0000-\u001f]/g, "").trim().slice(0, 180);
   return `${PREFIX}${k || "_empty"}`;
+}
+
+export async function writeScratchpadText(
+  sessionId: string,
+  key: string,
+  text: string,
+) {
+  const db = getAgentDb();
+  const { error } = await db.from("agent_memory").upsert(
+    {
+      session_id: sessionId,
+      key: scratchpadStorageKey(key),
+      value: { text },
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "session_id,key" },
+  );
+  if (error) throw new Error(`scratchpad_write failed: ${error.message}`);
 }
 
 registerTool(
@@ -28,14 +46,13 @@ registerTool(
   async (args, context) => {
     const db = getAgentDb();
     if (!context.sessionId) throw new Error("scratchpad_write requires a session");
-    const key = storageKey(String(args.key));
+    const key = scratchpadStorageKey(String(args.key));
     const text = String(args.value ?? "");
-    const value = { text };
     const { error } = await db.from("agent_memory").upsert(
       {
         session_id: context.sessionId,
         key,
-        value,
+        value: { text },
         updated_at: new Date().toISOString(),
       },
       { onConflict: "session_id,key" },
@@ -59,7 +76,7 @@ registerTool(
   async (args, context) => {
     const db = getAgentDb();
     if (!context.sessionId) throw new Error("scratchpad_read requires a session");
-    const key = storageKey(String(args.key));
+    const key = scratchpadStorageKey(String(args.key));
     const { data } = await db
       .from("agent_memory")
       .select("value")

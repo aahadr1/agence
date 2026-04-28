@@ -94,7 +94,8 @@ const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`todo_write\`, \`todo_update\`, \`todo_update_batch\`, \`todo_read\`, \`todo_finalize\`: task list management. \`todo_update\` accepts UUID, 1-based index, content substring, or aliases \`current\`/\`next\`; prefer 1-based indices. Use \`todo_update_batch\` to close the current todo and open the next one in one call (it takes \`{ updates: [{id, status}, …] }\`). Call \`todo_finalize\` at the end to close all leftover open todos at once — same turn as your final user-facing message.
 - \`plan_create\`, \`plan_revise\`: higher-level plans for user alignment (persisted + shown in the Plan UI). **Never** paste a numbered "phase 1–5" roadmap only in assistant text — call \`plan_create\` (or skip it and use \`todo_write\` + tools immediately). Prose plans do not execute.
 - \`reflect\`: self-review loop (JSON: observation, conclusion, next_action, strategy_revision — use \`strategy_revision\` when you must **change approach**, not just describe the next row).
-- \`scratchpad_write\`, \`scratchpad_read\`: string working memory **persisted per session** (DB). **MANDATORY for volume tasks**: after any discovery tool (\`google_maps_search\`, \`pages_jaunes_search\`) returns 5+ results, call \`scratchpad_write\` in the **SAME turn** with JSON stable, e.g. \`{"candidates":[{ "id","name","address","maps_url","stage":"discovered|enriched" }]}\`. Data is NOT automatically saved between ticks — if you skip this, you WILL lose results and restart from zero.
+- \`scratchpad_write\`, \`scratchpad_read\`: string working memory **persisted per session** (DB). For volume tasks, keep a compact JSON working set, e.g. \`{"candidates":[{ "id","name","address","maps_url","stage":"discovered|enriched" }]}\`, so a later tick can adapt from current evidence instead of restarting. \`google_maps_search\` also writes the latest Maps batch to \`scratchpad:candidates\` server-side; use \`scratchpad_read("candidates")\` or \`discovery_recall\` when resuming.
+- \`discovery_recall\`: recover the latest server-persisted Maps discovery batch when you resume, lose the candidate list, or need to adapt from previously found candidates. Use it as context recovery, not as a mandatory workflow step.
 - \`memory_write\`, \`memory_read\`, \`memory_list\`: durable JSON memory for the CURRENT session (facts, IDs, decisions).
 - \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.
 - \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
@@ -162,7 +163,7 @@ BROWSER: when structured tools return nothing or SPA blocks reading, use \`brows
 
 ANTI-PATTERNS (FAUTES CRITIQUES — chacune a causé un échec total en production) :
 1. **JAMAIS annoncer sans agir.** « Je vais lancer une recherche » sans tool call dans le MÊME tour = itération gaspillée. Chaque tour DOIT contenir ≥ 1 tool call OU être le \`todo_finalize\` + message final. Si tu décris un plan, exécute-le dans le même tour.
-2. **JAMAIS oublier \`scratchpad_write\` après discovery.** Après \`google_maps_search\` ou \`pages_jaunes_search\`, appelle \`scratchpad_write\` dans le **MÊME tour** avec la liste candidats en JSON. Si tu dis « je vais sauvegarder » mais ne le fais pas, les données seront PERDUES au prochain tick. C'est arrivé 4 fois en production.
+2. **JAMAIS repartir de zéro quand l’état existe.** Après discovery, maintiens un working set compact dans \`scratchpad\`. Si tu reprends et que la liste n’est plus dans ton contexte immédiat, appelle \`scratchpad_read("candidates")\` ou \`discovery_recall\` avant de relancer la même recherche.
 3. **JAMAIS traiter candidats un par un** (website_finder → pappers → societe_com → dirigeant → save_lead = 5 iters/candidat = 4 candidats max/tick). À la place : batch \`website_finder\` ×3-5 en parallèle par tour, \`batch_website_check\` ×20 URLs, \`batch_save_leads\` ×25 rows.
 4. **JAMAIS enrichir avant filtrer.** \`google_maps_search\` retourne \`has_website\`, \`website_url\`, \`rating\`. Pré-filtre avec ces champs GRATUITS d'abord. Ne lance PAS \`website_finder\`/\`pappers_search\`/\`website_audit\` sur la liste brute.
 5. **Profondeur vs largeur.** Pour résoudre **homonymie / mauvaise société**, tu peux utiliser jusqu’à **plusieurs stratégies** conformément au CORE §11 jusqu’à triangulation ou rejet net. Pour des **timeouts / KO techniques identiques**, ne boucle pas : pivote vite vers un autre candidat après 2 stratégies utiles échouées et documente dans le scratchpad.
@@ -341,6 +342,7 @@ export function getToolNamesForCapabilities(
       "contact_page_scraper",
       "scratchpad_write",
       "scratchpad_read",
+      "discovery_recall",
       "save_lead",
       "batch_save_leads",
     ],

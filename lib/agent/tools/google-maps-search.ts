@@ -3,6 +3,7 @@ import { scrapeGoogleMaps } from "@/lib/lead-agent/sources/google-maps";
 import { withBrowserSession } from "@/lib/lead-agent/browser";
 import type { AgentContext } from "../types";
 import { getAgentDb } from "./_db";
+import { writeScratchpadText } from "./scratchpad";
 
 registerTool(
   {
@@ -131,6 +132,20 @@ registerTool(
             secondary_query_used: payload.secondary_query_used,
           },
         });
+        const workingSet = {
+          source: "google_maps_search",
+          query: primaryQuery,
+          captured_at: new Date().toISOString(),
+          max_results_requested: maxResults,
+          secondary_query_used: payload.secondary_query_used,
+          candidates: payload.leads,
+        };
+        await writeScratchpadText(
+          context.sessionId,
+          "candidates",
+          JSON.stringify(workingSet),
+        );
+        context.scratchpad?.set("candidates", JSON.stringify(workingSet));
       } catch (e) {
         console.warn(
           "[google_maps_search] snapshot insert:",

@@ -589,9 +589,9 @@ export async function runAgentLoop(
               type: "text",
               text:
                 "[AVERTISSEMENT CRITIQUE] Tu as reçu des résultats Maps au tour précédent " +
-                "mais tu n’as PAS appelé `scratchpad_write`. Les données ne sont PAS " +
-                "persistées et seront PERDUES au prochain tick. Appelle `scratchpad_write` " +
-                "MAINTENANT avec la liste de candidats, AVANT tout autre outil.",
+                "mais tu n’as PAS appelé `scratchpad_write` pour ton working set. Les résultats Maps " +
+                "sont sauvegardés côté serveur, mais pas forcément dans ta liste de travail enrichie. " +
+                "Appelle `scratchpad_read` key=`candidates` ou `discovery_recall`, puis continue depuis ces candidats au lieu de relancer la même découverte.",
             },
           ],
         });
@@ -617,9 +617,9 @@ export async function runAgentLoop(
             {
               type: "text",
               text:
-                "[Discovery steering — ACTIONS OBLIGATOIRES CE TOUR]\n" +
-                "Tu viens de recevoir des résultats Maps. Tu DOIS faire ces actions dans CE tour :\n" +
-                "1) **OBLIGATOIRE** : appelle `scratchpad_write` avec key=’candidates’ et value=JSON de tous les résultats. Si tu ne le fais pas, les données seront PERDUES au prochain tick.\n" +
+                "[Discovery steering — état de découverte disponible]\n" +
+                "Tu viens de recevoir des résultats Maps. Le serveur a aussi sauvegardé ce batch dans `scratchpad:candidates`. Adapte la suite depuis ces données :\n" +
+                "1) Si tu as pré-classé/enrichi la liste, appelle `scratchpad_write` avec key=’candidates’ et value=JSON du working set mis à jour.\n" +
                 "2) **Pré-classe** avec les champs gratuits (website_url, has_website, chaîne évidente). La note Maps seule **ne suffit pas** pour valider un lead B2B — ne trie pas « par étoiles » comme critère métier.\n" +
                 "3) Au prochain tour : lance plusieurs `website_finder` **en parallèle** (3-5 par tour), jamais un par un.\n" +
                 "4) Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.\n" +
