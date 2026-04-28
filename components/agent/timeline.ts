@@ -9,7 +9,7 @@ import type {
  * chronologically-sorted stream of rendered events.
  *
  * Key rules:
- * - `system` rows with `metadata.nudge = true` become visible "course-correction" events.
+ * - `system` rows with `metadata.nudge = true` become compact "course-correction" events.
  * - Other `system` rows carry tool traces → rendered as compact `tool` chips,
  *   but only if they carry a useful tag in metadata (no tag → skipped).
  * - `assistant` rows with `metadata.kind = 'ask_user'` are tagged so the
@@ -23,10 +23,7 @@ export function buildTimeline(
   reflections: Reflection[],
   options?: { includeReflections?: boolean; visibility?: TimelineVisibility },
 ): TimelineEvent[] {
-  const includeReflections =
-    options?.includeReflections === true ||
-    options?.visibility === "debug";
-  const customer = options?.visibility !== "debug";
+  const includeReflections = options?.includeReflections !== false;
   const events: TimelineEvent[] = [];
 
   for (const m of messages) {
@@ -86,7 +83,7 @@ export function buildTimeline(
         break;
 
       case "thinking":
-        if (!customer && m.content?.trim()) {
+        if (m.content?.trim()) {
           events.push({
             kind: "thinking",
             id: m.id,
@@ -99,15 +96,13 @@ export function buildTimeline(
       case "system": {
         const meta = (m.metadata || {}) as Record<string, unknown>;
         if (meta.nudge) {
-          if (!customer) {
-            events.push({
-              kind: "nudge",
-              id: m.id,
-              content: m.content,
-              at: m.created_at,
-              reason: (meta.reason as string) || "course_correction",
-            });
-          }
+          events.push({
+            kind: "nudge",
+            id: m.id,
+            content: m.content,
+            at: m.created_at,
+            reason: (meta.reason as string) || "course_correction",
+          });
           break;
         }
         // Tool traces: only show the result rows (with `duration_ms` or
@@ -116,7 +111,6 @@ export function buildTimeline(
           typeof meta.duration_ms !== "undefined" ||
           typeof meta.error !== "undefined";
         if (
-          !customer &&
           (meta.tool || meta.kind === "tool") &&
           hasResult
         ) {

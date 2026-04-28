@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { userMessageLikelyResetsScope } from "@/lib/agent/active-intent";
+import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
+import {
+  isSmallTalkOnly,
+  smallTalkAssistantReply,
+} from "@/lib/agent/intent-classifier";
 import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
 
 export const runtime = "nodejs";
@@ -19,19 +24,46 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = (await req.json()) as { content: string };
-  if (!body.content?.trim())
+  const content = body.content?.trim() || "";
+  if (!content)
     return NextResponse.json({ error: "content required" }, { status: 400 });
 
   const service = await createServiceClient();
+  const orgId = await resolveOrgIdForUser(supabase, user.id);
+  const { data: session } = await service
+    .from("agent_sessions")
+    .select("id, status, org_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!session) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const { error: insErr } = await service.from("agent_messages").insert({
     session_id: id,
     role: "user",
-    content: body.content.trim(),
+    content,
   });
   if (insErr)
     return NextResponse.json({ error: insErr.message }, { status: 500 });
 
-  if (userMessageLikelyResetsScope(body.content.trim())) {
+  if (
+    isSmallTalkOnly(content) &&
+    !["pending", "running", "paused", "awaiting_approval"].includes(
+      String(session.status),
+    )
+  ) {
+    await service.from("agent_messages").insert({
+      session_id: id,
+      role: "assistant",
+      content: smallTalkAssistantReply(content),
+      metadata: { kind: "small_talk" },
+    });
+    return NextResponse.json({ ok: true, scheduled: false });
+  }
+
+  if (userMessageLikelyResetsScope(content)) {
     await service
       .from("agent_todos")
       .update({

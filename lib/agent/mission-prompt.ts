@@ -4,6 +4,7 @@ import {
   parseLeadTargetFromText,
 } from "@/lib/agent/lead-target";
 import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
+import { hasLeadGenerationIntent } from "@/lib/agent/intent-classifier";
 import type { AgentMessage } from "@/lib/ai/llm-router";
 import type { CapabilityPack } from "./types";
 
@@ -41,6 +42,13 @@ export async function buildLeadGenMissionContextAppendix(
     ? (explicitUserPrompt || "").trim() ||
       "(aucun texte de mission — compléter le brief)"
     : await fetchActiveUserBrief(sessionId);
+  if (!hasLeadGenerationIntent(prompt)) {
+    return [
+      "<MISSION_CONTEXT>",
+      "Le dernier brief utilisateur ne contient pas encore de mission lead-gen exploitable. Si c’est seulement une salutation ou une phrase vague, réponds une seule fois naturellement et termine. Ne crée pas de todo, ne lance pas de recherche, ne demande pas en boucle un secteur/ville.",
+      "</MISSION_CONTEXT>",
+    ].join("\n");
+  }
   const target = useInlineMissionPrompt
     ? parseLeadTargetFromText(explicitUserPrompt || "")
     : await fetchLeadTargetForSession(sessionId);

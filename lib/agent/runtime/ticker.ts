@@ -23,12 +23,13 @@ import type {
   CapabilityPack,
   ToolDefinition,
 } from "@/lib/agent/types";
-import { acquireLock, releaseLock, type SessionLock } from "./lock";
+import { acquireLock, releaseLock } from "./lock";
 import { withRetry, isLikelyTransient, sleep } from "./retry";
 import { scheduleNextTick } from "./schedule";
 import { getAgentDb } from "@/lib/agent/tools/_db";
 import { fetchLeadTargetForSession } from "@/lib/agent/lead-target";
 import { fetchActiveUserBrief } from "@/lib/agent/active-intent";
+import { hasLeadGenerationIntent } from "@/lib/agent/intent-classifier";
 import {
   buildContinuationUserMessage,
   buildLeadGenMissionContextAppendix,
@@ -146,7 +147,7 @@ export async function tickSession(sessionId: string): Promise<TickResult> {
   }
 
   try {
-    return await runOneTickLocked(sessionId, lock);
+    return await runOneTickLocked(sessionId);
   } finally {
     await releaseLock(lock);
   }
@@ -156,10 +157,7 @@ export async function tickSession(sessionId: string): Promise<TickResult> {
 // Internal: one locked tick
 // -----------------------------------------------------------------------------
 
-async function runOneTickLocked(
-  sessionId: string,
-  _lock: SessionLock,
-): Promise<TickResult> {
+async function runOneTickLocked(sessionId: string): Promise<TickResult> {
   const db = getAgentDb();
   const startedAt = Date.now();
 
@@ -285,6 +283,12 @@ async function runOneTickLocked(
     const customToolNames = await registerCustomToolsForOrg(session.org_id);
 
     const packs = (session.capability_packs || []) as CapabilityPack[];
+    const leadGenPackActive = packs.includes("lead-gen-fr");
+    const activeBrief = leadGenPackActive
+      ? await fetchActiveUserBrief(sessionId)
+      : "";
+    const leadGenWorkIntent =
+      leadGenPackActive && hasLeadGenerationIntent(activeBrief);
     const baseSystem = buildSystemPrompt({
       capabilities: packs,
       domainInstructions: session.domain_instructions || undefined,
@@ -342,7 +346,7 @@ async function runOneTickLocked(
       inputTokensSoFar: 0,
     };
 
-    if (sessionPacksForBudget.includes("lead-gen-fr")) {
+    if (leadGenPackActive && leadGenWorkIntent) {
       const nTarget = await fetchLeadTargetForSession(sessionId);
       if (nTarget != null) {
         context.leadGenDiscoveryMinResults = Math.min(
@@ -370,6 +374,7 @@ async function runOneTickLocked(
         );
       }
       context.leadGenFinalizeGate = async () => {
+        if (!leadGenWorkIntent) return { ok: true };
         if (
           await leadGenDeliverableStillIncomplete(session.org_id, sessionId)
         ) {
@@ -395,7 +400,7 @@ async function runOneTickLocked(
         model: (session.model as AgentModel) || "gemini-2.5-pro",
         maxIterations: iterBudget,
         reflectEveryN,
-        reflectionLeadGenDepth: sessionPacksForBudget.includes("lead-gen-fr"),
+        reflectionLeadGenDepth: leadGenPackActive && leadGenWorkIntent,
         sessionHints: {
           userFollowUpAppended: Boolean(followUpReinforcement),
         },
@@ -457,8 +462,9 @@ async function runOneTickLocked(
             next_action: next ?? null,
           });
         },
-        isDeliverableComplete: sessionPacksForBudget.includes("lead-gen-fr")
+        isDeliverableComplete: leadGenPackActive
           ? async () => {
+              if (!leadGenWorkIntent) return true;
               const saved = await countLeadsForAgentSession(
                 session.org_id,
                 sessionId,
@@ -470,10 +476,10 @@ async function runOneTickLocked(
               return saved >= 1;
             }
           : undefined,
-        maxNudgesBeforeYield: sessionPacksForBudget.includes("lead-gen-fr")
+        maxNudgesBeforeYield: leadGenPackActive && leadGenWorkIntent
           ? 5
           : undefined,
-        maxTotalNudges: sessionPacksForBudget.includes("lead-gen-fr")
+        maxTotalNudges: leadGenPackActive && leadGenWorkIntent
           ? 10
           : undefined,
         onNudge: async (text, reason) => {
@@ -487,10 +493,8 @@ async function runOneTickLocked(
           });
         },
         checkOpenWork: async () => {
-          const leadGen = sessionPacksForBudget.includes("lead-gen-fr");
-          const userPrompt = leadGen
-            ? (await fetchActiveUserBrief(sessionId)) || ""
-            : "";
+          const leadGen = leadGenPackActive && leadGenWorkIntent;
+          const userPrompt = leadGen ? activeBrief : "";
           const progressFr =
             leadGen && userPrompt.trim()
               ? await leadGenProgressSummaryFr(session.org_id, sessionId)

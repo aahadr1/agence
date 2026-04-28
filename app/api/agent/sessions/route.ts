@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveOrgIdForUser } from "@/lib/org/resolve-org";
 import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
+import {
+  isSmallTalkOnly,
+  smallTalkAssistantReply,
+} from "@/lib/agent/intent-classifier";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -78,6 +82,22 @@ export async function POST(req: Request) {
       role: "user",
       content: body.prompt.trim(),
     });
+
+    if (isSmallTalkOnly(body.prompt)) {
+      await service.from("agent_messages").insert({
+        session_id: session.id,
+        role: "assistant",
+        content: smallTalkAssistantReply(body.prompt),
+        metadata: { kind: "small_talk" },
+      });
+      await service
+        .from("agent_sessions")
+        .update({ status: "completed", updated_at: new Date().toISOString() })
+        .eq("id", session.id);
+      return NextResponse.json({
+        session: { ...session, status: "completed" },
+      }, { status: 201 });
+    }
 
     await scheduleNextTick(session.id, { delayMs: 0 });
 

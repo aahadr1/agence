@@ -217,9 +217,17 @@ export async function runAgentLoop(
     // Stream visible text to the user (strip pseudo-tool line noise)
     if (result.text) {
       const vis = sanitizeAssistantUserText(result.text);
-      await config.onMessage?.(
-        vis.length > 0 ? vis : result.text.trim(),
+      const displayText = vis.length > 0 ? vis : result.text.trim();
+      const hasAskUserCall = result.functionCalls.some(
+        (fc) => fc.name === "ask_user",
       );
+      const hasToolCalls = result.functionCalls.length > 0;
+      if (
+        !hasAskUserCall &&
+        !(hasToolCalls && looksLikeProcessChatterOnly(displayText))
+      ) {
+        await config.onMessage?.(displayText);
+      }
     }
 
     // ---- No tool calls → decide: genuine done OR model-emitted pseudo-code ----
@@ -780,6 +788,38 @@ function pushNudge(state: AgentState, nudge: string) {
   state.history.push({ role: "user", parts: [{ type: "text", text: nudge }] });
   state.nudgesSinceToolSuccess++;
   state.totalNudges++;
+}
+
+function looksLikeProcessChatterOnly(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (!t || t.length > 700) return false;
+  if (
+    /\b(?:SIREN|SIRET)\s*[:#]?\s*\d{9,14}\b/i.test(t) ||
+    /@[a-z0-9._%+-]+\.[a-z]{2,}/i.test(t) ||
+    /\b(?:\+33|0)\s?[1-9](?:[\s().-]?\d{2}){4}\b/.test(t) ||
+    /\|\s*[^|\n]+\s*\|/.test(t)
+  ) {
+    return false;
+  }
+  const lines = t
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length > 6) return false;
+  const chatterLine =
+    /^(?:bien s[ûu]r|d['’]?accord|ok|parfait|super|maintenant|ensuite|la page est en cours|j['’]?ai commenc[eé]|je\s+(?:commence|lance|vais|reprends|continue|mets|v[eé]rifie|cherche|tente|passe|consulte|regarde|sauvegarde|traite)|je\s+vais\s+maintenant|i\s+(?:will|am going to|will now)|let\s+me|now\s+i|next\s+i)\b/i;
+  const actionWords =
+    /\b(?:rechercher|chercher|lancer|commencer|continuer|reprendre|v[eé]rifier|consulter|enrichir|mettre [àa] jour|sauvegarder|traiter|browser|web_search|google_maps_search|pappers_search|societe_com_lookup|search|check|continue|resume|update|save|enrich)\b/i;
+  const allChatter = lines.every(
+    (line) =>
+      chatterLine.test(line) ||
+      (actionWords.test(line) && looksLikeIntentWithoutAction(line)),
+  );
+  if (!allChatter) return false;
+  const substantiveSignals =
+    /\b(?:trouv[eé]|identifi[eé]|voici|r[eé]sultat|dirigeant|g[eé]rant|pr[eé]sident|contact|t[eé]l[eé]phone|email|adresse|source|bloqu[eé]|rejet[eé]|complet|compl[eè]te|livrable)\b/i;
+  return !substantiveSignals.test(t);
 }
 
 /**

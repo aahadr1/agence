@@ -32,7 +32,7 @@ export function ToolEvent({ content, tool, status }: Props) {
         ) : (
           <Wrench className="h-3 w-3" />
         )}
-        <span>{tool || "tool"}</span>
+        <span>Action · {tool || "outil"}</span>
         {status && status !== "ok" && (
           <span className="rounded bg-[var(--muted)] px-1 py-0 text-[9.5px] uppercase">
             {status}

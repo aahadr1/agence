@@ -17,7 +17,12 @@ export function ReflectionEvent({
   conclusion,
   next_action,
 }: Props) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
+  const previewSource = next_action || conclusion || observation;
+  const preview =
+    previewSource && previewSource.length > 120
+      ? `${previewSource.slice(0, 117).trim()}…`
+      : previewSource;
 
   return (
     <div className="ml-10 animate-fade-in">
@@ -41,6 +46,11 @@ export function ReflectionEvent({
           <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--muted-foreground)]">
             iter {iteration}
           </span>
+          {!open && preview && (
+            <span className="min-w-0 flex-1 truncate text-[11.5px] font-normal normal-case tracking-normal text-[var(--muted-foreground)]">
+              {preview}
+            </span>
+          )}
           <span className="ml-auto">
             <ChevronRight
               className={cn(

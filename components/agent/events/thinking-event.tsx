@@ -23,6 +23,9 @@ export function ThinkingEvent({ content }: { content: string }) {
           className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70"
           strokeWidth={1.75}
         />
+        <span className="shrink-0 font-medium text-[var(--foreground)]/80">
+          Réflexion
+        </span>
         <span className="line-clamp-1 flex-1 italic">{preview}</span>
         <ChevronRight
           className={cn(
