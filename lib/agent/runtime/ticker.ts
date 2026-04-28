@@ -534,7 +534,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
               return {
                 open: true,
                 summary:
-                  "Aucune liste de todos — appelle `todo_write` puis les outils (`web_search`, `google_maps_search`, …). Ne termine pas sur un plan en prose seul." +
+                  "Aucune liste de todos — crée un plan de travail minimal avec `todo_write`, puis agis avec les outils adaptés. Si une découverte existe déjà, récupère-la via `scratchpad_read` key=`candidates` ou `discovery_recall`; sinon lance la recherche pertinente. Ne termine pas sur un plan en prose seul." +
                   (progressFr ? `\n\n${progressFr}` : ""),
               };
             }
@@ -551,7 +551,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
                 open: true,
                 summary:
                   (progressFr || "Objectif CRM non atteint.") +
-                  "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Enchaîne `save_lead` / `batch_save_leads` (ou explique explicitement en français pourquoi tu ne peux pas, avec le **chiffre réel** sauvegardé).",
+                  "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Continue depuis l’état disponible : `scratchpad_read` key=`candidates` ou `discovery_recall` si ta liste n’est plus dans le contexte, puis `save_lead` / `batch_save_leads` quand des fiches sont vérifiées. Explique explicitement en français si tu ne peux pas atteindre le chiffre demandé.",
               };
             }
           }

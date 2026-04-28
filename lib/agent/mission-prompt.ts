@@ -25,6 +25,27 @@ export async function countLeadsForAgentSession(
   return count ?? 0;
 }
 
+async function latestDiscoverySnapshotLine(sessionId: string): Promise<string | null> {
+  const db = getAgentDb();
+  try {
+    const { data } = await db
+      .from("agent_discovery_snapshots")
+      .select("query, lead_count, created_at")
+      .eq("session_id", sessionId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    return (
+      `Dernière découverte Maps persistée : ${data.lead_count} candidat(s) ` +
+      `pour « ${data.query} » (${new Date(data.created_at).toLocaleString("fr-FR")}). ` +
+      "Si ta liste de travail n’est plus dans le contexte, récupère-la via scratchpad_read key=`candidates` ou discovery_recall au lieu de relancer la même recherche."
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @param explicitUserPrompt — pass a string (possibly empty) for legacy `missions`
  *   runs; omit the argument to load the brief from `agent_messages` for this
@@ -60,6 +81,8 @@ export async function buildLeadGenMissionContextAppendix(
     `Brief (extrait) : ${prompt.slice(0, 800)}${prompt.length > 800 ? "…" : ""}`,
     `Prospects déjà sauvegardés (CRM, cette session) : ${saved}.`,
   ];
+  const discoveryLine = await latestDiscoverySnapshotLine(sessionId);
+  if (discoveryLine) lines.push(discoveryLine);
   if (target != null) {
     lines.push(
       `Objectif chiffré : ${target} fiches sauvegardées — prioritaire. Moins seulement si tu documentes précisément les blocages ou homonymes impossibles.`,
