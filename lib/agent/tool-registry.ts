@@ -19,6 +19,11 @@ import {
 } from "./session-tool-blocks";
 import { classifyToolFailure } from "./tool-failure-policy";
 import { updateWorksetItem } from "./workset-state";
+import {
+  dispatchLocalBrowserTool,
+  isLocalBrowserDelegationEnabled,
+  LOCAL_BROWSER_TOOLS,
+} from "./local-browser-worker";
 
 async function hasConnection(
   userId: string,
@@ -314,6 +319,30 @@ export async function executeTool(
   }
 
   try {
+    if (isLocalBrowserDelegationEnabled() && LOCAL_BROWSER_TOOLS.has(name)) {
+      const result = await dispatchLocalBrowserTool(name, args, context);
+      const itemTitle = itemTitleFromArgs(args);
+      const resultRecord = asResultRecord(result);
+      if (context.sessionId && itemTitle && resultRecord) {
+        try {
+          await updateWorksetItem(context.sessionId, {
+            title: itemTitle,
+            status: statusFromResult(result) || undefined,
+            facts: resultRecord,
+            source: name,
+          });
+        } catch {
+          /* workset enrichment is best-effort */
+        }
+      }
+      return finalize({
+        name,
+        result,
+        durationMs: Date.now() - start,
+        costCents: tool.definition.costEstimateCents || 0,
+      });
+    }
+
     if (tool.definition.requiredConnection) {
       const ok = await hasConnection(
         context.userId,

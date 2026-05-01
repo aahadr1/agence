@@ -31,6 +31,7 @@ import { EmptyState } from "./empty-state";
 import { Composer, type ComposerHandle } from "./composer";
 import { BrowserCredentialsPanel } from "./browser-credentials-panel";
 import { OsContextPanel } from "./os-context-panel";
+import { LocalWorkerSetup } from "./local-worker-setup";
 
 const CAPABILITY_PRESETS: CapabilityPreset[] = [
   {
@@ -408,6 +409,12 @@ export function AgentShell() {
     return LEAD_KEYWORDS.test(input) ? true : null;
   }, [active, input, preset]);
 
+  const wantsLocalWorker = Boolean(
+    active?.capability_packs?.some((p) =>
+      ["lead-gen-fr", "browser", "web-research"].includes(p),
+    ) || preset.packs.some((p) => ["lead-gen-fr", "browser"].includes(p)),
+  );
+
   return (
     <div
       className={cn(
@@ -454,6 +461,8 @@ export function AgentShell() {
           onStopAgent={() => void handleStopAgent()}
           stoppingAgent={stoppingAgent}
         />
+
+        <LocalWorkerSetup shouldPrompt={wantsLocalWorker} />
 
         <div
           ref={scrollRef}

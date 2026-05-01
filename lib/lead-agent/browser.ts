@@ -18,6 +18,39 @@ const IS_SERVERLESS =
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 
+function localWorkerServerUrl(): string | null {
+  if (process.env.AGENT_LOCAL_WORKER !== "1") return null;
+  const base = process.env.AGENCE_APP_URL?.replace(/\/$/, "");
+  const token = process.env.AGENCE_WORKER_TOKEN;
+  if (!base || !token) return null;
+  return `${base}/api/agent/local-worker/llm/gemini`;
+}
+
+async function askGeminiViaServer<T>(
+  mode: "json" | "text",
+  prompt: string,
+  imageBase64?: string,
+): Promise<T> {
+  const url = localWorkerServerUrl();
+  if (!url) throw new Error("Local worker Gemini proxy is not configured");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.AGENCE_WORKER_TOKEN}`,
+    },
+    body: JSON.stringify({ mode, prompt, imageBase64 }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      `Gemini proxy failed (${res.status}): ${json.error || res.statusText}`,
+    );
+  }
+  return (mode === "text" ? json.text : json.json) as T;
+}
+
 // ---------------------------------------------------------------------------
 // Gemini
 // ---------------------------------------------------------------------------
@@ -61,6 +94,10 @@ export async function askGemini<T>(
   prompt: string,
   imageBase64?: string
 ): Promise<T> {
+  if (localWorkerServerUrl()) {
+    return askGeminiViaServer<T>("json", prompt, imageBase64);
+  }
+
   const model = getGemini();
   const parts: Array<
     { text: string } | { inlineData: { mimeType: string; data: string } }
@@ -100,6 +137,10 @@ export async function askGemini<T>(
 }
 
 export async function askGeminiText(prompt: string): Promise<string> {
+  if (localWorkerServerUrl()) {
+    return askGeminiViaServer<string>("text", prompt);
+  }
+
   const keys = listGeminiApiKeysInOrder();
   if (!keys.length) throw new Error("GEMINI_API_KEY is not set");
 
