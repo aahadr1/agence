@@ -2,6 +2,7 @@ import { registerTool } from "../tool-registry";
 import { findWebsite } from "@/lib/lead-agent/enrichment/website-finder";
 import { withBrowserSession } from "@/lib/lead-agent/browser";
 import type { AgentContext } from "../types";
+import { findWorksetItemByTitle } from "../workset-state";
 
 registerTool(
   {
@@ -29,15 +30,39 @@ registerTool(
   },
   async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[website_finder] ${msg}`);
+    let websiteUrl = (args.website_url as string) || null;
+    let mapsUrl = (args.google_maps_url as string) || null;
+    if (context.sessionId && (!websiteUrl || !mapsUrl)) {
+      try {
+        const item = await findWorksetItemByTitle(
+          context.sessionId,
+          args.business_name as string,
+        );
+        if (item) {
+          websiteUrl =
+            websiteUrl ||
+            (typeof item.facts.website_url === "string"
+              ? item.facts.website_url
+              : null);
+          mapsUrl =
+            mapsUrl ||
+            (typeof item.facts.google_maps_url === "string"
+              ? item.facts.google_maps_url
+              : null);
+        }
+      } catch {
+        /* workset lookup is best-effort */
+      }
+    }
     return withBrowserSession(
       async (session) =>
         findWebsite(
           session.page,
           args.business_name as string,
           args.location as string,
-          (args.website_url as string) || null,
+          websiteUrl,
           log,
-          (args.google_maps_url as string) || null,
+          mapsUrl,
         ),
       { orgId: context.orgId, attempts: 8 },
     );

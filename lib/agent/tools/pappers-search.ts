@@ -3,6 +3,7 @@ import {
   isPappersApiError,
   searchPappersApi,
 } from "@/lib/lead-agent/sources/pappers-api";
+import { findWorksetItemByTitle } from "../workset-state";
 
 registerTool(
   {
@@ -27,7 +28,7 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 2,
   },
-  async (args) => {
+  async (args, context) => {
     if (!process.env.PAPPERS_API_KEY?.trim()) {
       throw new Error(
         "Pappers : variable PAPPERS_API_KEY absente sur le serveur. [NON_RETRYABLE] " +
@@ -35,13 +36,33 @@ registerTool(
       );
     }
     const log = (msg: string) => console.log(`[pappers_search] ${msg}`);
+    let addressHint = (args.address_hint as string) || null;
+    let siren = (args.siren as string) || null;
+    if (context.sessionId && (!addressHint || !siren)) {
+      try {
+        const item = await findWorksetItemByTitle(
+          context.sessionId,
+          args.business_name as string,
+        );
+        if (item) {
+          addressHint =
+            addressHint ||
+            (typeof item.facts.address === "string" ? item.facts.address : null);
+          siren =
+            siren ||
+            (typeof item.facts.siren === "string" ? item.facts.siren : null);
+        }
+      } catch {
+        /* workset lookup is best-effort */
+      }
+    }
     const res = await searchPappersApi(
       args.business_name as string,
       args.location as string,
       log,
       {
-        address_hint: (args.address_hint as string) || null,
-        siren: (args.siren as string) || null,
+        address_hint: addressHint,
+        siren,
       },
     );
     if (isPappersApiError(res)) {

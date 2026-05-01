@@ -6,6 +6,7 @@
 
 import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
+import { readWorksetState, summarizeWorkset } from "../workset-state";
 
 registerTool(
   {
@@ -99,6 +100,27 @@ registerTool(
       throw new Error("ask_user requires a session");
 
     const question = String(args.question);
+    const defeatistEscalation =
+      /\b(annul|abandon|cl[oô]re|incapable|impossible|r[ée]essaye[rz]? plus tard|bloqu[ée].*technique|cancel|give up|try again later)\b/i.test(
+        question,
+      );
+    if (
+      context.capabilityPacks?.includes("lead-gen-fr") &&
+      defeatistEscalation
+    ) {
+      let summary: ReturnType<typeof summarizeWorkset> | null = null;
+      try {
+        summary = summarizeWorkset(await readWorksetState(context.sessionId));
+      } catch {
+        summary = null;
+      }
+      throw new Error(
+        "ask_user prématuré : ne demande pas à l'utilisateur d'annuler/réessayer plus tard simplement parce que des outils échouent. " +
+          "Utilise `workset_read`, marque les candidats bloqués/discarded avec raisons, remplace-les par d'autres candidats si l'objectif chiffré n'est pas atteint, et sauvegarde tout lead admissible. " +
+          "N'appelle `ask_user` que pour une vraie décision métier ou une donnée que toi seul ne peux pas inférer. " +
+          (summary ? `Workset actuel: ${JSON.stringify(summary)}` : ""),
+      );
+    }
     const optArray = Array.isArray(args.options)
       ? (args.options as unknown[])
           .map((o) => String(o).trim())

@@ -551,7 +551,7 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
                 open: true,
                 summary:
                   (progressFr || "Objectif CRM non atteint.") +
-                  "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Continue depuis l’état disponible : `scratchpad_read` key=`candidates` ou `discovery_recall` si ta liste n’est plus dans le contexte, puis `save_lead` / `batch_save_leads` quand des fiches sont vérifiées. Explique explicitement en français si tu ne peux pas atteindre le chiffre demandé.",
+                  "\n\nLes todos peuvent être cochés, mais la mission n’est **pas** terminée tant que le nombre de leads **sauvegardés en base** ne suit pas. Continue depuis l’état disponible : `workset_read` d’abord, puis `scratchpad_read` key=`candidates` ou `discovery_recall` si besoin. Marque les candidats bloqués/discarded avec `workset_update`, remplace-les au lieu de t’acharner, puis `save_lead` / `batch_save_leads` quand des fiches sont vérifiées. Explique explicitement en français si tu ne peux pas atteindre le chiffre demandé.",
               };
             }
           }
@@ -584,23 +584,53 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
             .eq("session_id", sessionId)
             .order("position", { ascending: true })
             .limit(30);
-          if (!rows || rows.length === 0) return "";
-          const lines = rows.map((t, i) => {
-            const mark =
-              t.status === "completed"
-                ? "✓"
-                : t.status === "in_progress"
-                  ? "►"
-                  : t.status === "cancelled"
-                    ? "✗"
-                    : "·";
-            const idx = i + 1;
-            const content =
-              t.content.length > 100
-                ? t.content.slice(0, 97) + "…"
-                : t.content;
-            return `${idx}. ${mark} [${t.status}] ${content}`;
-          });
+          const lines: string[] = [];
+          if (rows && rows.length > 0) {
+            lines.push("Todos:");
+            lines.push(
+              ...rows.map((t, i) => {
+                const mark =
+                  t.status === "completed"
+                    ? "✓"
+                    : t.status === "in_progress"
+                      ? "►"
+                      : t.status === "cancelled"
+                        ? "✗"
+                        : "·";
+                const idx = i + 1;
+                const content =
+                  t.content.length > 100
+                    ? t.content.slice(0, 97) + "…"
+                    : t.content;
+                return `${idx}. ${mark} [${t.status}] ${content}`;
+              }),
+            );
+          }
+          try {
+            const { readWorksetState, summarizeWorkset } = await import(
+              "@/lib/agent/workset-state"
+            );
+            const workset = await readWorksetState(sessionId);
+            if (workset.items.length > 0) {
+              const summary = summarizeWorkset(workset);
+              lines.push("");
+              lines.push(`Workset: ${JSON.stringify(summary)}`);
+              for (const item of workset.items.slice(0, 12)) {
+                const missing = item.missing.length
+                  ? ` missing=${item.missing.join(",")}`
+                  : "";
+                const next = item.next_action
+                  ? ` next=${item.next_action.slice(0, 100)}`
+                  : "";
+                lines.push(
+                  `- ${item.id} | ${item.status} | ${item.title}${missing}${next}`,
+                );
+              }
+            }
+          } catch {
+            /* workset snapshot is best-effort */
+          }
+          if (lines.length === 0) return "";
           return lines.join("\n");
         },
       },

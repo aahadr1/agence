@@ -7,6 +7,7 @@ import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
 import { resolveMissionIdForLead } from "./save-lead";
 import { ensureAgentLeadSearchId } from "../lead-search-stub";
+import { updateWorksetItem } from "../workset-state";
 
 const MAX_BATCH = 25;
 
@@ -16,7 +17,7 @@ registerTool(
   {
     name: "batch_save_leads",
     description:
-      "Create up to 25 leads in one DB insert. Same fields as `save_lead` per row (business_name required each). Skips rows missing business_name. All rows share the session stub `search_id` and get enrichment_data.agent_session_id for deliverable counting. If you pass more than 25 rows, only the first 25 are processed — split into multiple calls.",
+      "Create up to 25 leads in one DB insert. Same fields and validation as `save_lead` per row: in lead-gen-fr each saved row needs business_name, one contact, owner_name OR SIREN, and data_provenance. Invalid rows are skipped with reasons instead of saved. All rows share the session stub `search_id` and get enrichment_data.agent_session_id for deliverable counting.",
     parameters: {
       leads: {
         type: "array",
@@ -151,6 +152,24 @@ registerTool(
       business_name: r.business_name as string,
       action: "created" as const,
     }));
+    if (context.sessionId) {
+      await Promise.all(
+        saved.map(async (row) => {
+          try {
+            await updateWorksetItem(context.sessionId, {
+              title: row.business_name,
+              status: "saved",
+              facts: { lead_id: row.lead_id },
+              source: "batch_save_leads",
+              missing: [],
+              next_action: "",
+            });
+          } catch {
+            /* workset best-effort */
+          }
+        }),
+      );
+    }
 
     return { saved, count: saved.length, skipped };
   },

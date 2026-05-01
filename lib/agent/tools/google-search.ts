@@ -2,6 +2,7 @@ import { registerTool } from "../tool-registry";
 import { searchGoogle } from "@/lib/lead-agent/sources/google-search";
 import { withBrowserSession } from "@/lib/lead-agent/browser";
 import type { AgentContext } from "../types";
+import { findWorksetItemByTitle } from "../workset-state";
 
 registerTool(
   {
@@ -19,14 +20,36 @@ registerTool(
   },
   async (args, context: AgentContext) => {
     const log = (msg: string) => console.log(`[google_search] ${msg}`);
+    let phone = (args.phone as string) || null;
+    let address = (args.address as string) || null;
+    if (context.sessionId && (!phone || !address)) {
+      try {
+        const item = await findWorksetItemByTitle(
+          context.sessionId,
+          args.business_name as string,
+        );
+        if (item) {
+          phone =
+            phone ||
+            (typeof item.facts.phone === "string" ? item.facts.phone : null);
+          address =
+            address ||
+            (typeof item.facts.address === "string"
+              ? item.facts.address
+              : null);
+        }
+      } catch {
+        /* workset lookup is best-effort */
+      }
+    }
     return withBrowserSession(
       async (session) =>
         searchGoogle(
           session.page,
           args.business_name as string,
           args.location as string,
-          (args.phone as string) || null,
-          (args.address as string) || null,
+          phone,
+          address,
           log,
         ),
       { orgId: context.orgId, attempts: 8 },

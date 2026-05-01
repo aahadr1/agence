@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
 import { ensureAgentLeadSearchId } from "../lead-search-stub";
+import { updateWorksetItem } from "../workset-state";
 
 /** Only set leads.mission_id when candidate exists in public.missions (FK-safe). */
 export async function resolveMissionIdForLead(
@@ -22,7 +23,7 @@ registerTool(
   {
     name: "save_lead",
     description:
-      "Save or update a lead in the database. Provide all known fields. Returns the lead ID. If lead_id is provided, updates the existing lead.",
+      "Save or update a lead in the database. Provide all known fields. In lead-gen-fr creation, validation requires at minimum: (1) one contact (establishment or owner phone/email), (2) owner_name OR SIREN, and (3) data_provenance explaining sources. Returns the lead ID. If lead_id is provided, updates the existing lead.",
     parameters: {
       lead_id: { type: "string", description: "Existing lead ID to update (optional)", required: false },
       business_name: { type: "string", description: "Business name" },
@@ -168,6 +169,18 @@ registerTool(
       .select("id")
       .single();
     if (error) throw new Error(`Insert failed: ${error.message}`);
+    try {
+      await updateWorksetItem(context.sessionId, {
+        title: args.business_name,
+        status: "saved",
+        facts: { lead_id: data.id },
+        source: "save_lead",
+        missing: [],
+        next_action: "",
+      });
+    } catch {
+      /* workset best-effort */
+    }
     return { lead_id: data.id, action: "created" };
   }
 );

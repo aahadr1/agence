@@ -4,6 +4,7 @@ import {
   isSocieteComApiError,
   searchSocieteComApi,
 } from "@/lib/lead-agent/sources/societe-com-api";
+import { findWorksetItemByTitle } from "../workset-state";
 
 /** Rough NAF bucket to flag French House–style mismatches (consulting vs restaurant). */
 function sectorAlignmentHint(naf: string | null): string | null {
@@ -37,14 +38,30 @@ registerTool(
     required: ["business_name", "location"],
     costEstimateCents: 2,
   },
-  async (args) => {
+  async (args, context) => {
     const log = (msg: string) => console.log(`[societe_com] ${msg}`);
+    let addressHint = (args.address_hint as string) || undefined;
+    if (!addressHint && args.business_name) {
+      try {
+        if (context.sessionId) {
+          const item = await findWorksetItemByTitle(
+            context.sessionId,
+            args.business_name as string,
+          );
+          if (typeof item?.facts.address === "string") {
+            addressHint = item.facts.address;
+          }
+        }
+      } catch {
+        /* workset lookup is best-effort */
+      }
+    }
     const res = await searchSocieteComApi(
       args.business_name as string,
       args.location as string,
       log,
       {
-        address_hint: (args.address_hint as string) || undefined,
+        address_hint: addressHint,
       },
     );
     if (isSocieteComApiError(res)) {

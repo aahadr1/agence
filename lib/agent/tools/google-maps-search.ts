@@ -4,6 +4,7 @@ import { withBrowserSession } from "@/lib/lead-agent/browser";
 import type { AgentContext } from "../types";
 import { getAgentDb } from "./_db";
 import { writeScratchpadText } from "./scratchpad";
+import { upsertWorksetItems } from "../workset-state";
 
 registerTool(
   {
@@ -146,6 +147,30 @@ registerTool(
           JSON.stringify(workingSet),
         );
         context.scratchpad?.set("candidates", JSON.stringify(workingSet));
+        await upsertWorksetItems(
+          context.sessionId,
+          payload.leads.map((lead, index) => ({
+            ...lead,
+            title: lead.business_name,
+            status: "new",
+            priority: index + 1,
+            missing: [
+              ...(lead.phone || lead.email ? [] : ["contact"]),
+              "dirigeant_or_siren",
+              "data_provenance",
+            ],
+            next_action:
+              "Pré-qualifier avec les champs disponibles, puis enrichir seulement si ce candidat reste utile pour l'objectif.",
+          })),
+          {
+            source: "google_maps_search",
+            goal: primaryQuery,
+            target_count:
+              Number.isFinite(rawTarget) && rawTarget > 0
+                ? Math.floor(rawTarget)
+                : null,
+          },
+        );
       } catch (e) {
         console.warn(
           "[google_maps_search] snapshot insert:",

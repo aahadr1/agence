@@ -632,10 +632,11 @@ async function runWithBrowserSession<T>(
   const max = Math.min(Math.max(opts?.attempts ?? defaultAttempts, 1), 8);
   let lastErr: unknown;
   for (let i = 1; i <= max; i++) {
-    const session = REUSE_SHARED_BROWSER
-      ? await launchSharedBrowserSession({ orgId: opts?.orgId })
-      : await launchBrowser({ orgId: opts?.orgId });
+    let session: BrowserSession | null = null;
     try {
+      session = REUSE_SHARED_BROWSER
+        ? await launchSharedBrowserSession({ orgId: opts?.orgId })
+        : await launchBrowser({ orgId: opts?.orgId });
       return await runner(session);
     } catch (e) {
       lastErr = e;
@@ -648,7 +649,7 @@ async function runWithBrowserSession<T>(
           `${msg} [BROWSER_RESOURCE_EXHAUSTED] Sur Vercel, limitez le parallélisme navigateur, augmentez /tmp (plan), ou définissez PLAYWRIGHT_BROWSERS_PATH vers un volume avec assez d’espace. Ne boucle pas 8× sur la même cause.`,
         );
       }
-      if (session.shared && !isBrowserAlive(session)) {
+      if (session?.shared && !isBrowserAlive(session)) {
         await closeSharedBrowser();
       }
       if (i < max && isTransientPlaywrightFailure(e)) {

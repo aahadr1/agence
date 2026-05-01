@@ -17,6 +17,8 @@ import {
   isSessionToolBlocked,
   sessionToolBlockKey,
 } from "./session-tool-blocks";
+import { classifyToolFailure } from "./tool-failure-policy";
+import { updateWorksetItem } from "./workset-state";
 
 async function hasConnection(
   userId: string,
@@ -54,6 +56,90 @@ interface RegisteredTool {
 
 const registry = new Map<string, RegisteredTool>();
 
+const LOOP_SENSITIVE_TOOLS = new Set<string>([
+  "google_maps_search",
+  "google_search",
+  "web_search",
+  "web_fetch",
+  "website_finder",
+  "website_audit",
+  "contact_page_scraper",
+  "pages_jaunes_search",
+  "dirigeant_research",
+  "linkedin_profile_search",
+  "facebook_page_lookup",
+  "fb_ad_library_check",
+  "browser_suite",
+  "research_suite",
+  "pappers_search",
+  "societe_com_lookup",
+]);
+
+const exactToolCallsBySession = new Map<string, Map<string, number>>();
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function repeatedCallCount(
+  sessionKey: string | undefined,
+  toolName: string,
+  args: Record<string, unknown>,
+): number {
+  if (!sessionKey || !LOOP_SENSITIVE_TOOLS.has(toolName)) return 1;
+  let byCall = exactToolCallsBySession.get(sessionKey);
+  if (!byCall) {
+    byCall = new Map();
+    exactToolCallsBySession.set(sessionKey, byCall);
+  }
+  const key = `${toolName}:${stableStringify(args)}`;
+  const count = (byCall.get(key) || 0) + 1;
+  byCall.set(key, count);
+  return count;
+}
+
+function itemTitleFromArgs(args: Record<string, unknown>): string | null {
+  return typeof args.business_name === "string"
+    ? args.business_name
+    : typeof args.title === "string"
+      ? args.title
+      : typeof args.name === "string"
+        ? args.name
+        : null;
+}
+
+function asResultRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function statusFromResult(result: unknown): string | null {
+  const r = asResultRecord(result);
+  if (!r) return null;
+  if (r.lead_id || r.action === "created" || r.action === "updated") {
+    return "saved";
+  }
+  if (r.owner_name || r.siren || r.siret || r.company_type) {
+    return "legal_found";
+  }
+  if (r.phone || r.email || r.owner_phone || r.owner_email) {
+    return "contact_found";
+  }
+  if (r.has_website || r.website_url) {
+    return "active";
+  }
+  return null;
+}
+
 export function registerTool(
   definition: ToolDefinition,
   execute: ToolExecuteFn
@@ -81,33 +167,14 @@ export function getAllToolNames(): string[] {
  * Execute a named tool, returning a ToolResult with timing and error handling.
  */
 function appendNonRetryHint(message: string, toolName: string): string {
-  if (/\[NON_RETRYABLE\]/i.test(message)) return message;
-  const m = message.toLowerCase();
-  const disk =
-    m.includes("64mb") ||
-    m.includes("free space") ||
-    m.includes("enospc") ||
-    m.includes("no space left") ||
-    m.includes("sigtrap");
-  const schema =
-    m.includes("schema cache") ||
-    m.includes("42703") ||
-    (m.includes("column") && m.includes("does not exist"));
-  const nullSearch =
-    m.includes("search_id") ||
-    (m.includes("23502") && m.includes("null"));
-  if (
-    disk ||
-    schema ||
-    nullSearch ||
-    (toolName === "pappers_search" && m.includes("401"))
-  ) {
-    return (
-      message +
-      "\n\n[NE_PAS_RÉESSAYER avec les mêmes paramètres : corrige la cause (config, disque /tmp, schéma DB, zone) ou change d’outil.]"
-    );
+  const policy = classifyToolFailure(message, toolName);
+  if (policy.retryableSameArgs && !/\[NON_RETRYABLE\]/i.test(message)) {
+    return policy.category === "unknown"
+      ? message
+      : `${message}\n\n[RECOVERY:${policy.category}] ${policy.hintFr}`;
   }
-  return message;
+  const tag = /\[NON_RETRYABLE\]/i.test(message) ? "" : "\n\n[NON_RETRYABLE]";
+  return `${message}${tag}\n\n[RECOVERY:${policy.category}] ${policy.hintFr}`;
 }
 
 export async function executeTool(
@@ -134,6 +201,9 @@ export async function executeTool(
         metadata: {
           duration_ms: tr.durationMs,
           cost_cents: tr.costCents,
+          failure_category: tr.error
+            ? classifyToolFailure(tr.error, name).category
+            : null,
         },
       });
     } catch {
@@ -177,6 +247,20 @@ export async function executeTool(
     });
   }
 
+  const repeatCount = repeatedCallCount(circuitKey, name, args);
+  if (repeatCount > 2) {
+    const message =
+      `Outil « ${name} » appelé ${repeatCount} fois avec exactement les mêmes paramètres. ` +
+      `[REPEATED_IDENTICAL_CALL] Ne relance pas identiquement : lis le workset/scratchpad, change les paramètres, ou passe à une autre stratégie.`;
+    return finalize({
+      name,
+      result: null,
+      error: appendNonRetryHint(message, name),
+      durationMs: Date.now() - start,
+      costCents: 0,
+    });
+  }
+
   if (isHardBlockedRedTool(name) && !isRedToolAllowedFromEnv()) {
     return finalize({
       name,
@@ -206,6 +290,20 @@ export async function executeTool(
       }
     }
     const result = await tool.execute(args, context);
+    const itemTitle = itemTitleFromArgs(args);
+    const resultRecord = asResultRecord(result);
+    if (context.sessionId && itemTitle && resultRecord) {
+      try {
+        await updateWorksetItem(context.sessionId, {
+          title: itemTitle,
+          status: statusFromResult(result) || undefined,
+          facts: resultRecord,
+          source: name,
+        });
+      } catch {
+        /* workset enrichment is best-effort */
+      }
+    }
     return finalize({
       name,
       result,
@@ -215,6 +313,25 @@ export async function executeTool(
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
     const hinted = appendNonRetryHint(raw, name);
+    const policy = classifyToolFailure(hinted, name);
+    const itemTitle = itemTitleFromArgs(args);
+    if (context.sessionId && itemTitle) {
+      try {
+        await updateWorksetItem(context.sessionId, {
+          title: itemTitle,
+          attempt: {
+            tool: name,
+            outcome: policy.category,
+            summary: hinted.slice(0, 1000),
+            retryable: policy.retryableSameArgs,
+          },
+          blocker: policy.retryableSameArgs ? undefined : policy.hintFr,
+          source: name,
+        });
+      } catch {
+        /* workset error tracking is best-effort */
+      }
+    }
     if (circuitKey && errorShouldBlockFurtherCalls(hinted, name)) {
       blockSessionTool(circuitKey, name);
     }

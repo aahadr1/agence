@@ -1,3 +1,5 @@
+import { classifyToolFailure } from "./tool-failure-policy";
+
 /**
  * Per-session circuit breaker: after a NON_RETRYABLE tool failure, skip repeat
  * calls to the same tool for that session (saves API quota + stops 6×401 loops).
@@ -32,10 +34,5 @@ export function errorShouldBlockFurtherCalls(
   message: string,
   toolName: string,
 ): boolean {
-  const m = message.toLowerCase();
-  if (/\[non_retryable\]/i.test(message)) return true;
-  if (toolName === "pappers_search" && m.includes("401")) return true;
-  if (toolName === "pappers_search" && m.includes("missing_api_key"))
-    return true;
-  return false;
+  return classifyToolFailure(message, toolName).blockToolForSession;
 }

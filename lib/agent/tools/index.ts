@@ -15,6 +15,7 @@ import "./website-audit";
 import "./dirigeant-research";
 import "./contact-page-scraper";
 import "./scratchpad";
+import "./workset";
 import "./discovery-recall";
 import "./save-lead";
 import "./batch-website-check";

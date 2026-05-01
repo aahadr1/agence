@@ -109,6 +109,8 @@ const BROWSER_BACKED_TOOLS = new Set<string>([
   "linkedin_profile_search",
   "facebook_page_lookup",
   "fb_ad_library_check",
+  "browser_suite",
+  "research_suite",
 ]);
 
 function isBrowserBackedTool(name: string): boolean {
