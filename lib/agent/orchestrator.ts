@@ -29,7 +29,7 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
 1. PLAN with todos — SEQUENTIAL for *phases*, BATCH-AWARE for *volume*.
    - For any task involving 3+ discrete steps, CALL \`todo_write\` with a list BEFORE executing.
    - **Sequential work** (one email, one doc, one analysis): keep **exactly one** todo \`in_progress\` at a time; finish it before opening the next.
-   - **Volume work** (N leads, N audits, N companies): structure todos as **phases** ("Découverte 2–3×N candidats", "Pré-filtrage", "Enrichissement ciblé", "Sauvegarde / tableau final") — not one micro-todo per row. Within a phase, parallelize tool calls and batch progress updates.
+   - **Volume work** (N leads, N audits, N companies): structure todos as **phases** ("Découverte 2–3×N candidats", "Pré-filtrage", "Enrichissement ciblé", "Sauvegarde / tableau final") — not one micro-todo per row. Within a phase, batch cheap/non-browser work and keep browser-backed tools measured; they are serialized by the runtime for stability.
    - The RIGHT cadence for sequential phases: mark todo N \`in_progress\` → do the work → mark N \`completed\` AND mark N+1 \`in_progress\` (use \`todo_update_batch\`). Do not do work that belongs to todo N+1 while todo N is still \`in_progress\`.
    - When you mark a todo \`completed\`, it must actually be done — not partially. For "N items" missions, prefer **phase-level** todos over one line per item.
    - To identify a todo use: 1-based index ("1", "2", …), or the UUID, or the alias \`current\` (targets the in_progress todo). Indices are the least ambiguous — prefer them.
@@ -73,19 +73,19 @@ const CORE_DISCIPLINE = `<CORE_DISCIPLINE>
     - **Triangulate** registry rows: same **commune + street + trade / NAF** as the Maps row you anchored; if anything conflicts (wrong département, homonym, "cessée", unrelated SCI), **reject** that entity and keep searching — never paste the wrong company into a lead.
     - **Tool failures are data**: HTTP 403/404/timeout on a prospect URL is a **digital weakness signal** — record it in \`notes\` / qualification, not only "error".
     - **Disqualify actively**: bankruptcy/redressement when the brief implies viable clients, legal closure, wrong sector vs user exclusions, or unverifiable identity — say so briefly and **drop** the candidate instead of padding a table.
-    - **Parallelize when safe**: in one assistant turn, emit **multiple independent tool calls** (several searches, or different candidates) when outputs do not depend on each other — do not serialize independent lookups out of habit.
+    - **Parallelize when safe**: in one assistant turn, emit **multiple independent non-browser tool calls** when outputs do not depend on each other. Browser-backed tools (Maps, web_search/fetch, website_finder, audits, PJ, browser_*) are queued serially by the runtime; avoid oversized browser batches and use them after cheap filtering.
     - **Pre-synthesis audit**: avant le livrable, vérifie chaque ligne sauvegardée : adresse Maps vs registre ? statut ? « pas de site » vs \`website_url\` ? au moins un contact **sourcé** ? Si l’utilisateur a fixé **N**, priorité au **nombre N** avec qualité honnête — pas des lignes fragiles inventées ; si tu ne peux pas atteindre N, explique pourquoi en français avec le détail des rejets/homonymes.
 
 15. BATCH THINKING (volume tasks). When the user asks for **N** items (leads, audits, reviews, …):
     - **Discover wide**: pull **2×–3× N** candidates before deep work when unsure you have enough qualified rows.
     - **Filter early** with cheap signals already in search results (has_website, website_url host, obvious chain) — **Maps \`rating\` alone does NOT qualify B2B fit** (dirigeant/contact) ; ne garde pas un candidat « parce que 4,8 étoiles ». Utilise la note au plus comme signal faible pour volume, pas comme validation métier.
     - **Enrich late**: spend deep tools only on the pre-qualified shortlist.
-    - **Parallelize**: emit **several independent tool calls in the same turn** when results do not depend on each other (e.g. multiple \`website_finder\` for different businesses you already listed).
+    - **Batch without overloading Chromium**: emit several independent cheap/non-browser tool calls when useful; for browser-backed tools, prefer a small measured queue after filtering instead of a large batch.
     - **Estimate cost**: if N × (tools per item) exceeds your per-tick iteration budget, you **must** batch — otherwise you will die mid-mission with 0 saves.
 
 16. ITERATION BUDGET. You have **~20 iterations per tick** (one tick = one serverless invocation, ~270 s). Forced reflections consume iterations too.
-    - **Do the math FIRST**: 30 leads × 5 sequential tools/lead = 150 iterations = **impossible** in 20. You MUST use batch tools (\`batch_website_check\`, \`batch_save_leads\`) and parallel calls.
-    - **Realistic throughput** with batching: discover 60 candidates (1 iter) → \`scratchpad_write\` (same turn) → \`batch_website_check\` 20 URLs (1 iter) → 5× parallel \`website_finder\` (1 iter each) → \`batch_save_leads\` (1 iter) = ~9 iterations for 10-25 leads.
+    - **Do the math FIRST**: 30 leads × 5 deep tools/lead = 150 actions = **impossible** in one tick. You MUST use wide discovery, cheap batch tools (\`batch_website_check\`, \`batch_save_leads\`), and only spend browser-backed tools on survivors.
+    - **Realistic throughput** with stable browser usage: discover 60 candidates (1 iter) → \`scratchpad_write\` (same turn) → \`batch_website_check\` 20 URLs (1 iter, no browser) → a small queued set of \`website_finder\` / contact checks on survivors → \`batch_save_leads\` (1 iter). Multi-tick continuation is normal.
     - **Multi-tick is normal**: if it doesn't fit in one tick, the system chains another. But you MUST persist progress (\`scratchpad_write\` + \`save_lead\`/\`batch_save_leads\`) so the next tick resumes, not restarts.
     - **Never spend an iteration on prose only** — every turn must include at least one tool call (except the final \`todo_finalize\` + message).
 </CORE_DISCIPLINE>`;
@@ -100,7 +100,7 @@ const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`learn_record\`: persist a lesson (title + content + scope) for FUTURE sessions. Use after solving a non-trivial task.
 - \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
 - \`request_approval\`: pause for user decision on sensitive actions.
-- \`web_fetch\`, \`web_search\`: **headless Chromium (Playwright)** — rendered SERPs and JS-executed pages (same stack as browser tools; not raw HTTP-only).
+- \`web_fetch\`, \`web_search\`: **headless Chromium (Playwright)** — rendered SERPs and JS-executed pages (same stack as browser tools; not raw HTTP-only). Browser-backed tools are serialized by the runtime to preserve one stable Chromium; expect them to run one after another.
 - \`replicate_image_generate\`: image generation/editing via **Replicate** (Google **Nano Banana** by default; \`variant\` **nano_banana_2** or **nano_banana_pro** when the user asks). Needs \`REPLICATE_API_TOKEN\`.
 - \`browser_navigate\`, \`browser_act\`, \`browser_extract\`, \`browser_close\`: **stateful** session + vision-guided actions for multi-step UIs, logins, or heavy SPAs — not "only after web_fetch fails once".
 - \`ask_user\`: ask a clarifying question when truly ambiguous (max 1-3 per session). **Pauses the run** until the user’s next message — do not assume defaults (especially geography) after calling it. Prefer acting on the brief with a stated default in \`scratchpad_write\` over blocking on optional details.
@@ -164,7 +164,7 @@ BROWSER: when structured tools return nothing or SPA blocks reading, use \`brows
 ANTI-PATTERNS (FAUTES CRITIQUES — chacune a causé un échec total en production) :
 1. **JAMAIS annoncer sans agir.** « Je vais lancer une recherche » sans tool call dans le MÊME tour = itération gaspillée. Chaque tour DOIT contenir ≥ 1 tool call OU être le \`todo_finalize\` + message final. Si tu décris un plan, exécute-le dans le même tour.
 2. **JAMAIS repartir de zéro quand l’état existe.** Après discovery, maintiens un working set compact dans \`scratchpad\`. Si tu reprends et que la liste n’est plus dans ton contexte immédiat, appelle \`scratchpad_read("candidates")\` ou \`discovery_recall\` avant de relancer la même recherche.
-3. **JAMAIS traiter candidats un par un** (website_finder → pappers → societe_com → dirigeant → save_lead = 5 iters/candidat = 4 candidats max/tick). À la place : batch \`website_finder\` ×3-5 en parallèle par tour, \`batch_website_check\` ×20 URLs, \`batch_save_leads\` ×25 rows.
+3. **JAMAIS traiter candidats en tunnel complet un par un** (website_finder → pappers → societe_com → dirigeant → save_lead = 5 actions/candidat = très lent). À la place : découvre large, pré-filtre, utilise \`batch_website_check\` ×20 URLs et \`batch_save_leads\` ×25 rows ; les outils navigateur profonds (\`website_finder\`, \`dirigeant_research\`, \`browser_*\`) passent en petite file séquentielle sur les survivants.
 4. **JAMAIS enrichir avant filtrer.** \`google_maps_search\` retourne \`has_website\`, \`website_url\`, \`rating\`. Pré-filtre avec ces champs GRATUITS d'abord. Ne lance PAS \`website_finder\`/\`pappers_search\`/\`website_audit\` sur la liste brute.
 5. **Profondeur vs largeur.** Pour résoudre **homonymie / mauvaise société**, tu peux utiliser jusqu’à **plusieurs stratégies** conformément au CORE §11 jusqu’à triangulation ou rejet net. Pour des **timeouts / KO techniques identiques**, ne boucle pas : pivote vite vers un autre candidat après 2 stratégies utiles échouées et documente dans le scratchpad.
 6. **JAMAIS \`todo_write\` deux fois.** Le serveur le bloque. Utilise \`todo_update\` / \`todo_update_batch\` pour changer les statuts. Si tu reçois « still open todos », appelle \`todo_read\` puis \`todo_update_batch\`.

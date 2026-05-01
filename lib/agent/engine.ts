@@ -92,6 +92,29 @@ const TODO_TOUCH_TOOLS = new Set<string>([
   "todo_finalize",
 ]);
 
+const BROWSER_BACKED_TOOLS = new Set<string>([
+  "browser_navigate",
+  "browser_extract",
+  "browser_act",
+  "browser_close",
+  "web_search",
+  "web_fetch",
+  "google_search",
+  "google_maps_search",
+  "website_finder",
+  "website_audit",
+  "contact_page_scraper",
+  "pages_jaunes_search",
+  "dirigeant_research",
+  "linkedin_profile_search",
+  "facebook_page_lookup",
+  "fb_ad_library_check",
+]);
+
+function isBrowserBackedTool(name: string): boolean {
+  return BROWSER_BACKED_TOOLS.has(name) || name.startsWith("browser_");
+}
+
 const DEFAULT_MAX_NUDGES_BEFORE_YIELD = 3;
 /** Hard cap on nudges per tick. Once reached we accept the model's message
  *  as final, regardless of other heuristics. */
@@ -551,11 +574,43 @@ export async function runAgentLoop(
       }
     }
 
-    // Execute remaining tool calls in parallel
+    // Execute remaining tool calls. Browser-backed tools are intentionally
+    // serialized: launching many Chromium jobs at once was the root cause of
+    // "Target page, context or browser has been closed" cascades in lead-gen.
     if (otherCalls.length > 0) {
       if (otherCalls.length === 1) {
         // Single call — no overhead of Promise.allSettled
         toolResultParts.push(await processToolCall(otherCalls[0]));
+      } else if (otherCalls.some((fc) => isBrowserBackedTool(fc.name))) {
+        let parallelChunk: typeof otherCalls = [];
+        const flushParallelChunk = async () => {
+          if (parallelChunk.length === 0) return;
+          if (parallelChunk.length === 1) {
+            toolResultParts.push(await processToolCall(parallelChunk[0]));
+          } else {
+            const settled = await Promise.allSettled(
+              parallelChunk.map((fc) => processToolCall(fc)),
+            );
+            for (const s of settled) {
+              if (s.status === "fulfilled") {
+                toolResultParts.push(s.value);
+              } else {
+                console.error("[engine] parallel tool exec rejected:", s.reason);
+              }
+            }
+          }
+          parallelChunk = [];
+        };
+
+        for (const fc of otherCalls) {
+          if (isBrowserBackedTool(fc.name)) {
+            await flushParallelChunk();
+            toolResultParts.push(await processToolCall(fc));
+          } else {
+            parallelChunk.push(fc);
+          }
+        }
+        await flushParallelChunk();
       } else {
         // Multiple independent tool calls — run in parallel (order of results
         // matches order of otherCalls — required for tool_use / tool_result alignment).
@@ -621,7 +676,7 @@ export async function runAgentLoop(
                 "Tu viens de recevoir des résultats Maps. Le serveur a aussi sauvegardé ce batch dans `scratchpad:candidates`. Adapte la suite depuis ces données :\n" +
                 "1) Si tu as pré-classé/enrichi la liste, appelle `scratchpad_write` avec key=’candidates’ et value=JSON du working set mis à jour.\n" +
                 "2) **Pré-classe** avec les champs gratuits (website_url, has_website, chaîne évidente). La note Maps seule **ne suffit pas** pour valider un lead B2B — ne trie pas « par étoiles » comme critère métier.\n" +
-                "3) Au prochain tour : lance plusieurs `website_finder` **en parallèle** (3-5 par tour), jamais un par un.\n" +
+                "3) Au prochain tour : traite les vérifications web avec mesure : le runtime sérialise les outils navigateur pour garder Chromium stable. Tu peux émettre plusieurs appels indépendants si nécessaire, mais ne t’appuie pas sur un gros batch web pour avancer.\n" +
                 "4) Si Maps dit « pas de site », vérifie quand même avec `website_finder` + `google_maps_url` — signal bruité.\n" +
                 "RAPPEL : ~20 itérations par tick. Ne gaspille pas.",
             },

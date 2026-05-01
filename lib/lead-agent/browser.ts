@@ -496,6 +496,8 @@ export interface BrowserSession {
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  /** True when the Browser process is owned by the shared browser queue. */
+  shared?: boolean;
 }
 
 export interface LaunchBrowserOptions {
@@ -506,6 +508,42 @@ export interface LaunchBrowserOptions {
 export interface WithBrowserSessionOptions {
   attempts?: number;
   orgId?: string;
+}
+
+const SERIALIZE_BROWSER_JOBS =
+  String(process.env.PLAYWRIGHT_SERIALIZE_JOBS || "1").trim() !== "0";
+const REUSE_SHARED_BROWSER =
+  String(process.env.PLAYWRIGHT_REUSE_BROWSER || "1").trim() !== "0";
+const BROWSER_JOB_SPACING_MS = Math.max(
+  0,
+  Number(process.env.PLAYWRIGHT_JOB_SPACING_MS || 350),
+);
+
+let browserQueueTail: Promise<void> = Promise.resolve();
+let lastBrowserJobFinishedAt = 0;
+let sharedBrowser: Browser | null = null;
+
+async function enqueueBrowserJob<T>(job: () => Promise<T>): Promise<T> {
+  if (!SERIALIZE_BROWSER_JOBS) return job();
+
+  const run = browserQueueTail.catch(() => undefined).then(async () => {
+    const elapsed = Date.now() - lastBrowserJobFinishedAt;
+    if (elapsed < BROWSER_JOB_SPACING_MS) {
+      await sleep(BROWSER_JOB_SPACING_MS - elapsed);
+    }
+    try {
+      return await job();
+    } finally {
+      lastBrowserJobFinishedAt = Date.now();
+    }
+  });
+
+  browserQueueTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
 }
 
 export function isBrowserAlive(session: BrowserSession): boolean {
@@ -526,7 +564,19 @@ export async function safeClose(
     /* */
   }
   try {
-    if (session.browser.isConnected()) await session.browser.close();
+    if (!session.shared && session.browser.isConnected()) {
+      await session.browser.close();
+    }
+  } catch {
+    /* already dead */
+  }
+}
+
+async function closeSharedBrowser(): Promise<void> {
+  const browser = sharedBrowser;
+  sharedBrowser = null;
+  try {
+    if (browser?.isConnected()) await browser.close();
   } catch {
     /* already dead */
   }
@@ -562,11 +612,19 @@ export function isPlaywrightResourceExhaustion(e: unknown): boolean {
 }
 
 /**
- * Run `runner` with a fresh browser, close it, and on transient Playwright
- * crashes retry the whole operation (new launch). Mitigates serverless
- * "BrowserContext closed" flakes between tool calls.
+ * Run `runner` through the browser queue and retry transient Playwright
+ * crashes. By default, this reuses one Chromium process and creates a fresh
+ * isolated context/page per job, which avoids parallel Chromium storms while
+ * keeping cookies/storage scoped to each call.
  */
 export async function withBrowserSession<T>(
+  runner: (session: BrowserSession) => Promise<T>,
+  opts?: WithBrowserSessionOptions,
+): Promise<T> {
+  return enqueueBrowserJob(() => runWithBrowserSession(runner, opts));
+}
+
+async function runWithBrowserSession<T>(
   runner: (session: BrowserSession) => Promise<T>,
   opts?: WithBrowserSessionOptions,
 ): Promise<T> {
@@ -574,7 +632,9 @@ export async function withBrowserSession<T>(
   const max = Math.min(Math.max(opts?.attempts ?? defaultAttempts, 1), 8);
   let lastErr: unknown;
   for (let i = 1; i <= max; i++) {
-    const session = await launchBrowser({ orgId: opts?.orgId });
+    const session = REUSE_SHARED_BROWSER
+      ? await launchSharedBrowserSession({ orgId: opts?.orgId })
+      : await launchBrowser({ orgId: opts?.orgId });
     try {
       return await runner(session);
     } catch (e) {
@@ -587,6 +647,9 @@ export async function withBrowserSession<T>(
         throw new Error(
           `${msg} [BROWSER_RESOURCE_EXHAUSTED] Sur Vercel, limitez le parallélisme navigateur, augmentez /tmp (plan), ou définissez PLAYWRIGHT_BROWSERS_PATH vers un volume avec assez d’espace. Ne boucle pas 8× sur la même cause.`,
         );
+      }
+      if (session.shared && !isBrowserAlive(session)) {
+        await closeSharedBrowser();
       }
       if (i < max && isTransientPlaywrightFailure(e)) {
         const backoffMs = IS_SERVERLESS ? 900 + 700 * i : 500 * i;
@@ -601,9 +664,7 @@ export async function withBrowserSession<T>(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-export async function launchBrowser(
-  opts?: LaunchBrowserOptions,
-): Promise<BrowserSession> {
+async function launchChromiumProcess(): Promise<Browser> {
   // Vercel Pro (2–4 GB): prefer **multi-process** Chromium — much fewer
   // "BrowserContext closed" flakes than --single-process + --no-zygote.
   // If you hit OOM on tiny plans, set PLAYWRIGHT_SERVERLESS_SINGLE_PROCESS=1.
@@ -657,6 +718,14 @@ export async function launchBrowser(
     }
   }
 
+  return browser;
+}
+
+async function createSessionFromBrowser(
+  browser: Browser,
+  opts?: LaunchBrowserOptions,
+  shared = false,
+): Promise<BrowserSession> {
   const vw = IS_SERVERLESS
     ? 1024
     : 1280 + Math.floor(Math.random() * 80);
@@ -701,7 +770,40 @@ export async function launchBrowser(
   }
 
   const page = await context.newPage();
-  return { browser, context, page };
+  return { browser, context, page, shared };
+}
+
+async function launchSharedBrowserSession(
+  opts?: LaunchBrowserOptions,
+): Promise<BrowserSession> {
+  if (!sharedBrowser || !sharedBrowser.isConnected()) {
+    await closeSharedBrowser();
+    const browser = await launchChromiumProcess();
+    sharedBrowser = browser;
+    browser.on("disconnected", () => {
+      if (sharedBrowser === browser) {
+        sharedBrowser = null;
+      }
+    });
+  }
+
+  const browser = sharedBrowser;
+  if (!browser) throw new Error("Shared browser was not initialized");
+
+  try {
+    return await createSessionFromBrowser(browser, opts, true);
+  } catch (e) {
+    await closeSharedBrowser();
+    throw e;
+  }
+}
+
+export async function launchBrowser(
+  opts?: LaunchBrowserOptions,
+): Promise<BrowserSession> {
+  const browser = await launchChromiumProcess();
+
+  return createSessionFromBrowser(browser, opts, false);
 }
 
 export async function closeBrowser(session: BrowserSession) {
