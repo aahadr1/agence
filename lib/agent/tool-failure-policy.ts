@@ -51,6 +51,19 @@ export function classifyToolFailure(
   }
 
   if (
+    m.includes("local_worker_offline") ||
+    m.includes("aucun worker local connecté")
+  ) {
+    return {
+      category: "transient",
+      retryableSameArgs: true,
+      blockToolForSession: false,
+      hintFr:
+        "Worker navigateur local indisponible ou occupé : vérifie le panneau worker, puis reprends avec workset_read. Ne propose pas d'annuler tant que le worker peut revenir ou qu'il reste des sources non navigateur.",
+    };
+  }
+
+  if (
     m.includes("target page, context or browser has been closed") ||
     (m.includes("browsercontext") && m.includes("closed")) ||
     m.includes("target closed") ||

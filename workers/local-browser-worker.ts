@@ -47,6 +47,10 @@ import type { AgentContext } from "../lib/agent/types";
 const appUrl = (process.env.AGENCE_APP_URL || "").replace(/\/$/, "");
 const token = process.env.AGENCE_WORKER_TOKEN || "";
 const pollMs = Math.max(750, Number(process.env.AGENCE_WORKER_POLL_MS || 1500));
+const heartbeatMs = Math.max(
+  10_000,
+  Number(process.env.AGENCE_WORKER_HEARTBEAT_MS || 20_000),
+);
 
 if (!appUrl || !token) {
   console.error(
@@ -101,6 +105,13 @@ async function completeJob(jobId: string, body: { ok: boolean; result?: unknown;
   }
 }
 
+async function heartbeat(jobId?: string) {
+  await api("/api/agent/local-worker/heartbeat", {
+    method: "POST",
+    body: JSON.stringify({ jobId }),
+  }).catch(() => {});
+}
+
 function buildContext(job: WorkerJob): AgentContext {
   const c = job.context || {};
   return {
@@ -131,7 +142,8 @@ async function runJob(job: WorkerJob) {
   return registered.execute(job.args || {}, buildContext(job));
 }
 
-console.log(`
+async function main() {
+  console.log(`
 ╔══════════════════════════════════════════════════════╗
 ║          LOCAL BROWSER WORKER                        ║
 ║  Playwright tourne sur cette machine                 ║
@@ -140,32 +152,46 @@ console.log(`
 ╚══════════════════════════════════════════════════════╝
 `);
 
-while (!shuttingDown) {
-  try {
-    const job = await nextJob();
-    if (!job) {
-      await sleep(pollMs);
-      continue;
-    }
-
-    const start = Date.now();
-    console.log(`[local-worker] → ${job.tool_name} (${job.id})`);
+  while (!shuttingDown) {
     try {
-      const result = await runJob(job);
-      await completeJob(job.id, { ok: true, result });
-      console.log(
-        `[local-worker] ✓ ${job.tool_name} terminé en ${Date.now() - start}ms`,
-      );
+      const job = await nextJob();
+      if (!job) {
+        await sleep(pollMs);
+        continue;
+      }
+
+      const start = Date.now();
+      console.log(`[local-worker] → ${job.tool_name} (${job.id})`);
+      const heartbeatTimer = setInterval(() => {
+        void heartbeat(job.id);
+      }, heartbeatMs);
+      heartbeatTimer.unref?.();
+      try {
+        await heartbeat(job.id);
+        const result = await runJob(job);
+        await completeJob(job.id, { ok: true, result });
+        console.log(
+          `[local-worker] ✓ ${job.tool_name} terminé en ${Date.now() - start}ms`,
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await completeJob(job.id, { ok: false, error: msg });
+        console.error(`[local-worker] ✗ ${job.tool_name}: ${msg}`);
+      } finally {
+        clearInterval(heartbeatTimer);
+        void heartbeat();
+      }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await completeJob(job.id, { ok: false, error: msg });
-      console.error(`[local-worker] ✗ ${job.tool_name}: ${msg}`);
+      console.error(
+        "[local-worker] poll error:",
+        e instanceof Error ? e.message : e,
+      );
+      await sleep(Math.max(3000, pollMs * 2));
     }
-  } catch (e) {
-    console.error(
-      "[local-worker] poll error:",
-      e instanceof Error ? e.message : e,
-    );
-    await sleep(Math.max(3000, pollMs * 2));
   }
 }
+
+main().catch((e) => {
+  console.error("[local-worker] fatal:", e);
+  process.exit(1);
+});

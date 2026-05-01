@@ -104,6 +104,7 @@ const TOOL_USAGE_HINTS = `<TOOL_USAGE>
 - \`learn_recall\`: look up lessons from past sessions when you suspect déjà-vu.
 - \`request_approval\`: pause for user decision on sensitive actions.
 - \`web_fetch\`, \`web_search\`: **headless Chromium (Playwright)** — rendered SERPs and JS-executed pages (same stack as browser tools; not raw HTTP-only). Browser-backed tools are serialized by the runtime to preserve one stable Chromium; expect them to run one after another.
+- Browser-backed tools may run on the user's **local worker**. If you see \`[LOCAL_WORKER_OFFLINE]\`, treat it as a runtime availability signal: call \`workset_read\`, continue with non-browser tools if useful, or ask the user to launch the worker only if no useful non-browser path remains. Do not offer "annuler ou réessayer plus tard" while workset items remain.
 - \`replicate_image_generate\`: image generation/editing via **Replicate** (Google **Nano Banana** by default; \`variant\` **nano_banana_2** or **nano_banana_pro** when the user asks). Needs \`REPLICATE_API_TOKEN\`.
 - \`browser_navigate\`, \`browser_act\`, \`browser_extract\`, \`browser_close\`: **stateful** session + vision-guided actions for multi-step UIs, logins, or heavy SPAs — not "only after web_fetch fails once".
 - \`ask_user\`: ask a clarifying question when truly ambiguous (max 1-3 per session). **Pauses the run** until the user’s next message — do not assume defaults (especially geography) after calling it. Prefer acting on the brief with a stated default in \`scratchpad_write\` over blocking on optional details.
@@ -147,6 +148,7 @@ INVARIANTS (non-negotiable — regardless of order):
 \`save_lead\` QUALITY BAR:
 - Required: \`business_name\`, \`notes\` (why they qualify + what is verified vs missing), \`confidence_score\`.
 - Pour chaque champ sensible (dirigeant, téléphone, email), indique dans \`notes\` **la source** (outil + URL ou extrait registre) — pas de donnée sans traçabilité.
+- Si le brief utilisateur demande explicitement des **emails**, une fiche sans \`email\` ni \`owner_email\` ne compte pas pour le livrable et \`save_lead\` la refusera.
 - Minimum viable contact: **at least one** of — verified **establishment** phone or email (e.g. from Maps or site), OR verified **owner** phone/email from tools. If only establishment contact is verified, owner fields may be null **if** \`notes\` explain. NEVER fabricate to fill columns.
 
 DATA PRIORITY when sources conflict (tie-breaker, not execution order): Pappers > Societe.com > legal mentions > LinkedIn > Google Reviews > Facebook; recent > old. **TPE sans SIREN fiable** : priorise \`dirigeant_research\`, \`google_search\`, \`pages_jaunes_search\` — tu peux quand même \`save_lead\` avec les contacts vérifiables.
@@ -159,6 +161,7 @@ FINAL MESSAGE:
 - Final table in **French**, aligned with what was **saved**; if columns are missing, state it honestly rather than \`[non trouvé]\` spam without strategy.
 - **Before the table**: a short French block **« Vérifications / limites »** (what was cross-checked, what could not be verified, homonyms rejected) — shows depth, not just rows.
 - **Cross-check "no website"** : enchaînement **Maps → \`website_finder\`** (ou \`web_fetch\` sur l’URL Maps) **avant** de conclure « sans site ». Si Maps et le finder divergent, renseigne \`website_presence\` sur \`save_lead\` (\`maps_claim_no_site\` / \`finder_verified\` / \`contradiction\`).
+- Si \`website_finder\` retourne \`blocked\`, \`blocked_by_captcha\` ou \`do_not_conclude_no_website\`, tu n'as PAS prouvé l'absence de site. Marque l'item \`blocked\`/source alternative, puis utilise Pages Jaunes, site direct, DuckDuckGo via \`google_search\`, ou passe au candidat suivant.
 - **Nombre demandé**: si le brief dit **N**, l’objectif nominal est **N lignes CRM sauvegardées** avec preuve/honnêteté — pas du remplissage inventé. Si tu ne peux pas atteindre N après triangulation sérieuse, livre les lignes solides disponibles **et** explique en français les refus (homonymes, KO API, périmètre trop étroit).
 - Encourage **tiers / rank**, a **one-line pitch angle** per lead, and explicit **confidence** where useful — align with the extended iteration budget for this pack.
 

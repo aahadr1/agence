@@ -169,6 +169,7 @@ function asResultRecord(value: unknown): Record<string, unknown> | null {
 function statusFromResult(result: unknown): string | null {
   const r = asResultRecord(result);
   if (!r) return null;
+  if (r.blocked || r.do_not_conclude_no_website) return null;
   if (r.lead_id || r.action === "created" || r.action === "updated") {
     return "saved";
   }
@@ -196,11 +197,24 @@ export function getTool(name: string): RegisteredTool | undefined {
 }
 
 export function getToolDefinitions(names?: string[]): ToolDefinition[] {
-  if (!names) return [...registry.values()].map((t) => t.definition);
-  return names
-    .map((n) => registry.get(n))
-    .filter(Boolean)
-    .map((t) => t!.definition);
+  const defs = !names
+    ? [...registry.values()].map((t) => t.definition)
+    : names
+        .map((n) => registry.get(n))
+        .filter(Boolean)
+        .map((t) => t!.definition);
+  return defs.filter((def) => {
+    if (def.name === "pappers_search") {
+      return Boolean(process.env.PAPPERS_API_KEY?.trim());
+    }
+    if (def.name === "societe_com_lookup") {
+      return Boolean(
+        process.env.SOCIETE_COM_API_KEY?.trim() ||
+          process.env.SOCIETE_API_KEY?.trim(),
+      );
+    }
+    return true;
+  });
 }
 
 export function getAllToolNames(): string[] {

@@ -3,6 +3,7 @@ import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
 import { ensureAgentLeadSearchId } from "../lead-search-stub";
 import { updateWorksetItem } from "../workset-state";
+import { deriveLeadMissionContract } from "../lead-contract";
 
 /** Only set leads.mission_id when candidate exists in public.missions (FK-safe). */
 export async function resolveMissionIdForLead(
@@ -123,12 +124,23 @@ registerTool(
       const hasContact =
         phone.length > 0 || email.length > 0 || op.length > 0 || oe.length > 0;
       const hasOwnerOrLegal = owner.length > 0 || siren.length > 0;
-      if (!hasContact || !hasOwnerOrLegal || prov.length < 8) {
+      const contract = await deriveLeadMissionContract(context.sessionId);
+      const hasEmail = email.length > 0 || oe.length > 0;
+      if (
+        !hasContact ||
+        !hasOwnerOrLegal ||
+        prov.length < 8 ||
+        (contract.requiresEmail && !hasEmail)
+      ) {
         throw new Error(
           "save_lead (lead-gen-fr) : fiche refusée — il faut au minimum : " +
             "(1) un **contact** (téléphone ou email établissement ou dirigeant), " +
             "(2) **dirigeant** (owner_name) **ou** SIREN vérifiable, " +
-            "(3) **data_provenance** (≥8 caractères) indiquant la source des faits. " +
+            "(3) **data_provenance** (≥8 caractères) indiquant la source des faits" +
+            (contract.requiresEmail
+              ? ", (4) **email obligatoire** car le brief utilisateur le demande"
+              : "") +
+            ". " +
             "Complète puis réessaie.",
         );
       }

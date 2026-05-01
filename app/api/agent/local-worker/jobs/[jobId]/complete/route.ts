@@ -22,13 +22,18 @@ export async function POST(
     error?: string;
   };
   const status = body.ok ? "completed" : "failed";
+  const now = new Date().toISOString();
+  await service
+    .from("agent_local_workers")
+    .update({ status: "online", last_seen_at: now })
+    .eq("id", worker.id);
   const { error } = await service
     .from("agent_local_browser_jobs")
     .update({
       status,
       result: body.ok ? (body.result ?? null) : null,
       error: body.ok ? null : body.error?.slice(0, 4000) || "Worker failed",
-      completed_at: new Date().toISOString(),
+      completed_at: now,
     })
     .eq("id", jobId)
     .eq("worker_id", worker.id)

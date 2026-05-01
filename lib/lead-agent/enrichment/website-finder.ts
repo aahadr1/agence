@@ -54,6 +54,11 @@ export interface WebsiteFinderResult {
   page_access?: PageAccessDiagnostics;
   suggested_user_action_fr?: string | null;
   credential_hostname?: string | null;
+  /** Search page was blocked; callers must not conclude the business has no website. */
+  blocked?: boolean;
+  blocked_by_captcha?: boolean;
+  do_not_conclude_no_website?: boolean;
+  failure_reason?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,29 +342,27 @@ export async function findWebsite(
           .catch(() => {});
         await page.waitForTimeout(800);
 
-        const found = await page.evaluate((): string[] => {
+        // String body avoids tsx/esbuild injecting `__name` into serialized `page.evaluate` callbacks (breaks in Chromium).
+        const found = (await page.evaluate(`(() => {
           const skipHosts = ["google.", "gstatic.", "schema.org", "facebook.", "instagram.", "twitter.", "linkedin.", "youtube.", "tiktok."];
-          const out: string[] = [];
-          const addHref = (href: string | null | undefined) => {
-            if (!href || !/^https?:\/\//i.test(href)) return;
+          const out = [];
+          const addHref = (href) => {
+            if (!href || !/^https?:\\/\\//i.test(href)) return;
             if (skipHosts.some((h) => href.includes(h))) return;
             if (!out.includes(href)) out.push(href);
           };
-          // Priority selectors
           for (const sel of ['a[data-item-id="authority"]', 'a[data-item-id^="authority:"]']) {
-            document.querySelectorAll<HTMLAnchorElement>(sel).forEach((a) => addHref(a.href));
+            document.querySelectorAll(sel).forEach((a) => addHref(a.href));
           }
-          // aria-label
           const kws = ["site web", "website", "ouvrir le site", "visiter le site"];
-          document.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((a) => {
+          document.querySelectorAll("a[href]").forEach((a) => {
             const label = (a.getAttribute("aria-label") || "").toLowerCase();
             if (kws.some((k) => label.includes(k))) addHref(a.href);
           });
-          // Fallback: any external link in the panel
           const main = document.querySelector('[role="main"]') || document.body;
-          main.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach((a) => addHref(a.href));
+          main.querySelectorAll('a[href^="http"]').forEach((a) => addHref(a.href));
           return out;
-        });
+        })()`)) as string[];
 
         // Prefer the first non-platform URL
         const ownedFromMaps = found.find((u) => classifyUrl(u) === null) ?? null;
@@ -438,6 +441,8 @@ export async function findWebsite(
   const visitedDomains = new Set<string>();
   let ownedDomainVisits = 0;
   const MAX_OWNED_VISITS = 5; // max Playwright navigations (title/domain fast-paths don't count)
+  let serpBlocked: PageAccessDiagnostics | null = null;
+  let serpNavigationFailures = 0;
 
   for (const query of queries) {
     log(`[WebFinder] 🔍 Query: "${query}"`);
@@ -445,6 +450,15 @@ export async function findWebsite(
     try {
       const ok = await safeGoto(page, googleSearchUrl(query), log);
       if (!ok) {
+        const diag = await diagnosePageAccess(page).catch(() => null);
+        if (diag?.captcha || diag?.login_wall) {
+          serpBlocked = diag;
+          log(
+            `[WebFinder] SERP blocked (${diag.captcha ? "captcha" : "login"}) — stop`,
+          );
+          break;
+        }
+        serpNavigationFailures++;
         log(`[WebFinder] ⚠️ Could not load SERP for "${query}"`);
         continue;
       }
@@ -470,6 +484,10 @@ export async function findWebsite(
           page_access: serpDiag,
           suggested_user_action_fr: serpDiag.suggested_action_fr,
           credential_hostname: serpDiag.credential_hostname,
+          blocked: true,
+          blocked_by_captcha: serpDiag.captcha,
+          do_not_conclude_no_website: true,
+          failure_reason: serpDiag.captcha ? "captcha" : "auth_wall",
         };
       }
 
@@ -574,6 +592,27 @@ export async function findWebsite(
     }
   }
 
+  if (serpBlocked) {
+    const bp = bestPlatform as PlatformEntry | null;
+    return {
+      has_website: false,
+      website_url: null,
+      website_type: bp?.type ?? null,
+      platform_url: bp?.url ?? null,
+      platform_label: bp?.label ?? null,
+      found_via: null,
+      confidence: "low",
+      credential_required: serpBlocked.login_wall,
+      page_access: serpBlocked,
+      suggested_user_action_fr: serpBlocked.suggested_action_fr,
+      credential_hostname: serpBlocked.credential_hostname,
+      blocked: true,
+      blocked_by_captcha: serpBlocked.captcha,
+      do_not_conclude_no_website: true,
+      failure_reason: serpBlocked.captcha ? "captcha" : "auth_wall",
+    };
+  }
+
   // ── No owned domain found after all 30 candidates ──────────────────────────
   const bp = bestPlatform as PlatformEntry | null;
   if (bp) {
@@ -601,6 +640,10 @@ export async function findWebsite(
     platform_url: null,
     platform_label: null,
     found_via: null,
-    confidence: "high",
+    confidence: serpNavigationFailures >= queries.length ? "low" : "high",
+    blocked: serpNavigationFailures >= queries.length,
+    do_not_conclude_no_website: serpNavigationFailures >= queries.length,
+    failure_reason:
+      serpNavigationFailures >= queries.length ? "serp_navigation_failed" : null,
   };
 }

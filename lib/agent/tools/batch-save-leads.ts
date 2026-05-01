@@ -8,6 +8,7 @@ import { getAgentDb } from "./_db";
 import { resolveMissionIdForLead } from "./save-lead";
 import { ensureAgentLeadSearchId } from "../lead-search-stub";
 import { updateWorksetItem } from "../workset-state";
+import { deriveLeadMissionContract } from "../lead-contract";
 
 const MAX_BATCH = 25;
 
@@ -74,6 +75,7 @@ registerTool(
 
     const rows: Record<string, unknown>[] = [];
     const skipped: string[] = [];
+    const contract = await deriveLeadMissionContract(context.sessionId);
 
     for (const item of raw.slice(0, MAX_BATCH)) {
       if (!item || typeof item !== "object") {
@@ -98,8 +100,18 @@ registerTool(
         const hasContact =
           phone.length > 0 || email.length > 0 || op.length > 0 || oe.length > 0;
         const hasOwnerOrLegal = owner.length > 0 || siren.length > 0;
-        if (!hasContact || !hasOwnerOrLegal || prov.length < 8) {
-          skipped.push(`${name} (lead-gen: contact+dirigeant/SIREN+provenance requis)`);
+        const hasEmail = email.length > 0 || oe.length > 0;
+        if (
+          !hasContact ||
+          !hasOwnerOrLegal ||
+          prov.length < 8 ||
+          (contract.requiresEmail && !hasEmail)
+        ) {
+          skipped.push(
+            `${name} (lead-gen: contact+dirigeant/SIREN+provenance${
+              contract.requiresEmail ? "+email" : ""
+            } requis)`,
+          );
           continue;
         }
       }

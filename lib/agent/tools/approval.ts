@@ -101,7 +101,7 @@ registerTool(
 
     const question = String(args.question);
     const defeatistEscalation =
-      /\b(annul|abandon|cl[oô]re|incapable|impossible|r[ée]essaye[rz]? plus tard|bloqu[ée].*technique|cancel|give up|try again later)\b/i.test(
+      /\b(annul|abandon|cl[oô]re|incapable|impossible|r[ée]essaye[rz]? plus tard|bloqu[ée].*technique|probl[eè]me technique|worker local|outil(?:s)? .*indisponible|cancel|give up|try again later)\b/i.test(
         question,
       );
     if (

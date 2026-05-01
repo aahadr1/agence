@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AgentContext } from "./types";
 import { getAgentDb } from "./tools/_db";
+import { persistGoogleMapsSearchResult } from "./google-maps-persistence";
 
 export const LOCAL_BROWSER_TOOLS = new Set([
   "google_maps_search",
@@ -25,6 +26,10 @@ export const LOCAL_BROWSER_TOOLS = new Set([
 ]);
 
 const WORKER_ONLINE_WINDOW_MS = 75_000;
+const WORKER_BUSY_WINDOW_MS = Math.max(
+  300_000,
+  Number(process.env.AGENT_LOCAL_WORKER_BUSY_WINDOW_MS || 900_000),
+);
 const JOB_WAIT_TIMEOUT_MS = Math.max(
   15_000,
   Number(process.env.AGENT_LOCAL_BROWSER_JOB_TIMEOUT_MS || 240_000),
@@ -85,6 +90,20 @@ function isWorkerFresh(row: Pick<LocalWorkerRow, "last_seen_at" | "status">) {
   return Date.now() - new Date(row.last_seen_at).getTime() < WORKER_ONLINE_WINDOW_MS;
 }
 
+async function workerHasRecentClaim(workerId: string): Promise<boolean> {
+  const db = getAgentDb();
+  const cutoff = new Date(Date.now() - WORKER_BUSY_WINDOW_MS).toISOString();
+  const { data } = await db
+    .from("agent_local_browser_jobs")
+    .select("id")
+    .eq("worker_id", workerId)
+    .eq("status", "claimed")
+    .gte("claimed_at", cutoff)
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data?.id);
+}
+
 export async function findFreshLocalWorker(
   orgId: string,
   userId: string,
@@ -99,8 +118,10 @@ export async function findFreshLocalWorker(
     .order("last_seen_at", { ascending: false, nullsFirst: false })
     .limit(1)
     .maybeSingle<LocalWorkerRow>();
-  if (error || !data || !isWorkerFresh(data)) return null;
-  return data;
+  if (error || !data) return null;
+  if (isWorkerFresh(data)) return data;
+  if (await workerHasRecentClaim(data.id)) return data;
+  return null;
 }
 
 export async function dispatchLocalBrowserTool(
@@ -149,7 +170,41 @@ export async function dispatchLocalBrowserTool(
       .select("status, result, error")
       .eq("id", job.id)
       .maybeSingle<{ status: string; result: unknown; error: string | null }>();
-    if (current?.status === "completed") return current.result;
+    if (current?.status === "completed") {
+      if (toolName === "google_maps_search") {
+        try {
+          const rawTarget = Number(args.target_pool_size);
+          const rawMax = Number(args.max_results);
+          const maxResultsRequested = Math.min(
+            60,
+            Math.max(
+              1,
+              Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : 30,
+            ),
+          );
+          await persistGoogleMapsSearchResult({
+            sessionId: context.sessionId,
+            query: String(args.query || ""),
+            maxResultsRequested,
+            targetCount:
+              Number.isFinite(rawTarget) && rawTarget > 0
+                ? Math.floor(rawTarget)
+                : null,
+            payload:
+              current.result && typeof current.result === "object"
+                ? (current.result as { leads?: unknown[]; blocked?: boolean })
+                : {},
+            scratchpad: context.scratchpad,
+          });
+        } catch (e) {
+          console.warn(
+            "[local-browser] google_maps persistence failed:",
+            e instanceof Error ? e.message : e,
+          );
+        }
+      }
+      return current.result;
+    }
     if (current?.status === "failed") {
       throw new Error(current.error || "Le worker local a échoué sans message.");
     }

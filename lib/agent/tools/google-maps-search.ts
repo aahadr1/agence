@@ -2,9 +2,7 @@ import { registerTool } from "../tool-registry";
 import { scrapeGoogleMaps } from "@/lib/lead-agent/sources/google-maps";
 import { withBrowserSession } from "@/lib/lead-agent/browser";
 import type { AgentContext } from "../types";
-import { getAgentDb } from "./_db";
-import { writeScratchpadText } from "./scratchpad";
-import { upsertWorksetItems } from "../workset-state";
+import { persistGoogleMapsSearchResult } from "../google-maps-persistence";
 
 registerTool(
   {
@@ -66,37 +64,10 @@ registerTool(
           maxResults,
           deadline,
         );
-        let leads = first.leads;
-        let meta = first.meta;
+        const leads = first.leads;
+        const meta = first.meta;
 
-        let widerUsed: string | null = null;
-        const short =
-          leads.length < Math.min(maxResults, 18) &&
-          leads.length < maxResults &&
-          !meta.blocked;
-        if (short && primaryQuery.length > 3) {
-          const wider =
-            /\b(restaurant|café|bar|brasserie|boulangerie)\b/i.test(
-              primaryQuery,
-            )
-              ? primaryQuery
-              : `${primaryQuery.trim()} restaurant`;
-          if (wider !== primaryQuery) {
-            widerUsed = wider;
-            const remain = Math.max(1, maxResults - leads.length);
-            const second = await scrapeGoogleMaps(
-              session.page,
-              wider,
-              seenNames,
-              log,
-              maxScrolls,
-              remain,
-              deadline,
-            );
-            leads = [...leads, ...second.leads];
-            if (!second.meta.blocked) meta = second.meta;
-          }
-        }
+        const widerUsed: string | null = null;
 
         return {
           count: leads.length,
@@ -115,6 +86,7 @@ registerTool(
     );
 
     if (
+      process.env.AGENT_LOCAL_WORKER !== "1" &&
       context.sessionId &&
       payload &&
       !payload.blocked &&
@@ -122,55 +94,17 @@ registerTool(
       payload.leads.length > 0
     ) {
       try {
-        const db = getAgentDb();
-        await db.from("agent_discovery_snapshots").insert({
-          session_id: context.sessionId,
-          query: primaryQuery.slice(0, 500),
-          lead_count: payload.leads.length,
-          payload: {
-            max_results_requested: maxResults,
-            leads: payload.leads,
-            secondary_query_used: payload.secondary_query_used,
-          },
-        });
-        const workingSet = {
-          source: "google_maps_search",
+        await persistGoogleMapsSearchResult({
+          sessionId: context.sessionId,
           query: primaryQuery,
-          captured_at: new Date().toISOString(),
-          max_results_requested: maxResults,
-          secondary_query_used: payload.secondary_query_used,
-          candidates: payload.leads,
-        };
-        await writeScratchpadText(
-          context.sessionId,
-          "candidates",
-          JSON.stringify(workingSet),
-        );
-        context.scratchpad?.set("candidates", JSON.stringify(workingSet));
-        await upsertWorksetItems(
-          context.sessionId,
-          payload.leads.map((lead, index) => ({
-            ...lead,
-            title: lead.business_name,
-            status: "new",
-            priority: index + 1,
-            missing: [
-              ...(lead.phone || lead.email ? [] : ["contact"]),
-              "dirigeant_or_siren",
-              "data_provenance",
-            ],
-            next_action:
-              "Pré-qualifier avec les champs disponibles, puis enrichir seulement si ce candidat reste utile pour l'objectif.",
-          })),
-          {
-            source: "google_maps_search",
-            goal: primaryQuery,
-            target_count:
-              Number.isFinite(rawTarget) && rawTarget > 0
-                ? Math.floor(rawTarget)
-                : null,
-          },
-        );
+          maxResultsRequested: maxResults,
+          targetCount:
+            Number.isFinite(rawTarget) && rawTarget > 0
+              ? Math.floor(rawTarget)
+              : null,
+          payload,
+          scratchpad: context.scratchpad,
+        });
       } catch (e) {
         console.warn(
           "[google_maps_search] snapshot insert:",
