@@ -247,8 +247,13 @@ export async function runAgentLoop(
         (fc) => fc.name === "ask_user",
       );
       const hasToolCalls = result.functionCalls.length > 0;
+      const noToolIntent =
+        !hasToolCalls &&
+        (looksLikeIntentWithoutAction(result.text) ||
+          looksLikePlanningRoadmap(result.text));
       if (
         !hasAskUserCall &&
+        !noToolIntent &&
         !(hasToolCalls && looksLikeProcessChatterOnly(displayText))
       ) {
         await config.onMessage?.(displayText);

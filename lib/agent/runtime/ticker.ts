@@ -201,11 +201,10 @@ async function runOneTickLocked(sessionId: string): Promise<TickResult> {
   const iterBudget = sessionPacksForBudget.includes("lead-gen-fr")
     ? ITER_PER_TICK_LEAD_GEN
     : ITER_PER_TICK;
-  /** Lead-gen: reflect more often so forced JSON reflection realigns todos vs evidence. */
-  // Lead-gen: reflect less often (every 6 vs 5) — saves 2 productive
-  // iterations per tick. At reflectEveryN=4 we were burning 25% of the
-  // 20-iteration budget on introspection alone.
-  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 6 : 5;
+  // Lead-gen has an external workset now, so periodic reflection can be less
+  // frequent. Error-triggered reflection still kicks in; this saves visible
+  // "reflection" stalls during normal step-by-step execution.
+  const reflectEveryN = sessionPacksForBudget.includes("lead-gen-fr") ? 10 : 5;
 
   // Journal the step (best-effort, non-fatal)
   const stepNum = (session.tick_count || 0) + 1;

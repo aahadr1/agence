@@ -106,6 +106,45 @@ function repeatedCallCount(
   return count;
 }
 
+function repeatedCallRecoveryHint(
+  toolName: string,
+  args: Record<string, unknown>,
+): string {
+  if (toolName === "google_maps_search" && typeof args.query === "string") {
+    const query = args.query.trim();
+    const city =
+      query.match(/\b(?:à|a|in)\s+([A-ZÀ-Ú][\p{L}' -]{2,})$/iu)?.[1]?.trim() ||
+      query.split(/\s+/).at(-1) ||
+      "";
+    const citySuffix = city ? ` ${city}` : "";
+    const lower = query.toLowerCase();
+    if (/restaurant|resto|bistrot|brasserie/.test(lower)) {
+      const variants = [
+        `bistrot${citySuffix}`,
+        `brasserie${citySuffix}`,
+        `restaurant gastronomique${citySuffix}`,
+        `restaurant traditionnel${citySuffix}`,
+        `restaurant italien${citySuffix}`,
+      ].filter((v) => v.toLowerCase() !== lower);
+      return (
+        ` Action valide maintenant : appelle \`workset_read\`, puis si le vivier est trop court appelle ` +
+        `\`google_maps_search\` avec une requête différente, par exemple: ${variants
+          .slice(0, 5)
+          .map((v) => `"${v}"`)
+          .join(", ")}. Ne l'annonce pas en prose : appelle l'outil.`
+      );
+    }
+    return (
+      ` Action valide maintenant : appelle \`workset_read\`, puis relance la découverte avec une requête ` +
+      `sémantiquement différente de "${query}" ou une autre source. Ne l'annonce pas en prose : appelle l'outil.`
+    );
+  }
+  return (
+    " Action valide maintenant : appelle `workset_read`, change réellement les paramètres/source, " +
+    "ou passe à un autre item. Ne l'annonce pas en prose : appelle l'outil."
+  );
+}
+
 function itemTitleFromArgs(args: Record<string, unknown>): string | null {
   return typeof args.business_name === "string"
     ? args.business_name
@@ -251,7 +290,8 @@ export async function executeTool(
   if (repeatCount > 2) {
     const message =
       `Outil « ${name} » appelé ${repeatCount} fois avec exactement les mêmes paramètres. ` +
-      `[REPEATED_IDENTICAL_CALL] Ne relance pas identiquement : lis le workset/scratchpad, change les paramètres, ou passe à une autre stratégie.`;
+      `[REPEATED_IDENTICAL_CALL] Ne relance pas identiquement : lis le workset/scratchpad, change les paramètres, ou passe à une autre stratégie.` +
+      repeatedCallRecoveryHint(name, args);
     return finalize({
       name,
       result: null,
