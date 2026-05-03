@@ -5,31 +5,9 @@
 
 import { registerTool } from "../tool-registry";
 import { getAgentDb } from "./_db";
+import { scratchpadStorageKey } from "../scratchpad-storage";
 
-const PREFIX = "scratchpad:";
-
-export function scratchpadStorageKey(userKey: string): string {
-  const k = String(userKey).replace(/[\u0000-\u001f]/g, "").trim().slice(0, 180);
-  return `${PREFIX}${k || "_empty"}`;
-}
-
-export async function writeScratchpadText(
-  sessionId: string,
-  key: string,
-  text: string,
-) {
-  const db = getAgentDb();
-  const { error } = await db.from("agent_memory").upsert(
-    {
-      session_id: sessionId,
-      key: scratchpadStorageKey(key),
-      value: { text },
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "session_id,key" },
-  );
-  if (error) throw new Error(`scratchpad_write failed: ${error.message}`);
-}
+export { scratchpadStorageKey, writeScratchpadText } from "../scratchpad-storage";
 
 registerTool(
   {

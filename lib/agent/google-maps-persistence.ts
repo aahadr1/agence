@@ -1,5 +1,5 @@
 import { getAgentDb } from "./tools/_db";
-import { writeScratchpadText } from "./tools/scratchpad";
+import { writeScratchpadText } from "./scratchpad-storage";
 import { upsertWorksetItems } from "./workset-state";
 
 interface MapsPayload {
