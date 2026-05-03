@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { scheduleNextTick } from "@/lib/agent/runtime/schedule";
-import { applyApprovedProposal } from "@/lib/agent/tools/repo";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -57,6 +56,9 @@ export async function POST(
     const commitId = (approvalRow?.metadata as { commit_id?: string })?.commit_id;
     if (commitId) {
       try {
+        const { applyApprovedProposal } = await import(
+          "@/lib/agent/tools/repo"
+        );
         const pr = await applyApprovedProposal(commitId);
         sideEffectNote = ` A PR was opened: #${pr.pr_number} (${pr.pr_url}).`;
       } catch (e) {
