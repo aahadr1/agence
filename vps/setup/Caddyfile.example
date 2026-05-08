@@ -1,0 +1,17 @@
+# Caddyfile généré automatiquement par install.sh à partir des variables d'environnement.
+# Ce fichier est un exemple ; ne pas l'utiliser tel quel.
+#
+# Variante avec domaine (TLS auto Let's Encrypt) :
+#
+# opencode.tondomaine.fr {
+#   basic_auth {
+#     aaron $2a$14$EXAMPLE_HASH_FROM_caddy_hash-password
+#   }
+#   reverse_proxy 127.0.0.1:4096
+# }
+#
+# Variante locale uniquement (pas de domaine) :
+#
+# :80 {
+#   respond "OpenCode running locally. Use Telegram or SSH tunnel to access."
+# }

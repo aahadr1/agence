@@ -1,0 +1,22 @@
+{
+  "name": "agence-leadagent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenCode workspace for Agence's personal lead-gen agent",
+  "scripts": {
+    "telegram": "bun run telegram/bridge.ts",
+    "test:health": "curl -s http://127.0.0.1:4096/global/health"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/sdk": "latest",
+    "@supabase/supabase-js": "^2.99.2",
+    "playwright-core": "^1.58.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

@@ -1,20 +1,10 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
-import { missionExecute } from "@/lib/inngest/functions/mission-execute";
-import {
-  sessionStart,
-  sessionContinue,
-  approvalResponded,
-} from "@/lib/inngest/functions/session-run";
-import { agentOsLongTask } from "@/lib/inngest/functions/agent-os-long-task";
 
+// Le runtime agent vit désormais sur le VPS (OpenCode + Telegram bridge),
+// plus aucune fonction Inngest n'est exposée ici. On garde l'endpoint pour
+// rebrancher facilement d'autres jobs background plus tard.
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [
-    missionExecute,
-    sessionStart,
-    sessionContinue,
-    approvalResponded,
-    agentOsLongTask,
-  ],
+  functions: [],
 });

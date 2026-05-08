@@ -1,0 +1,32 @@
+[Unit]
+Description=OpenCode headless server
+After=network.target
+
+[Service]
+Type=simple
+User=opencode
+Group=opencode
+WorkingDirectory=/opt/leadagent
+EnvironmentFile=/etc/opencode.env
+Environment=XDG_DATA_HOME=/opt/leadagent/data
+Environment=XDG_CONFIG_HOME=/opt/leadagent/config
+Environment=OPENCODE_DISABLE_AUTOUPDATE=true
+Environment=OPENCODE_DISABLE_LSP_DOWNLOAD=true
+Environment=OPENCODE_DISABLE_CLAUDE_CODE=true
+Environment=OPENCODE_DISABLE_TERMINAL_TITLE=true
+Environment=OPENCODE_AUTO_SHARE=false
+ExecStart=/usr/local/bin/opencode serve --hostname 127.0.0.1 --port 4096
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Sécurité
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/leadagent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

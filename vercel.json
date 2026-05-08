@@ -7,7 +7,6 @@
     }
   },
   "functions": {
-    "app/api/research/browse/route.ts": { "maxDuration": 300 },
     "app/api/research/search/route.ts": { "maxDuration": 60 },
     "app/api/research/analyze/route.ts": { "maxDuration": 60 },
     "app/api/research/synthesize/route.ts": { "maxDuration": 30 },
@@ -23,19 +22,6 @@
     "app/api/generate-website/deploy-status/route.ts": { "maxDuration": 10 },
     "app/api/generate-website/generate/route.ts": { "maxDuration": 60 },
     "app/api/generate-website/review/route.ts": { "maxDuration": 60 },
-    "app/api/business-analyzer/analyze/route.ts": { "maxDuration": 300 },
-    "app/api/lead-generator/search/route.ts": { "maxDuration": 300 },
-    "app/api/lead-generator/enrich/route.ts": { "maxDuration": 300 },
-    "app/api/agent/tick/route.ts": { "maxDuration": 300 },
-    "app/api/agent/cron/recover/route.ts": { "maxDuration": 60 },
-    "app/api/agent/sessions/route.ts": { "maxDuration": 300 },
-    "app/api/agent/sessions/[id]/messages/route.ts": { "maxDuration": 300 },
-    "app/api/agent/sessions/[id]/approvals/[approvalId]/route.ts": { "maxDuration": 300 }
-  },
-  "crons": [
-    {
-      "path": "/api/agent/cron/recover",
-      "schedule": "* * * * *"
-    }
-  ]
+    "app/api/lead-agent/*/route.ts": { "maxDuration": 300 }
+  }
 }

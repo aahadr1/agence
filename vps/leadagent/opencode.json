@@ -1,0 +1,43 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deepseek/deepseek-chat",
+  "small_model": "deepseek/deepseek-chat",
+  "default_agent": "lead-finder",
+  "autoupdate": false,
+  "share": "disabled",
+  "snapshot": false,
+  "lsp": false,
+  "formatter": false,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  },
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1"
+  },
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "task": "allow",
+    "skill": {
+      "*": "allow"
+    }
+  },
+  "instructions": [
+    "AGENTS.md"
+  ],
+  "provider": {
+    "deepseek": {
+      "options": {
+        "apiKey": "{env:DEEPSEEK_API_KEY}",
+        "baseURL": "https://api.deepseek.com/v1",
+        "timeout": 600000,
+        "chunkTimeout": 60000
+      }
+    }
+  }
+}

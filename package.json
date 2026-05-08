@@ -11,16 +11,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:agent:urls": "npx tsx scripts/verify-batch-url-classify.ts",
     "test:crm": "playwright test -c playwright.crm-v2.config.ts",
-    "test:calendar": "playwright test -c playwright.calendar.config.ts",
-    "worker": "tsx workers/lead-enricher.ts",
-    "worker:2": "tsx workers/lead-enricher.ts --concurrency 2",
-    "worker:local-browser": "tsx workers/local-browser-worker.ts"
+    "test:calendar": "playwright test -c playwright.calendar.config.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
-    "@babel/parser": "^7.29.2",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -33,8 +27,7 @@
     "@fullcalendar/rrule": "^6.1.20",
     "@fullcalendar/timegrid": "^6.1.20",
     "@google/generative-ai": "^0.24.1",
-    "@octokit/rest": "^22.0.1",
-    "@sparticuz/chromium": "^143.0.4",
+    "@opencode-ai/sdk": "^1.14.41",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.99.2",
     "@tavily/core": "^0.7.2",
@@ -51,7 +44,6 @@
     "@tiptap/react": "^3.20.5",
     "@tiptap/starter-kit": "^3.20.5",
     "@twilio/voice-sdk": "^2.18.1",
-    "@upstash/redis": "^1.37.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "googleapis": "^171.4.0",
@@ -59,7 +51,6 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.577.0",
     "next": "16.1.7",
-    "playwright-core": "^1.58.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
@@ -78,8 +69,6 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.7",
     "tailwindcss": "^4",
-    "to-ico": "^1.1.5",
-    "tsx": "^4.19.2",
     "typescript": "^5"
   }
 }

@@ -1,0 +1,26 @@
+[Unit]
+Description=OpenCode Telegram bridge
+After=network.target opencode.service
+Requires=opencode.service
+
+[Service]
+Type=simple
+User=opencode
+Group=opencode
+WorkingDirectory=/opt/leadagent
+EnvironmentFile=/etc/opencode.env
+Environment=OPENCODE_URL=http://127.0.0.1:4096
+ExecStart=/usr/local/bin/bun run /opt/leadagent/telegram/bridge.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/leadagent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

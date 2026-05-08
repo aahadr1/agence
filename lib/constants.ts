@@ -35,16 +35,6 @@ export const NAV_ITEMS = [
     icon: "Upload" as const,
   },
   {
-    label: "Lead Generator",
-    href: "/lead-generator",
-    icon: "Search" as const,
-  },
-  {
-    label: "Analyzer",
-    href: "/business-analyzer",
-    icon: "Radar" as const,
-  },
-  {
     label: "Appels",
     href: "/telephony",
     icon: "Phone" as const,
