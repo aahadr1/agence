@@ -1,18 +1,14 @@
 /**
  * Telegram → OpenCode bridge.
  *
- * Long-polls Telegram, forwards messages from allowlisted users to the local
- * OpenCode server, streams the response back as a single Telegram message that
- * gets edited as tokens arrive.
+ * Long-polls Telegram → envoie le texte au serveur local OpenCode → met à jour
+ * un même message Telegram au fil de la réponse (polling des messages OpenCode).
  *
  * Run as: `bun run telegram/bridge.ts`
  *
- * Required env :
- *   TELEGRAM_BOT_TOKEN          — from @BotFather
- *   TELEGRAM_ALLOWED_USER_IDS   — comma-separated Telegram user IDs (security)
- *   OPENCODE_URL                — http://127.0.0.1:4096 (loopback inside VPS)
- *   OPENCODE_SERVER_PASSWORD    — Basic auth password (optional if no auth)
- *   OPENCODE_SERVER_USERNAME    — defaults to "opencode"
+ * Important : pas de parse_mode Telegram sur les réponses du LLM sinon les edits
+ * échouent silencieusement (underscores, listes Markdown, etc.) et tu restes
+ * bloqué sur « ⏳ ... ».
  */
 
 import { createOpencodeClient } from "@opencode-ai/sdk";
@@ -37,17 +33,17 @@ function required(name: string): string {
   return v;
 }
 
-const auth = OC_PASS
-  ? { Authorization: `Basic ${btoa(`${OC_USER}:${OC_PASS}`)}` }
-  : {};
+const headers: HeadersInit =
+  OC_PASS && OC_PASS.trim() !== ""
+    ? { Authorization: `Basic ${btoa(`${OC_USER}:${OC_PASS}`)}` }
+    : {};
 
 const client = createOpencodeClient({
   baseUrl: OC_URL,
-  fetch: (url, init) =>
-    fetch(url, { ...init, headers: { ...(init?.headers ?? {}), ...auth } }),
+  fetch: (url, init) => fetch(url as RequestInfo, { ...init, headers: { ...headers, ...(init?.headers as object) } }),
 });
 
-// ─── Persistence : map (chatId → opencodeSessionId) ──────────────────────────
+// ─── Sessions persistées ─────────────────────────────────────────────────────
 type SessionMap = Record<string, string>;
 async function loadSessions(): Promise<SessionMap> {
   try {
@@ -64,208 +60,208 @@ async function saveSessions(m: SessionMap): Promise<void> {
 
 let sessions: SessionMap = {};
 
-// ─── Telegram API helpers ────────────────────────────────────────────────────
+// ─── Telegram (sans Markdown : évite 400Bad Request sur editMessageText) ───
 const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
 
-async function tg(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; result?: any; description?: string }> {
+async function tg(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; description?: string }> {
   const res = await fetch(`${TG_API}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return res.json();
+  return res.json() as Promise<{ ok: boolean; result?: unknown; description?: string }>;
 }
 
 async function sendMessage(chatId: number, text: string): Promise<number | null> {
   const r = await tg("sendMessage", {
     chat_id: chatId,
     text: text.slice(0, 4096),
-    parse_mode: "Markdown",
     disable_web_page_preview: true,
   });
-  return r.ok ? r.result.message_id : null;
+  if (!r.ok) {
+    console.error("[bridge] sendMessage:", r.description);
+    return null;
+  }
+  return (r.result as { message_id: number }).message_id;
 }
 
 async function editMessage(chatId: number, messageId: number, text: string): Promise<void> {
-  await tg("editMessageText", {
+  const r = await tg("editMessageText", {
     chat_id: chatId,
     message_id: messageId,
     text: text.slice(0, 4096),
-    parse_mode: "Markdown",
     disable_web_page_preview: true,
   });
+  if (!r.ok && r.description && !String(r.description).includes("not modified"))
+    console.error("[bridge] editMessage:", r.description);
 }
 
 async function sendChatAction(chatId: number, action = "typing"): Promise<void> {
   await tg("sendChatAction", { chat_id: chatId, action });
 }
 
-// ─── Get-or-create OpenCode session for this chat ────────────────────────────
+async function getLatestAssistantText(sessionId: string): Promise<string> {
+  const res = await client.session.messages({ path: { id: sessionId } });
+  const list = res.data as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(list) || list.length === 0) return "";
+
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i] as { info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> };
+    const role = m.info?.role;
+    if (role !== "assistant") continue;
+    const parts = m.parts ?? [];
+    let full = "";
+    for (const p of parts)
+      if (p.type === "text" && typeof p.text === "string") full += p.text;
+    if (full.trim()) return full;
+  }
+  return "";
+}
+
+// ─── Get-or-create OpenCode session ──────────────────────────────────────────
 async function getSessionId(chatId: number): Promise<string> {
   const key = String(chatId);
   if (sessions[key]) return sessions[key];
   const s = await client.session.create({ body: { title: `tg-${chatId}` } });
-  if (!s.data?.id) throw new Error("session.create failed");
-  sessions[key] = s.data.id;
+  const id = s.data?.id;
+  if (!id) throw new Error("session.create failed");
+  sessions[key] = id;
   await saveSessions(sessions);
-  return s.data.id;
+  return id;
 }
 
-// ─── Process one user message ────────────────────────────────────────────────
-async function handleMessage(msg: any): Promise<void> {
-  const chatId = msg.chat.id;
-  const userId = String(msg.from?.id ?? "");
-  const text = (msg.text ?? "").trim();
-  if (!text) return;
+// ─── Message utilisateur ─────────────────────────────────────────────────────
+async function handleMessage(msg: Record<string, unknown>): Promise<void> {
+  const chat = msg.chat as { id: number } | undefined;
+  const chatId = chat?.id;
+  const from = msg.from as { id?: number } | undefined;
+  const userId = String(from?.id ?? "");
+  const text = ((msg.text as string | undefined) ?? "").trim();
+
+  if (chatId == null || !text) return;
 
   if (ALLOWED.length > 0 && !ALLOWED.includes(userId)) {
     await sendMessage(chatId, "⛔ Accès refusé.");
-    console.log(`[bridge] denied user=${userId}`);
+    console.log("[bridge] denied user=" + userId);
     return;
   }
 
-  // Slash commands
   if (text === "/start") {
     await sendMessage(
       chatId,
-      "👋 Salut Aaron — je suis ton agent.\n\nEnvoie-moi une mission et je m'y mets.\n\nCommandes :\n• /reset — nouvelle session\n• /status — état actuel",
+      "Salut Aaron — je suis ton agent.\n\nEnvoie-moi une mission.\n\nCommands:\n/start — aide\n/reset — nouvelle session OpenCode\n/status — id de session",
     );
     return;
   }
   if (text === "/reset") {
     delete sessions[String(chatId)];
     await saveSessions(sessions);
-    await sendMessage(chatId, "🆕 Session réinitialisée.");
+    await sendMessage(chatId, "Session réinitialisée (nouvelle à la prochaine question).");
     return;
   }
   if (text === "/status") {
     const sid = sessions[String(chatId)];
-    await sendMessage(chatId, sid ? `📌 Session: \`${sid}\`` : "Pas de session active.");
+    await sendMessage(chatId, sid ? "Session OpenCode:\n" + sid : "Pas de session enregistrée.");
     return;
   }
 
   await sendChatAction(chatId);
   const sessionId = await getSessionId(chatId);
 
-  // Send placeholder, will be edited
-  const placeholderId = await sendMessage(chatId, "⏳ ...");
+  const placeholderId = await sendMessage(chatId, "Réflexion… (quelques secondes à quelques minutes selon la mission)");
   if (!placeholderId) return;
 
-  // Subscribe BEFORE prompting so we don't miss events
-  let buffer = "";
-  let lastEdit = Date.now();
-  let editTimer: Timer | null = null;
-  const flush = async () => {
-    if (!buffer.trim()) return;
-    const now = Date.now();
-    if (now - lastEdit < 1500) return; // throttle
-    lastEdit = now;
-    await editMessage(chatId, placeholderId, buffer.slice(-4000)).catch(() => {});
-  };
-  const scheduleFlush = () => {
-    if (editTimer) clearTimeout(editTimer);
-    editTimer = setTimeout(flush, 1500);
-  };
-
-  let stopped = false;
-  const stream = await client.event.subscribe();
-  const consume = (async () => {
-    for await (const ev of stream.stream as AsyncIterable<any>) {
-      if (stopped) break;
-      try {
-        if (ev.type === "message.part.updated" && ev.properties?.part?.sessionID === sessionId) {
-          const part = ev.properties.part;
-          if (part.type === "text" && typeof part.text === "string") {
-            buffer = part.text;
-            scheduleFlush();
-          }
-          if (part.type === "tool" && part.tool) {
-            // Light annotation when a tool starts
-            const status = part.state?.status;
-            if (status === "running") {
-              await sendChatAction(chatId).catch(() => {});
-            }
-          }
-        }
-        if (ev.type === "session.status" && ev.properties?.sessionID === sessionId) {
-          const s = ev.properties.status?.type;
-          if (s === "idle") {
-            stopped = true;
-            break;
-          }
-        }
-      } catch (e) {
-        console.error("[bridge] stream error", e);
-      }
-    }
-  })();
-
   try {
+    console.log("[bridge] prompt session=" + sessionId + " len=" + text.length);
     await client.session.prompt({
       path: { id: sessionId },
-      body: {
-        parts: [{ type: "text", text }],
-      },
+      body: { parts: [{ type: "text", text }] },
     });
   } catch (e) {
-    stopped = true;
-    await editMessage(chatId, placeholderId, `❌ Erreur OpenCode : ${(e as Error).message}`);
+    console.error("[bridge] prompt error", e);
+    await editMessage(chatId, placeholderId, "Erreur OpenCode : " + (e instanceof Error ? e.message : String(e)));
     return;
   }
 
-  await consume;
-  if (editTimer) clearTimeout(editTimer);
-  if (buffer.trim()) {
-    await editMessage(chatId, placeholderId, buffer.slice(-4000)).catch(() => {});
-  } else {
-    await editMessage(chatId, placeholderId, "✅ (aucune réponse texte)").catch(() => {});
+  // SSE /event reste ouvert très longtemps → on fait confiance aux messages REST.
+  const POLL_MS = 2800;
+  const HARD_CAP_MS = 10 * 60 * 1000;
+  let lastPrinted = "";
+  let stableSlices = 0;
+  const t0 = Date.now();
+
+  while (Date.now() - t0 < HARD_CAP_MS) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    await sendChatAction(chatId).catch(() => {});
+    const body = await getLatestAssistantText(sessionId).catch(() => "");
+
+    if (body !== lastPrinted) {
+      lastPrinted = body;
+      if (lastPrinted.trim())
+        await editMessage(chatId, placeholderId, lastPrinted.slice(-4000));
+      else await editMessage(chatId, placeholderId, "… en cours …");
+      stableSlices = 0;
+      continue;
+    }
+
+    if (lastPrinted.trim().length < 40) continue;
+
+    stableSlices++;
+    // ~22s sans changement = souvent réponse terminée (tools / rag peuvent avoir des pauses)
+    if (stableSlices >= 8) break;
   }
+
+  if (!lastPrinted.trim()) {
+    await editMessage(
+      chatId,
+      placeholderId,
+      "Réponse encore vide après l’attente. Vérifie DEEPSEEK_API_KEY puis : journalctl -u opencode -n 80",
+    );
+    return;
+  }
+
+  await editMessage(chatId, placeholderId, lastPrinted.slice(-4000));
 }
 
-// ─── Long-polling loop ───────────────────────────────────────────────────────
-async function pollLoop() {
-  console.log("[bridge] starting long-polling…");
+// ─── Long-polling Telegram ───────────────────────────────────────────────────
+async function pollLoop(): Promise<void> {
+  console.log("[bridge] long-polling Telegram…");
   let offset = 0;
   while (true) {
     try {
       const r = await fetch(`${TG_API}/getUpdates?timeout=50&offset=${offset}`, {
         signal: AbortSignal.timeout(60_000),
       });
-      const data = (await r.json()) as { ok: boolean; result?: any[] };
-      if (!data.ok || !data.result) {
+      const data = (await r.json()) as { ok: boolean; result?: unknown[] };
+      if (!data.ok || !data.result?.length) {
         await Bun.sleep(2000);
         continue;
       }
       for (const upd of data.result) {
-        offset = Math.max(offset, upd.update_id + 1);
-        if (upd.message?.text) {
-          handleMessage(upd.message).catch((e) => console.error("[bridge] handle error", e));
-        }
+        const u = upd as Record<string, unknown>;
+        offset = Math.max(offset, Number(u.update_id ?? 0) + 1);
+        const mess = u.message as Record<string, unknown> | undefined;
+        if (mess?.text) void handleMessage(mess).catch((e) => console.error("[bridge] handle error", e));
       }
     } catch (e) {
-      console.error("[bridge] poll error", (e as Error).message);
+      console.error("[bridge] poll error:", e instanceof Error ? e.message : e);
       await Bun.sleep(3000);
     }
   }
 }
 
-// ─── Boot ────────────────────────────────────────────────────────────────────
 sessions = await loadSessions();
-console.log(`[bridge] loaded ${Object.keys(sessions).length} session(s)`);
-console.log(`[bridge] allowed users: ${ALLOWED.length ? ALLOWED.join(",") : "ALL"}`);
-console.log(`[bridge] OpenCode URL: ${OC_URL}`);
+console.log("[bridge] sessions chargées:", Object.keys(sessions).length);
+console.log("[bridge] allowlist:", ALLOWED.length ? ALLOWED.join(",") : "OUVERT À TOUS");
+console.log("[bridge] OPENCODE_URL:", OC_URL);
 
-// Health check before polling
 try {
-  const h = await fetch(`${OC_URL}/global/health`, {
-    headers: auth,
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!h.ok) throw new Error(`HTTP ${h.status}`);
+  const h = await fetch(`${OC_URL}/global/health`, { headers, signal: AbortSignal.timeout(5000) });
+  if (!h.ok) throw new Error("HTTP " + h.status);
   console.log("[bridge] ✓ OpenCode health OK");
 } catch (e) {
-  console.error("[bridge] ✗ OpenCode unreachable:", (e as Error).message);
-  console.error("[bridge] retrying in 10s...");
+  console.error("[bridge] ✗ OpenCode health:", e instanceof Error ? e.message : e);
+  console.error("[bridge] attente 10s puis Telegram quand même…");
   await Bun.sleep(10_000);
 }
 
