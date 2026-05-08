@@ -85,7 +85,7 @@ echo "▶ Installation des navigateurs Playwright..."
 sudo -u opencode -H bash -c 'cd /opt/leadagent && /usr/local/bin/bun x playwright install chromium' || true
 
 # ── XDG_DATA_HOME et XDG_CONFIG_HOME pour OpenCode ───────────────────────────
-mkdir -p /opt/leadagent/data /opt/leadagent/config
+mkdir -p /opt/leadagent/data /opt/leadagent/config /opt/leadagent/cache
 chown -R opencode:opencode /opt/leadagent
 
 # ── Caddyfile ─────────────────────────────────────────────────────────────────

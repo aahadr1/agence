@@ -6,10 +6,13 @@ After=network.target
 Type=simple
 User=opencode
 Group=opencode
+# Without this, systemd's ProtectHome=read-only blocked writes under ~/ and OpenCode exited immediately.
+Environment=HOME=/opt/leadagent
 WorkingDirectory=/opt/leadagent
 EnvironmentFile=/etc/opencode.env
 Environment=XDG_DATA_HOME=/opt/leadagent/data
 Environment=XDG_CONFIG_HOME=/opt/leadagent/config
+Environment=XDG_CACHE_HOME=/opt/leadagent/cache
 Environment=OPENCODE_DISABLE_AUTOUPDATE=true
 Environment=OPENCODE_DISABLE_LSP_DOWNLOAD=true
 Environment=OPENCODE_DISABLE_CLAUDE_CODE=true
@@ -21,12 +24,12 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# Sécurité
+# HOME must be under ReadWritePaths: strict ProtectHome prevented runtime cache writes.
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/opt/leadagent
 PrivateTmp=true
+ProtectSystem=yes
+ProtectHome=no
+ReadWritePaths=/opt/leadagent
 
 [Install]
 WantedBy=multi-user.target
